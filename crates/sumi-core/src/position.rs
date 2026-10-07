@@ -40,6 +40,10 @@ impl Position {
         self
     }
 
+    pub fn is_unique(&self) -> bool {
+        self.unique
+    }
+
     pub fn grid(&self) -> &Grid {
         &self.grid
     }

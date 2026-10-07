@@ -1,24 +1,39 @@
 //! The solving techniques, and the order hints and grading try them in.
 
 mod claiming;
+mod colouring;
 mod fish;
 mod full_house;
 mod hidden_single;
+mod kite;
 mod naked_single;
 mod pointing;
+mod skyscraper;
 mod subset;
+mod unique_rectangle;
+mod w_wing;
+mod xyz_wing;
+mod y_wing;
 
 #[cfg(test)]
 pub(crate) mod examples;
 
 pub use claiming::Claiming;
+pub use colouring::SimpleColouring;
 pub use fish::Fish;
 pub use full_house::FullHouse;
 pub use hidden_single::HiddenSingle;
+pub use kite::Kite;
 pub use naked_single::NakedSingle;
 pub use pointing::Pointing;
+pub use skyscraper::Skyscraper;
 pub use subset::{HiddenSubset, NakedSubset};
+pub use unique_rectangle::UniqueRectangle;
+pub use w_wing::WWing;
+pub use xyz_wing::XyzWing;
+pub use y_wing::YWing;
 
+use crate::grid::{CELLS, Cell, House, box_of, col, row, sees};
 use crate::position::Position;
 use crate::step::Step;
 
@@ -70,7 +85,50 @@ pub static ORDER: &[&dyn Technique] = &[
     &NakedSubset::<4>,
     &Fish::<3>,
     &HiddenSubset::<4>,
+    &Skyscraper,
+    &Kite,
+    &WWing,
+    &YWing,
+    &XyzWing,
+    &UniqueRectangle,
+    &SimpleColouring,
 ];
+
+/// A digit's only two spots in a house, so one of them holds it. Houses
+/// are taken from `houses` in order.
+fn strong_links(p: &Position, digit: u8, houses: &[House]) -> Vec<(Cell, Cell, House)> {
+    houses
+        .iter()
+        .filter_map(|&house| match p.spots(house, digit)[..] {
+            [a, b] => Some((a, b, house)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The cells that see every one of `cells`, in cell order.
+fn seen_by_all(cells: &[Cell]) -> impl Iterator<Item = Cell> + '_ {
+    (0..CELLS).filter(|&c| cells.iter().all(|&x| sees(c, x)))
+}
+
+/// Cells with exactly two candidates, in cell order.
+fn bivalue_cells(p: &Position) -> Vec<Cell> {
+    p.empty_cells()
+        .filter(|&c| p.candidates(c).len() == 2)
+        .collect()
+}
+
+/// A house both cells are in, the box first. Only for cells that see each
+/// other.
+fn shared_house(a: Cell, b: Cell) -> House {
+    if box_of(a) == box_of(b) {
+        House::Box(box_of(a))
+    } else if row(a) == row(b) {
+        House::Row(row(a))
+    } else {
+        House::Col(col(a))
+    }
+}
 
 /// Every way to choose `k` of `items`, keeping their order.
 fn choose<T: Copy>(items: &[T], k: usize) -> Vec<Vec<T>> {
@@ -92,7 +150,7 @@ mod tests {
     use super::*;
     use crate::digits::Digits;
     use crate::generate::generate;
-    use crate::grid::{CELLS, Grid};
+    use crate::grid::Grid;
     use proptest::prelude::*;
     use rand::SeedableRng;
     use rand::rngs::Xoshiro256PlusPlus;
@@ -169,6 +227,13 @@ mod tests {
             ("Naked quad", Hard),
             ("Swordfish", Hard),
             ("Hidden quad", Hard),
+            ("Skyscraper", Expert),
+            ("2-String Kite", Expert),
+            ("W-Wing", Expert),
+            ("Y-Wing", Expert),
+            ("XYZ-Wing", Expert),
+            ("Unique rectangle", Expert),
+            ("Simple colouring", Expert),
         ];
         let order: Vec<_> = ORDER.iter().map(|t| (t.name(), t.level())).collect();
         assert_eq!(order, plan);
