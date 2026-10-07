@@ -9,7 +9,10 @@ pub struct Game {
     puzzle: Puzzle,
     /// Clues and the player's digits together.
     board: Grid,
-    candidates: [Digits; CELLS],
+    /// `None` is a cell the player has written no candidates in. `Some` of an
+    /// empty set is a cell whose candidates were all ruled out by digits placed
+    /// around it, which is a contradiction worth seeing rather than hiding.
+    candidates: [Option<Digits>; CELLS],
     /// Box marks: "this digit goes in one of these spots in its box".
     marks: [Digits; CELLS],
     cursor: Cell,
@@ -44,7 +47,7 @@ pub enum Direction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct CellState {
     digit: Option<u8>,
-    candidates: Digits,
+    candidates: Option<Digits>,
     marks: Digits,
 }
 
@@ -52,6 +55,8 @@ struct CellState {
 /// that touches many cells, such as placing a digit and clearing it from the
 /// notes around it, is still one step.
 struct Step {
+    /// Where the cursor was when the action ran. Undo and redo put it back
+    /// there, which for a one-cell action is the cell that changed.
     cursor: Cell,
     cells: Vec<(Cell, CellState, CellState)>,
 }
@@ -61,7 +66,7 @@ impl Game {
         Game {
             board: puzzle.clues,
             puzzle,
-            candidates: [Digits::NONE; CELLS],
+            candidates: [None; CELLS],
             marks: [Digits::NONE; CELLS],
             cursor: 0,
             mode: Mode::Digit,
@@ -83,34 +88,34 @@ impl Game {
     }
 
     pub fn candidates(&self, cell: Cell) -> Digits {
-        self.candidates[cell]
+        self.candidates[cell].unwrap_or(Digits::NONE)
     }
 
     pub fn marks(&self, cell: Cell) -> Digits {
         self.marks[cell]
     }
 
-    /// The candidates hints and filters work from: the player's own, or every
-    /// possible digit in a cell where the player has written none.
+    /// The candidates the filter works from: the player's own, or every
+    /// possible digit in a cell where the player has written none. A cell
+    /// whose candidates were all ruled out has none.
     pub fn working_candidates(&self, cell: Cell) -> Digits {
         if self.board.get(cell).is_some() {
-            Digits::NONE
-        } else if self.candidates[cell].is_empty() {
-            self.board.possible(cell)
-        } else {
-            self.candidates[cell]
+            return Digits::NONE;
         }
+        self.candidates[cell].unwrap_or_else(|| self.board.possible(cell))
     }
 
-    /// A note for `digit` in `cell` while a cell it sees already holds `digit`.
+    /// Whether a cell that `cell` sees already holds `digit`, so a note for
+    /// it in `cell` is wrong. Says nothing about whether such a note exists.
     pub fn note_clashes(&self, cell: Cell, digit: u8) -> bool {
-        peers(cell).any(|p| self.board.get(p) == Some(digit))
+        !self.board.possible(cell).contains(digit)
     }
 
-    /// All nine copies of `digit` are on the board.
+    /// Nine copies of `digit` are on the board and none of them clash.
     pub fn is_complete(&self, digit: u8) -> bool {
+        let clash = self.board.conflicts();
         (0..CELLS)
-            .filter(|&c| self.board.get(c) == Some(digit))
+            .filter(|&c| self.board.get(c) == Some(digit) && !clash[c])
             .count()
             == 9
     }
@@ -141,7 +146,8 @@ impl Game {
         }
     }
 
-    /// Moves one cell, wrapping around the edge of the board.
+    /// Moves one cell. Leaving the board on one side comes back on the other
+    /// side of the same row or column.
     pub fn step(&mut self, direction: Direction) {
         self.cursor = moved(self.cursor, direction, 1);
     }
@@ -160,9 +166,13 @@ impl Game {
         }
         match self.mode {
             Mode::Digit => self.record(|g| g.place(cell, digit)),
-            Mode::Candidate if self.board.get(cell).is_none() => {
-                self.record(|g| g.candidates[cell].toggle(digit))
-            }
+            Mode::Candidate if self.board.get(cell).is_none() => self.record(|g| {
+                let mut set = g.candidates[cell].unwrap_or(Digits::NONE);
+                set.toggle(digit);
+                // Taking out your own last candidate means no notes, not a
+                // contradiction.
+                g.candidates[cell] = (!set.is_empty()).then_some(set);
+            }),
             Mode::BoxMark if self.board.get(cell).is_none() => {
                 self.record(|g| g.marks[cell].toggle(digit))
             }
@@ -181,18 +191,20 @@ impl Game {
             if g.board.get(cell).is_some() {
                 g.board.set(cell, None);
             } else {
-                g.candidates[cell] = Digits::NONE;
+                g.candidates[cell] = None;
                 g.marks[cell] = Digits::NONE;
             }
         });
     }
 
-    /// Gives every empty cell without candidates all its possible ones.
+    /// Gives every empty cell the player has written no candidates in all its
+    /// possible ones. Box marks don't count as candidates here, and a cell
+    /// that ran out of candidates keeps showing that it did.
     pub fn fill_candidates(&mut self) {
         self.record(|g| {
             for cell in 0..CELLS {
-                if g.board.get(cell).is_none() && g.candidates[cell].is_empty() {
-                    g.candidates[cell] = g.board.possible(cell);
+                if g.board.get(cell).is_none() && g.candidates[cell].is_none() {
+                    g.candidates[cell] = Some(g.board.possible(cell));
                 }
             }
         });
@@ -203,7 +215,7 @@ impl Game {
         self.record(|g| {
             for cell in 0..CELLS {
                 if g.board.get(cell).is_none() {
-                    g.candidates[cell] = g.board.possible(cell);
+                    g.candidates[cell] = Some(g.board.possible(cell));
                 }
             }
         });
@@ -213,8 +225,11 @@ impl Game {
     pub fn marks_to_candidates(&mut self) {
         self.record(|g| {
             for cell in 0..CELLS {
-                g.candidates[cell] = g.candidates[cell].union(g.marks[cell]);
-                g.marks[cell] = Digits::NONE;
+                if !g.marks[cell].is_empty() {
+                    let set = g.candidates[cell].unwrap_or(Digits::NONE);
+                    g.candidates[cell] = Some(set.union(g.marks[cell]));
+                    g.marks[cell] = Digits::NONE;
+                }
             }
         });
     }
@@ -223,7 +238,7 @@ impl Game {
     pub fn clear_notes(&mut self, layer: Option<Layer>) {
         self.record(|g| {
             if layer != Some(Layer::BoxMarks) {
-                g.candidates = [Digits::NONE; CELLS];
+                g.candidates = [None; CELLS];
             }
             if layer != Some(Layer::Candidates) {
                 g.marks = [Digits::NONE; CELLS];
@@ -231,6 +246,7 @@ impl Game {
         });
     }
 
+    /// Takes back the last step and puts the cursor where it was then.
     pub fn undo(&mut self) {
         if let Some(step) = self.undo.pop() {
             for &(cell, before, _) in &step.cells {
@@ -241,6 +257,7 @@ impl Game {
         }
     }
 
+    /// Does the last undone step again, cursor included.
     pub fn redo(&mut self) {
         if let Some(step) = self.redo.pop() {
             for &(cell, _, after) in &step.cells {
@@ -255,10 +272,12 @@ impl Game {
     /// The cell's own notes go too, since a digit hides them.
     fn place(&mut self, cell: Cell, digit: u8) {
         self.board.set(cell, Some(digit));
-        self.candidates[cell] = Digits::NONE;
+        self.candidates[cell] = None;
         self.marks[cell] = Digits::NONE;
         for p in peers(cell) {
-            self.candidates[p].remove(digit);
+            if let Some(set) = &mut self.candidates[p] {
+                set.remove(digit);
+            }
             self.marks[p].remove(digit);
         }
     }
@@ -312,21 +331,13 @@ fn moved(cell: Cell, direction: Direction, by: usize) -> Cell {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sumi_core::solver::{Solutions, solve};
+    use crate::fixtures::{game, solution};
+    use proptest::prelude::*;
 
-    const CLUES: &str =
-        "53..7....6..195....98....6.8...6...34..8.3..17...2...6.6....28....419..5....8..79";
-
-    /// r1c3 is empty; its possible digits are 1, 2 and 4.
+    /// r1c3 is empty; its possible digits are 1, 2 and 4, and its answer is 4.
     const R1C3: Cell = 2;
-
-    fn game() -> Game {
-        let clues: Grid = CLUES.parse().unwrap();
-        let Solutions::Unique(solution) = solve(&clues) else {
-            panic!("test puzzle has one solution");
-        };
-        Game::new(Puzzle { clues, solution })
-    }
+    /// r1c8 is empty and sees r1c3; its answer is 1.
+    const R1C8: Cell = 7;
 
     fn at(cell: Cell) -> Game {
         let mut g = game();
@@ -579,7 +590,7 @@ mod tests {
     fn a_digit_is_complete_once_all_nine_are_placed() {
         let mut g = game();
         assert!(!g.is_complete(5));
-        let solution = g.puzzle.solution;
+        let solution = solution();
         for cell in 0..CELLS {
             if solution.get(cell) == Some(5) {
                 g.cursor = cell;
@@ -593,12 +604,170 @@ mod tests {
     #[test]
     fn filling_in_the_solution_wins() {
         let mut g = game();
-        let solution = g.puzzle.solution;
+        let solution = solution();
         assert!(!g.is_won());
         for cell in 0..CELLS {
             g.cursor = cell;
             g.press(solution.get(cell).unwrap());
         }
         assert!(g.is_won());
+    }
+
+    #[test]
+    fn redo_puts_the_cursor_back_too() {
+        let mut g = at(R1C3);
+        g.press(4);
+        g.undo();
+        g.step(Direction::Down);
+        g.redo();
+        assert_eq!(g.cursor(), R1C3);
+    }
+
+    #[test]
+    fn clear_removes_box_marks_as_well_as_candidates() {
+        let mut g = at(R1C3);
+        g.next_mode();
+        g.press(1);
+        g.next_mode();
+        g.press(2);
+        g.clear();
+        assert_eq!(g.candidates(R1C3), Digits::NONE);
+        assert_eq!(g.marks(R1C3), Digits::NONE);
+    }
+
+    #[test]
+    fn placing_a_digit_leaves_cells_it_does_not_see_alone() {
+        let mut g = at(R1C3);
+        g.fill_candidates();
+        let far = 15; // r2c7: shares no row, column or box with r1c3
+        assert!(g.candidates(far).contains(4));
+        g.press(4);
+        assert!(g.candidates(far).contains(4));
+    }
+
+    #[test]
+    fn a_cell_whose_candidates_are_all_ruled_out_shows_none() {
+        let mut g = at(R1C3);
+        g.next_mode();
+        g.press(1); // r1c3's only candidate is now 1
+        g.mode = Mode::Digit;
+        g.cursor = R1C8;
+        g.press(1); // rules 1 out of r1c3
+        assert_eq!(g.working_candidates(R1C3), Digits::NONE);
+
+        // Fill leaves it showing the contradiction; refill starts it over.
+        g.fill_candidates();
+        assert_eq!(g.working_candidates(R1C3), Digits::NONE);
+        g.refill_candidates();
+        assert_eq!(g.working_candidates(R1C3), digits(&[2, 4]));
+    }
+
+    #[test]
+    fn taking_out_your_own_last_candidate_means_no_notes() {
+        let mut g = at(R1C3);
+        g.next_mode();
+        g.press(1);
+        g.press(1);
+        assert_eq!(g.working_candidates(R1C3), digits(&[1, 2, 4]));
+    }
+
+    #[test]
+    fn nine_copies_with_a_clash_are_not_complete() {
+        let mut g = game();
+        let solution = solution();
+        // Eight of the missing 5s in their right places, the ninth in r1c3,
+        // where it clashes with the clue 5 at r1c1.
+        let missing: Vec<Cell> = (0..CELLS)
+            .filter(|&c| solution.get(c) == Some(5) && !g.is_clue(c))
+            .collect();
+        for &cell in &missing[1..] {
+            g.cursor = cell;
+            g.press(5);
+        }
+        g.cursor = R1C3;
+        g.press(5);
+        assert_eq!(
+            (0..CELLS).filter(|&c| g.board().get(c) == Some(5)).count(),
+            9
+        );
+        assert!(!g.is_complete(5));
+    }
+
+    /// Everything the player can change, for comparing whole games.
+    fn snapshot(g: &Game) -> Vec<CellState> {
+        (0..CELLS).map(|c| g.state(c)).collect()
+    }
+
+    #[derive(Debug, Clone)]
+    enum Op {
+        Step(Direction),
+        Jump(Direction),
+        Press(u8),
+        Clear,
+        NextMode,
+        Fill,
+        Refill,
+        MarksToCandidates,
+        ClearLayer,
+        ClearAll,
+    }
+
+    fn op() -> impl Strategy<Value = Op> {
+        let direction = prop_oneof![
+            Just(Direction::Up),
+            Just(Direction::Down),
+            Just(Direction::Left),
+            Just(Direction::Right),
+        ];
+        prop_oneof![
+            4 => direction.clone().prop_map(Op::Step),
+            1 => direction.prop_map(Op::Jump),
+            4 => (1u8..=9).prop_map(Op::Press),
+            1 => Just(Op::Clear),
+            2 => Just(Op::NextMode),
+            1 => Just(Op::Fill),
+            1 => Just(Op::Refill),
+            1 => Just(Op::MarksToCandidates),
+            1 => Just(Op::ClearLayer),
+            1 => Just(Op::ClearAll),
+        ]
+    }
+
+    fn apply(g: &mut Game, op: &Op) {
+        match *op {
+            Op::Step(d) => g.step(d),
+            Op::Jump(d) => g.jump(d),
+            Op::Press(d) => g.press(d),
+            Op::Clear => g.clear(),
+            Op::NextMode => g.next_mode(),
+            Op::Fill => g.fill_candidates(),
+            Op::Refill => g.refill_candidates(),
+            Op::MarksToCandidates => g.marks_to_candidates(),
+            Op::ClearLayer => g.clear_notes(Some(g.current_layer())),
+            Op::ClearAll => g.clear_notes(None),
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn undoing_everything_restores_the_start_and_redo_the_end(
+            ops in prop::collection::vec(op(), 0..60)
+        ) {
+            let mut g = game();
+            let start = snapshot(&g);
+            for op in &ops {
+                apply(&mut g, op);
+            }
+            let end = snapshot(&g);
+
+            while !g.undo.is_empty() {
+                g.undo();
+            }
+            prop_assert_eq!(snapshot(&g), start);
+            while !g.redo.is_empty() {
+                g.redo();
+            }
+            prop_assert_eq!(snapshot(&g), end);
+        }
     }
 }

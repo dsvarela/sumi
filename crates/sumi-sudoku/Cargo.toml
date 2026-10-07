@@ -18,3 +18,4 @@ sumi-core = { path = "../sumi-core", version = "0.1.0" }
 
 [dev-dependencies]
 insta = "1.49.0"
+proptest = "1.11.0"

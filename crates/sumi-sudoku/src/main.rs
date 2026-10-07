@@ -1,5 +1,7 @@
 mod app;
 mod cli;
+#[cfg(test)]
+mod fixtures;
 mod game;
 mod input;
 mod theme;
