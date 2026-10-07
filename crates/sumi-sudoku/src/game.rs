@@ -19,6 +19,7 @@ pub struct Game {
     placements: [Option<Placement>; CELLS],
     cursor: Cell,
     mode: Mode,
+    candidates_from_marks: CandidatesFromMarks,
     undo: Vec<Step>,
     redo: Vec<Step>,
 }
@@ -28,6 +29,21 @@ pub enum Mode {
     Digit,
     Candidate,
     BoxMark,
+}
+
+/// What moving from box marks to candidates does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CandidatesFromMarks {
+    /// Every empty cell gets all its possible candidates, and the box marks
+    /// go.
+    #[default]
+    Fill,
+    /// Each cell's box marks join its candidates.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the settings page in milestone 6 offers it")
+    )]
+    Merge,
 }
 
 /// The two kinds of note a cell can hold.
@@ -87,6 +103,7 @@ impl Game {
             placements: [None; CELLS],
             cursor: 0,
             mode: Mode::Digit,
+            candidates_from_marks: CandidatesFromMarks::default(),
             undo: Vec::new(),
             redo: Vec::new(),
         }
@@ -143,6 +160,14 @@ impl Game {
 
     pub fn is_won(&self) -> bool {
         self.board.is_solved()
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the settings page in milestone 6 calls it")
+    )]
+    pub fn set_candidates_from_marks(&mut self, choice: CandidatesFromMarks) {
+        self.candidates_from_marks = choice;
     }
 
     /// Digit, then candidate, then box mark, then back to digit.
@@ -238,15 +263,22 @@ impl Game {
         });
     }
 
-    /// Moves every box mark into the candidates of its cell.
+    /// Moves from box marks to candidates, as `candidates_from_marks` says.
     pub fn marks_to_candidates(&mut self) {
+        let choice = self.candidates_from_marks;
         self.record(|g| {
             for cell in 0..CELLS {
-                if !g.marks[cell].is_empty() {
-                    let set = g.candidates[cell].unwrap_or(Digits::NONE);
-                    g.candidates[cell] = Some(set.union(g.marks[cell]));
-                    g.marks[cell] = Digits::NONE;
+                match choice {
+                    CandidatesFromMarks::Fill if g.board.get(cell).is_none() => {
+                        g.candidates[cell] = Some(g.board.possible(cell));
+                    }
+                    CandidatesFromMarks::Merge if !g.marks[cell].is_empty() => {
+                        let set = g.candidates[cell].unwrap_or(Digits::NONE);
+                        g.candidates[cell] = Some(set.union(g.marks[cell]));
+                    }
+                    CandidatesFromMarks::Fill | CandidatesFromMarks::Merge => {}
                 }
+                g.marks[cell] = Digits::NONE;
             }
         });
     }
@@ -632,14 +664,36 @@ mod tests {
     }
 
     #[test]
-    fn box_marks_become_candidates() {
+    fn moving_from_box_marks_fills_full_candidates_and_clears_the_marks() {
         let mut g = at(R1C3);
+        g.next_mode();
+        g.press(1);
+        g.next_mode();
+        g.press(2);
+        g.cursor = 5; // r1c6, with box marks and no candidates
+        g.press(8);
+        g.marks_to_candidates();
+        assert_eq!(g.candidates(R1C3), digits(&[1, 2, 4]));
+        assert_eq!(g.candidates(5), digits(&[2, 4, 6, 8]));
+        assert_eq!(g.candidates(3), digits(&[2, 6])); // r1c4, which had no notes
+        assert_eq!(g.marks(R1C3), Digits::NONE);
+        assert_eq!(g.marks(5), Digits::NONE);
+        g.undo();
+        assert_eq!(g.candidates(R1C3), digits(&[1]));
+        assert_eq!(g.marks(R1C3), digits(&[2]));
+    }
+
+    #[test]
+    fn box_marks_can_merge_into_candidates_instead() {
+        let mut g = at(R1C3);
+        g.set_candidates_from_marks(CandidatesFromMarks::Merge);
         g.next_mode();
         g.press(1);
         g.next_mode();
         g.press(2);
         g.marks_to_candidates();
         assert_eq!(g.candidates(R1C3), digits(&[1, 2]));
+        assert_eq!(g.candidates(3), Digits::NONE);
         assert_eq!(g.marks(R1C3), Digits::NONE);
         g.undo();
         assert_eq!(g.marks(R1C3), digits(&[2]));
