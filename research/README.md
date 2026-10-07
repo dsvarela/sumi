@@ -1,11 +1,15 @@
 # Research
 
-Throwaway experiments from planning on 6 October 2026. They back the plan's
-Algorithms section; none of this is reference code for sumi.
+Evidence behind the plan: throwaway experiments and reports from planning on
+6 and 7 October 2026. They justify decisions and never instruct; none of this
+is reference code for sumi.
 
 | File | What it is |
 |---|---|
 | `report.md` | The full research report: generation, technique order, rating, sources |
+| `solving-aids.md` | Note styles and player aids in other apps (Snyder marks and its family), with a v1/later/skip call for each |
+| `hint-wording.md` | Technique names, cell notation, a glossary, and draft definitions and result templates for the hint ladder |
+| `learn-mode.md` | How Sudoku and chess teaching products structure lessons and drills, and a proposed Learn mode design |
 | `grader.py` | Python grader with sumi's v1 technique list, easiest step first. `uv run grader.py puzzles.txt out.txt` |
 | `grader_b.py` | The same grader with the technique order the plan adopted |
 | `mutate.py` | Clue-moving search for Hard puzzles. Reads seeds from a graded file named `qq20k.graded` (one puzzle, level, technique per line); point it at `data/hard-seeds.txt` before reuse |
