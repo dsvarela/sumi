@@ -54,5 +54,6 @@ One git repo for the whole workspace (github.com/dsvarela/sumi). Crates get no
 - Develop on the laptop. The phone build is a static `aarch64-unknown-linux-musl`
   binary copied to Termux.
 - Shell is fish. Python research scripts run with `uv run`, never pip.
-- Commit messages: plain conventional commits. No Claude-Session links, no
+- Commit messages: plain conventional commits. Scopes: `core`, `cli`, `ui`,
+  `research`. No Claude-Session links, no
   co-author or "Generated with" lines, no AI attribution in commits, PRs or issues.
