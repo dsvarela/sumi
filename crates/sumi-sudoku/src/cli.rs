@@ -3,13 +3,14 @@
 use std::io::{self, BufRead, Write};
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use rand::SeedableRng;
 use rand::rngs::Xoshiro256PlusPlus;
-use sumi_core::generate::generate;
+use sumi_core::generate::{LevelGenerator, generate};
 use sumi_core::grade::grade;
 use sumi_core::grid::Grid;
 use sumi_core::solver::{Solutions, solve};
+use sumi_core::technique::Level;
 
 #[derive(Parser)]
 #[command(
@@ -38,7 +39,31 @@ enum Command {
         /// Start from this seed to get the same puzzles again.
         #[arg(long)]
         seed: Option<u64>,
+        /// Only puzzles of this level. Expert ones need two Expert steps or
+        /// more.
+        #[arg(long, value_enum)]
+        level: Option<LevelArg>,
     },
+}
+
+/// The levels a puzzle can be asked for. Beyond is never generated.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum LevelArg {
+    Easy,
+    Medium,
+    Hard,
+    Expert,
+}
+
+impl From<LevelArg> for Level {
+    fn from(level: LevelArg) -> Level {
+        match level {
+            LevelArg::Easy => Level::Easy,
+            LevelArg::Medium => Level::Medium,
+            LevelArg::Hard => Level::Hard,
+            LevelArg::Expert => Level::Expert,
+        }
+    }
 }
 
 pub fn run() -> ExitCode {
@@ -50,7 +75,9 @@ pub fn run() -> ExitCode {
         Some(Command::Rate { puzzle: None }) => {
             piped(rate_lines(io::stdin().lock(), &mut io::stdout().lock()))
         }
-        Some(Command::Gen { count, seed }) => piped(gen_puzzles(count, seed)),
+        Some(Command::Gen { count, seed, level }) => {
+            piped(gen_puzzles(count, seed, level.map(Level::from)))
+        }
     }
 }
 
@@ -137,14 +164,20 @@ fn rate_lines(input: impl BufRead, out: &mut impl Write) -> io::Result<bool> {
     Ok(all_read)
 }
 
-fn gen_puzzles(count: u32, seed: Option<u64>) -> io::Result<bool> {
+/// Prints the clues only; `sumi rate` adds the grade.
+fn gen_puzzles(count: u32, seed: Option<u64>, level: Option<Level>) -> io::Result<bool> {
     let mut rng = match seed {
         Some(seed) => Xoshiro256PlusPlus::seed_from_u64(seed),
         None => rand::make_rng(),
     };
     let mut out = io::stdout().lock();
+    let mut generator = level.map(LevelGenerator::new);
     for _ in 0..count {
-        writeln!(out, "{}", generate(&mut rng).clues)?;
+        let puzzle = match &mut generator {
+            Some(generator) => generator.next(&mut rng).0,
+            None => generate(&mut rng),
+        };
+        writeln!(out, "{}", puzzle.clues)?;
     }
     out.flush()?;
     Ok(true)
