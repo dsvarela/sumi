@@ -17,7 +17,8 @@ use sumi_core::technique::Level;
 #[command(
     name = "sumi",
     version,
-    about = "A calm terminal Sudoku game that teaches"
+    about = "A calm terminal Sudoku game that teaches",
+    after_help = "With no command, sumi plays a puzzle of any level its techniques can finish."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -28,7 +29,7 @@ struct Cli {
 enum Command {
     /// Play puzzles of one level.
     New {
-        #[arg(value_enum)]
+        #[arg(value_enum, ignore_case = true)]
         level: LevelArg,
     },
     /// Say whether a puzzle has one solution and, if it has, how hard it is.
@@ -50,7 +51,7 @@ enum Command {
         seed: Option<u64>,
         /// Only puzzles of this level. Expert ones need two Expert steps or
         /// more.
-        #[arg(long, value_enum)]
+        #[arg(long, value_enum, ignore_case = true)]
         level: Option<LevelArg>,
     },
 }
@@ -173,7 +174,7 @@ fn no_grade(grid: &Grid) -> &'static str {
 /// Rates the first word of each line, printing the puzzle and its grade, or
 /// why it has none. Blank lines and lines starting with `#` are skipped. A
 /// line that isn't a puzzle is reported on standard error, and the rest are
-/// still rated. Returns whether every other line was a puzzle.
+/// still rated. Returns whether every line not skipped was a puzzle.
 fn rate_lines(input: impl BufRead, out: &mut impl Write) -> io::Result<bool> {
     let mut all_read = true;
     for (number, line) in input.split(b'\n').enumerate() {
