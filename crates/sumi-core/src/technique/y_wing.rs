@@ -19,6 +19,10 @@ impl Technique for YWing {
         Level::Expert
     }
 
+    fn score(&self) -> u32 {
+        160
+    }
+
     fn all(&self, p: &Position) -> Vec<Step> {
         let bivalue = bivalue_cells(p);
         let mut steps = Vec::new();

@@ -20,6 +20,10 @@ impl Technique for WWing {
         Level::Expert
     }
 
+    fn score(&self) -> u32 {
+        150
+    }
+
     fn all(&self, p: &Position) -> Vec<Step> {
         let mut steps = Vec::new();
         for pair in choose(&bivalue_cells(p), 2) {

@@ -2,6 +2,7 @@
 
 pub mod digits;
 pub mod generate;
+pub mod grade;
 pub mod grid;
 pub mod position;
 pub mod solver;

@@ -16,6 +16,10 @@ impl Technique for NakedSingle {
         Level::Easy
     }
 
+    fn score(&self) -> u32 {
+        4
+    }
+
     fn all(&self, p: &Position) -> Vec<Step> {
         p.empty_cells()
             .filter_map(|cell| {

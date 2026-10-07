@@ -31,6 +31,14 @@ impl<const N: usize> Technique for NakedSubset<N> {
         level(N)
     }
 
+    fn score(&self) -> u32 {
+        match N {
+            2 => 60,
+            3 => 80,
+            _ => 120,
+        }
+    }
+
     fn all(&self, p: &Position) -> Vec<Step> {
         let mut steps = Vec::new();
         for house in House::ALL {
@@ -74,6 +82,14 @@ impl<const N: usize> Technique for HiddenSubset<N> {
 
     fn level(&self) -> Level {
         level(N)
+    }
+
+    fn score(&self) -> u32 {
+        match N {
+            2 => 70,
+            3 => 100,
+            _ => 150,
+        }
     }
 
     fn all(&self, p: &Position) -> Vec<Step> {

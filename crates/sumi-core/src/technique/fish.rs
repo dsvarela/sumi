@@ -24,6 +24,10 @@ impl<const N: usize> Technique for Fish<N> {
         Level::Hard
     }
 
+    fn score(&self) -> u32 {
+        if N == 2 { 140 } else { 150 }
+    }
+
     fn all(&self, p: &Position) -> Vec<Step> {
         let mut steps = Vec::new();
         for digit in 1..=9 {

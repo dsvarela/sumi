@@ -20,6 +20,10 @@ impl Technique for UniqueRectangle {
         Level::Expert
     }
 
+    fn score(&self) -> u32 {
+        100
+    }
+
     fn all(&self, p: &Position) -> Vec<Step> {
         if !p.is_unique() {
             return Vec::new();

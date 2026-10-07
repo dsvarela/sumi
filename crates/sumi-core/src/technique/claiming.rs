@@ -18,6 +18,10 @@ impl Technique for Claiming {
         Level::Medium
     }
 
+    fn score(&self) -> u32 {
+        50
+    }
+
     fn all(&self, p: &Position) -> Vec<Step> {
         let mut steps = Vec::new();
         for line in &House::ALL[9..] {

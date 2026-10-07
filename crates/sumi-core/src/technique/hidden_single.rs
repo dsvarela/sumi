@@ -16,6 +16,10 @@ impl Technique for HiddenSingle {
         Level::Easy
     }
 
+    fn score(&self) -> u32 {
+        14
+    }
+
     fn all(&self, p: &Position) -> Vec<Step> {
         let mut steps = Vec::new();
         for house in House::ALL {

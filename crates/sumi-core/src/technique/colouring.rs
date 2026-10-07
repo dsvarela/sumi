@@ -24,6 +24,10 @@ impl Technique for SimpleColouring {
         Level::Expert
     }
 
+    fn score(&self) -> u32 {
+        150
+    }
+
     fn all(&self, p: &Position) -> Vec<Step> {
         let mut steps = Vec::new();
         for digit in 1..=9 {

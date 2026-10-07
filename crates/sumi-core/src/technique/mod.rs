@@ -43,6 +43,10 @@ pub trait Technique: Sync {
 
     fn level(&self) -> Level;
 
+    /// What one step of it adds to a puzzle's score, which sorts puzzles
+    /// within a level. The values are HoDoKu's defaults.
+    fn score(&self) -> u32;
+
     /// Every step this technique finds in `p`. Each one places a digit or
     /// removes at least one candidate. The same pattern may be listed once
     /// per row, column or box it can be read from.

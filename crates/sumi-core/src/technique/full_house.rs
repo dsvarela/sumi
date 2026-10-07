@@ -18,6 +18,10 @@ impl Technique for FullHouse {
         Level::Easy
     }
 
+    fn score(&self) -> u32 {
+        4
+    }
+
     fn all(&self, p: &Position) -> Vec<Step> {
         let mut steps = Vec::new();
         for house in House::ALL {

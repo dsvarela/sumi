@@ -20,6 +20,10 @@ impl Technique for Pointing {
         Level::Medium
     }
 
+    fn score(&self) -> u32 {
+        50
+    }
+
     fn all(&self, p: &Position) -> Vec<Step> {
         let mut steps = Vec::new();
         for b in 0..9 {

@@ -20,6 +20,10 @@ impl Technique for Skyscraper {
         Level::Expert
     }
 
+    fn score(&self) -> u32 {
+        130
+    }
+
     fn all(&self, p: &Position) -> Vec<Step> {
         let mut steps = Vec::new();
         for digit in 1..=9 {
