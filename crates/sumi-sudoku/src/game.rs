@@ -15,8 +15,7 @@ pub struct Game {
     candidates: [Option<Digits>; CELLS],
     /// Box marks: "this digit goes in one of these spots in its box".
     marks: [Digits; CELLS],
-    /// For each digit the player placed, the notes placing it took away.
-    placements: [Option<Placement>; CELLS],
+    hidden: [Hidden; CELLS],
     cursor: Cell,
     mode: Mode,
     candidates_from_marks: CandidatesFromMarks,
@@ -39,10 +38,6 @@ pub enum CandidatesFromMarks {
     #[default]
     Fill,
     /// Each cell's box marks join its candidates.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the settings page in milestone 6 offers it")
-    )]
     Merge,
 }
 
@@ -67,20 +62,19 @@ struct CellState {
     digit: Option<u8>,
     candidates: Option<Digits>,
     marks: Digits,
-    placement: Option<Placement>,
+    hidden: Hidden,
 }
 
-/// The notes placing a digit took away, so that erasing or overwriting the
-/// digit gives exactly those back.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Placement {
-    /// The cell's own notes, which a digit hides.
-    candidates: Option<Digits>,
+/// Notes the player wrote that a placed digit rules out. They stay out of
+/// sight until no placed digit rules them out, so erasing digits in any order
+/// gives back every note they took. A cell holding the player's digit keeps
+/// all its notes here.
+///
+/// A cell with no candidates written (`None`) has no hidden candidates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct Hidden {
+    candidates: Digits,
     marks: Digits,
-    /// Bit `i` stands for the `i`th cell of `peers(cell)`: the peers that lost
-    /// the digit from their candidates, and from their box marks.
-    candidates_from: u32,
-    marks_from: u32,
 }
 
 /// One undo step: every cell an action changed, before and after. An action
@@ -100,7 +94,7 @@ impl Game {
             puzzle,
             candidates: [None; CELLS],
             marks: [Digits::NONE; CELLS],
-            placements: [None; CELLS],
+            hidden: [Hidden::default(); CELLS],
             cursor: 0,
             mode: Mode::Digit,
             candidates_from_marks: CandidatesFromMarks::default(),
@@ -212,8 +206,9 @@ impl Game {
                 let mut set = g.candidates[cell].unwrap_or(Digits::NONE);
                 set.toggle(digit);
                 // Taking out your own last candidate means no notes, not a
-                // contradiction.
-                g.candidates[cell] = (!set.is_empty()).then_some(set);
+                // contradiction, unless placed digits hide others.
+                let none_left = set.is_empty() && g.hidden[cell].candidates.is_empty();
+                g.candidates[cell] = (!none_left).then_some(set);
             }),
             Mode::BoxMark if self.board.get(cell).is_none() => {
                 self.record(|g| g.marks[cell].toggle(digit))
@@ -235,6 +230,7 @@ impl Game {
             } else {
                 g.candidates[cell] = None;
                 g.marks[cell] = Digits::NONE;
+                g.hidden[cell] = Hidden::default();
             }
         });
     }
@@ -254,31 +250,27 @@ impl Game {
 
     /// Replaces the candidates of every empty cell with all its possible ones.
     pub fn refill_candidates(&mut self) {
-        self.record(|g| {
-            for cell in 0..CELLS {
-                if g.board.get(cell).is_none() {
-                    g.candidates[cell] = Some(g.board.possible(cell));
-                }
-            }
-        });
+        self.record(Game::refill);
     }
 
     /// Moves from box marks to candidates, as `candidates_from_marks` says.
     pub fn marks_to_candidates(&mut self) {
         let choice = self.candidates_from_marks;
         self.record(|g| {
+            if choice == CandidatesFromMarks::Fill {
+                g.refill();
+            }
             for cell in 0..CELLS {
-                match choice {
-                    CandidatesFromMarks::Fill if g.board.get(cell).is_none() => {
-                        g.candidates[cell] = Some(g.board.possible(cell));
-                    }
-                    CandidatesFromMarks::Merge if !g.marks[cell].is_empty() => {
-                        let set = g.candidates[cell].unwrap_or(Digits::NONE);
-                        g.candidates[cell] = Some(set.union(g.marks[cell]));
-                    }
-                    CandidatesFromMarks::Fill | CandidatesFromMarks::Merge => {}
+                let hidden = &mut g.hidden[cell];
+                if choice == CandidatesFromMarks::Merge
+                    && !(g.marks[cell].is_empty() && hidden.marks.is_empty())
+                {
+                    let set = g.candidates[cell].unwrap_or(Digits::NONE);
+                    g.candidates[cell] = Some(set.union(g.marks[cell]));
+                    hidden.candidates = hidden.candidates.union(hidden.marks);
                 }
                 g.marks[cell] = Digits::NONE;
+                hidden.marks = Digits::NONE;
             }
         });
     }
@@ -286,11 +278,15 @@ impl Game {
     /// Clears one layer of notes from the whole board, or both with `None`.
     pub fn clear_notes(&mut self, layer: Option<Layer>) {
         self.record(|g| {
-            if layer != Some(Layer::BoxMarks) {
-                g.candidates = [None; CELLS];
-            }
-            if layer != Some(Layer::Candidates) {
-                g.marks = [Digits::NONE; CELLS];
+            for cell in 0..CELLS {
+                if layer != Some(Layer::BoxMarks) {
+                    g.candidates[cell] = None;
+                    g.hidden[cell].candidates = Digits::NONE;
+                }
+                if layer != Some(Layer::Candidates) {
+                    g.marks[cell] = Digits::NONE;
+                    g.hidden[cell].marks = Digits::NONE;
+                }
             }
         });
     }
@@ -317,63 +313,70 @@ impl Game {
         }
     }
 
-    /// Writes the digit and takes it out of the notes of every cell it sees.
-    /// The cell's own notes go too, since a digit hides them. A digit already
-    /// there is erased first.
+    /// Every empty cell gets all its possible candidates, and none hidden.
+    fn refill(&mut self) {
+        for cell in 0..CELLS {
+            if self.board.get(cell).is_none() {
+                self.candidates[cell] = Some(self.board.possible(cell));
+                self.hidden[cell].candidates = Digits::NONE;
+            }
+        }
+    }
+
+    /// Writes the digit and hides it in the notes of every cell it sees. The
+    /// cell's own notes are hidden too, since a digit covers them. A digit
+    /// already there is erased first.
     fn place(&mut self, cell: Cell, digit: u8) {
         if self.board.get(cell) == Some(digit) {
             return;
         }
         self.erase(cell);
-        let mut placement = Placement {
-            candidates: self.candidates[cell].take(),
-            marks: std::mem::take(&mut self.marks[cell]),
-            candidates_from: 0,
-            marks_from: 0,
-        };
+        let own = &mut self.hidden[cell];
+        if let Some(set) = &mut self.candidates[cell] {
+            own.candidates = own.candidates.union(std::mem::take(set));
+        }
+        own.marks = own.marks.union(std::mem::take(&mut self.marks[cell]));
         self.board.set(cell, Some(digit));
-        for (i, p) in peers(cell).enumerate() {
+
+        let only: Digits = [digit].into_iter().collect();
+        for p in peers(cell) {
+            let hidden = &mut self.hidden[p];
             if let Some(set) = &mut self.candidates[p]
                 && set.contains(digit)
             {
                 set.remove(digit);
-                placement.candidates_from |= 1 << i;
+                hidden.candidates = hidden.candidates.union(only);
             }
             if self.marks[p].contains(digit) {
                 self.marks[p].remove(digit);
-                placement.marks_from |= 1 << i;
+                hidden.marks = hidden.marks.union(only);
             }
         }
-        self.placements[cell] = Some(placement);
     }
 
-    /// Takes the player's digit out of `cell` and gives back the notes placing
-    /// it took away. A note comes back only where the digit is still possible,
-    /// and a candidate only to a cell that still has candidates written.
+    /// Takes the player's digit out of `cell`, then shows again every hidden
+    /// note, in the cell and the cells it sees, that no placed digit rules
+    /// out any more.
     fn erase(&mut self, cell: Cell) {
-        let Some(digit) = self.board.get(cell) else {
+        if self.board.get(cell).is_none() {
             return;
-        };
-        let placement = self.placements[cell]
-            .take()
-            .expect("every digit the player placed has a placement");
+        }
         self.board.set(cell, None);
-
-        let ruled_out = Digits::ALL.without(self.board.possible(cell));
-        self.candidates[cell] = placement.candidates.map(|set| set.without(ruled_out));
-        self.marks[cell] = placement.marks.without(ruled_out);
-        for (i, p) in peers(cell).enumerate() {
-            if self.board.get(p).is_some() || !self.board.possible(p).contains(digit) {
+        for c in std::iter::once(cell).chain(peers(cell)) {
+            if self.board.get(c).is_some() {
                 continue;
             }
-            if placement.candidates_from & 1 << i != 0
-                && let Some(set) = &mut self.candidates[p]
-            {
-                set.insert(digit);
+            let possible = self.board.possible(c);
+            let hidden = &mut self.hidden[c];
+            let candidates = hidden.candidates.intersection(possible);
+            if !candidates.is_empty() {
+                let set = self.candidates[c].get_or_insert(Digits::NONE);
+                *set = set.union(candidates);
+                hidden.candidates = hidden.candidates.without(candidates);
             }
-            if placement.marks_from & 1 << i != 0 {
-                self.marks[p].insert(digit);
-            }
+            let marks = hidden.marks.intersection(possible);
+            self.marks[c] = self.marks[c].union(marks);
+            hidden.marks = hidden.marks.without(marks);
         }
     }
 
@@ -402,7 +405,7 @@ impl Game {
             digit: self.board.get(cell),
             candidates: self.candidates[cell],
             marks: self.marks[cell],
-            placement: self.placements[cell],
+            hidden: self.hidden[cell],
         }
     }
 
@@ -410,7 +413,7 @@ impl Game {
         self.board.set(cell, state.digit);
         self.candidates[cell] = state.candidates;
         self.marks[cell] = state.marks;
-        self.placements[cell] = state.placement;
+        self.hidden[cell] = state.hidden;
     }
 }
 
@@ -642,6 +645,68 @@ mod tests {
         assert!(!g.candidates(R1C8).contains(4)); // placing took nothing there
         assert_eq!(g.candidates[8], None);
         assert_eq!(g.candidates(R1C3), digits(&[1, 2, 4]));
+    }
+
+    /// r1c3 takes 1 from r1c8, then r1c8 takes a digit itself. Erased in
+    /// the order placed, the 1 still comes back to r1c8.
+    #[test]
+    fn erasing_out_of_order_still_gives_every_note_back() {
+        let mut g = at(R1C3);
+        g.fill_candidates();
+        g.press(1);
+        g.cursor = R1C8;
+        g.press(2);
+        g.cursor = R1C3;
+        g.clear();
+        g.cursor = R1C8;
+        g.clear();
+        assert_eq!(g.candidates(R1C8), digits(&[1, 2, 4, 9]));
+    }
+
+    /// Two clashing 4s both rule 4 out of r1c6; it comes back once both go,
+    /// whichever goes first.
+    #[test]
+    fn a_note_two_digits_rule_out_comes_back_when_both_are_erased() {
+        let mut g = at(R1C3);
+        g.fill_candidates();
+        g.press(4);
+        g.cursor = 23; // r3c6, which sees r1c6
+        g.press(4);
+        g.cursor = R1C3;
+        g.clear();
+        assert!(!g.candidates(5).contains(4));
+        g.cursor = 23;
+        g.clear();
+        assert!(g.candidates(5).contains(4));
+    }
+
+    /// Notes cleared after a digit was placed stay cleared when it is erased.
+    #[test]
+    fn erasing_gives_nothing_back_to_notes_cleared_since() {
+        let mut g = at(R1C3);
+        g.fill_candidates();
+        g.mode = Mode::BoxMark;
+        g.cursor = 5; // r1c6
+        g.press(4);
+        g.mode = Mode::Digit;
+        g.cursor = R1C3;
+        g.press(4);
+        g.clear_notes(None);
+        g.clear();
+        assert_eq!(g.marks(5), Digits::NONE);
+        assert_eq!(g.candidates[R1C3], None);
+        assert_eq!(g.candidates[5], None);
+
+        let mut g = at(R1C3);
+        g.mode = Mode::BoxMark;
+        g.cursor = 5;
+        g.press(4);
+        g.mode = Mode::Digit;
+        g.cursor = R1C3;
+        g.press(4);
+        g.marks_to_candidates(); // clears every box mark
+        g.clear();
+        assert_eq!(g.marks(5), Digits::NONE);
     }
 
     #[test]
@@ -941,20 +1006,34 @@ mod tests {
         }
 
         #[test]
-        fn erasing_a_placed_digit_gives_back_every_note_still_possible(
+        fn erasing_placed_digits_in_any_order_gives_back_every_note_still_possible(
             ops in prop::collection::vec(op(), 0..60),
-            digit in 1u8..=9,
+            placed in prop::collection::vec((0..CELLS, 1u8..=9), 1..6),
+            order in Just((0..6).collect::<Vec<usize>>()).prop_shuffle(),
         ) {
             let mut g = game();
             for op in &ops {
                 apply(&mut g, op);
             }
-            prop_assume!(g.board().get(g.cursor()).is_none());
+            // Each cell once: clearing a cell a second time clears its notes.
+            let mut placed: Vec<(Cell, u8)> = placed
+                .into_iter()
+                .filter(|&(c, _)| g.board().get(c).is_none())
+                .collect();
+            placed.sort_by_key(|&(c, _)| c);
+            placed.dedup_by_key(|&mut (c, _)| c);
+            prop_assume!(!placed.is_empty());
             let before = snapshot(&g);
 
             g.mode = Mode::Digit;
-            g.press(digit);
-            g.clear();
+            for &(cell, digit) in &placed {
+                g.cursor = cell;
+                g.press(digit);
+            }
+            for &i in order.iter().filter(|&&i| i < placed.len()) {
+                g.cursor = placed[i].0;
+                g.clear();
+            }
             let after = snapshot(&g);
 
             for cell in 0..CELLS {
