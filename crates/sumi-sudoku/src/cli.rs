@@ -1,5 +1,6 @@
 //! The command line: `sumi` plays, `sumi rate` and `sumi gen` work on puzzles.
 
+use std::io::{self, Write};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
@@ -42,10 +43,16 @@ pub fn run() -> ExitCode {
     match Cli::parse().command {
         None => play(),
         Some(Command::Rate { puzzle }) => rate(&puzzle),
-        Some(Command::Gen { count, seed }) => {
-            gen_puzzles(count, seed);
-            ExitCode::SUCCESS
-        }
+        Some(Command::Gen { count, seed }) => match gen_puzzles(count, seed) {
+            Ok(()) => ExitCode::SUCCESS,
+            // A reader that stops early, like `head`, closes the pipe: that
+            // ends the output, it isn't a failure.
+            Err(err) if err.kind() == io::ErrorKind::BrokenPipe => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("sumi: {err}");
+                ExitCode::FAILURE
+            }
+        },
     }
 }
 
@@ -78,12 +85,14 @@ fn rate(input: &str) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn gen_puzzles(count: u32, seed: Option<u64>) {
+fn gen_puzzles(count: u32, seed: Option<u64>) -> io::Result<()> {
     let mut rng = match seed {
         Some(seed) => Xoshiro256PlusPlus::seed_from_u64(seed),
         None => rand::make_rng(),
     };
+    let mut out = io::stdout().lock();
     for _ in 0..count {
-        println!("{}", generate(&mut rng).clues);
+        writeln!(out, "{}", generate(&mut rng).clues)?;
     }
+    out.flush()
 }
