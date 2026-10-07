@@ -42,6 +42,15 @@ impl Digits {
         Digits(self.0 & !other.0)
     }
 
+    pub fn intersection(self, other: Digits) -> Digits {
+        Digits(self.0 & other.0)
+    }
+
+    /// The digit, if the set holds exactly one.
+    pub fn only(self) -> Option<u8> {
+        (self.len() == 1).then(|| self.0.trailing_zeros() as u8 + 1)
+    }
+
     /// Smallest digit first.
     pub fn iter(self) -> impl Iterator<Item = u8> {
         (1..=9).filter(move |&d| self.contains(d))
@@ -98,6 +107,10 @@ mod tests {
         let b: Digits = [3, 4].into_iter().collect();
         assert_eq!(a.union(b), [1, 2, 3, 4].into_iter().collect());
         assert_eq!(a.without(b), [1, 2].into_iter().collect());
+        assert_eq!(a.intersection(b), [3].into_iter().collect());
+        assert_eq!(b.without(a).only(), Some(4));
+        assert_eq!(a.only(), None);
+        assert_eq!(Digits::NONE.only(), None);
         assert_eq!(Digits::ALL.len(), 9);
     }
 

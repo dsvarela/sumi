@@ -91,6 +91,46 @@ pub fn box_of(cell: Cell) -> usize {
     row(cell) / 3 * 3 + col(cell) / 3
 }
 
+/// A row, column or box: nine cells that must hold each digit once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum House {
+    Row(usize),
+    Col(usize),
+    Box(usize),
+}
+
+impl House {
+    /// Boxes first, then rows, then columns, each from 0 to 8.
+    pub const ALL: [House; 27] = {
+        let mut all = [House::Row(0); 27];
+        let mut i = 0;
+        while i < 9 {
+            all[i] = House::Box(i);
+            all[9 + i] = House::Row(i);
+            all[18 + i] = House::Col(i);
+            i += 1;
+        }
+        all
+    };
+
+    /// Left to right, then top to bottom.
+    pub fn cells(self) -> [Cell; 9] {
+        std::array::from_fn(|i| match self {
+            House::Row(r) => r * 9 + i,
+            House::Col(c) => i * 9 + c,
+            House::Box(b) => (b / 3 * 3 + i / 3) * 9 + b % 3 * 3 + i % 3,
+        })
+    }
+
+    pub fn contains(self, cell: Cell) -> bool {
+        match self {
+            House::Row(r) => row(cell) == r,
+            House::Col(c) => col(cell) == c,
+            House::Box(b) => box_of(cell) == b,
+        }
+    }
+}
+
 /// Reads 81 cells written as `1` to `9`, with `0` or `.` for an empty cell.
 /// Whitespace is ignored, so a grid pasted as nine lines reads the same as one
 /// line.
@@ -217,6 +257,19 @@ mod tests {
         assert_eq!((row(40), col(40), box_of(40)), (4, 4, 4));
         assert_eq!((row(80), col(80), box_of(80)), (8, 8, 8));
         assert_eq!((row(33), col(33), box_of(33)), (3, 6, 5));
+    }
+
+    #[test]
+    fn house_cells() {
+        assert_eq!(House::Row(1).cells(), [9, 10, 11, 12, 13, 14, 15, 16, 17]);
+        assert_eq!(House::Col(2).cells(), [2, 11, 20, 29, 38, 47, 56, 65, 74]);
+        assert_eq!(House::Box(5).cells(), [33, 34, 35, 42, 43, 44, 51, 52, 53]);
+        for house in House::ALL {
+            assert!(house.cells().iter().all(|&c| house.contains(c)));
+            assert_eq!((0..CELLS).filter(|&c| house.contains(c)).count(), 9);
+        }
+        assert_eq!(House::ALL[0], House::Box(0));
+        assert_eq!(House::ALL[26], House::Col(8));
     }
 
     #[test]

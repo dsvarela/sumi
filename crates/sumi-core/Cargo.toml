@@ -8,3 +8,6 @@ repository.workspace = true
 
 [dependencies]
 rand = "0.10.3"
+
+[dev-dependencies]
+proptest = "1.11.0"

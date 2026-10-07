@@ -3,4 +3,7 @@
 pub mod digits;
 pub mod generate;
 pub mod grid;
+pub mod position;
 pub mod solver;
+pub mod step;
+pub mod technique;
