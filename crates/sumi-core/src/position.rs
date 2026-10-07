@@ -20,13 +20,15 @@ impl Position {
     }
 
     /// Takes the candidates as given, as a player's notes or a lesson set
-    /// them. A cell that holds a digit gets none.
+    /// them, less any digit a placed digit the cell sees rules out: a
+    /// technique reading "only two spots" off a stale candidate would place
+    /// or remove the wrong digit. A cell that holds a digit gets none.
     pub fn with_candidates(grid: &Grid, candidates: [Digits; CELLS]) -> Position {
         Position {
             grid: *grid,
             candidates: std::array::from_fn(|c| match grid.get(c) {
                 Some(_) => Digits::NONE,
-                None => candidates[c],
+                None => candidates[c].intersection(grid.possible(c)),
             }),
             unique: false,
         }
@@ -79,5 +81,31 @@ impl Position {
         for &(cell, digits) in &step.removals {
             self.candidates[cell] = self.candidates[cell].without(digits);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::technique::{HiddenSingle, Technique};
+
+    /// r1c1 holds 5 and r1c2 still lists 5, the only other 5 in row 1: read
+    /// as given, that is a hidden single placing a second 5 in the row.
+    #[test]
+    fn candidates_a_placed_digit_rules_out_are_dropped() {
+        let mut grid = Grid::EMPTY;
+        grid.set(0, Some(5));
+        let mut candidates = [Digits::ALL; CELLS];
+        for set in &mut candidates[2..9] {
+            set.remove(5);
+        }
+        let p = Position::with_candidates(&grid, candidates);
+        assert!(!p.candidates(1).contains(5));
+        assert!(
+            HiddenSingle
+                .all(&p)
+                .iter()
+                .all(|s| s.placement != Some((1, 5)))
+        );
     }
 }
