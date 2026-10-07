@@ -201,12 +201,13 @@ mod tests {
         assert_ne!(next, first);
     }
 
-    /// Starting from a Hard puzzle from grantm's bank, moved clues give Hard
-    /// puzzles that are still symmetric and have one solution.
+    /// Starting from a Hard puzzle in sumi's bank whose solution 50 other
+    /// bank puzzles share, moved clues give Hard puzzles that are still
+    /// symmetric and have one solution.
     #[test]
     fn hard_puzzles_come_from_moving_clues() {
         let clues: Grid =
-            "2..78...4.8.42..7......5.....3....9674..6..3159....8.....5......7..12.4.3...76..2"
+            "..2......37...5..4..67....373.9.6...1...8...9...2.4.515....19..8..3...65......8.."
                 .parse()
                 .unwrap();
         let Solutions::Unique(solution) = solve(&clues) else {
@@ -218,13 +219,16 @@ mod tests {
         generator.made.insert(clues);
 
         let mut rng = Xoshiro256PlusPlus::seed_from_u64(5);
+        let mut moved = 0;
         for _ in 0..3 {
             let (puzzle, grade) = generator.next(&mut rng);
             assert_eq!(grade.level, Level::Hard);
             assert!(is_symmetric(&puzzle.clues));
             assert_eq!(solve(&puzzle.clues), Solutions::Unique(puzzle.solution));
-            assert_ne!(puzzle.clues, seed.clues);
+            // Moving clues keeps the solution; a fresh puzzle wouldn't.
+            moved += usize::from(puzzle.solution == seed.solution);
         }
+        assert!(moved > 0);
     }
 
     #[test]

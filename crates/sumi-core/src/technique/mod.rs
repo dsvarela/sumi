@@ -208,9 +208,6 @@ mod tests {
                         }
                         first.get_or_insert(step);
                     }
-                    if first.is_some() {
-                        break;
-                    }
                 }
                 match first {
                     Some(step) => p.apply(&step),
