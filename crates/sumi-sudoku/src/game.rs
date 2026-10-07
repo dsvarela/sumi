@@ -15,6 +15,8 @@ pub struct Game {
     candidates: [Option<Digits>; CELLS],
     /// Box marks: "this digit goes in one of these spots in its box".
     marks: [Digits; CELLS],
+    /// For each digit the player placed, the notes placing it took away.
+    placements: [Option<Placement>; CELLS],
     cursor: Cell,
     mode: Mode,
     undo: Vec<Step>,
@@ -49,6 +51,20 @@ struct CellState {
     digit: Option<u8>,
     candidates: Option<Digits>,
     marks: Digits,
+    placement: Option<Placement>,
+}
+
+/// The notes placing a digit took away, so that erasing or overwriting the
+/// digit gives exactly those back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Placement {
+    /// The cell's own notes, which a digit hides.
+    candidates: Option<Digits>,
+    marks: Digits,
+    /// Bit `i` stands for the `i`th cell of `peers(cell)`: the peers that lost
+    /// the digit from their candidates, and from their box marks.
+    candidates_from: u32,
+    marks_from: u32,
 }
 
 /// One undo step: every cell an action changed, before and after. An action
@@ -68,6 +84,7 @@ impl Game {
             puzzle,
             candidates: [None; CELLS],
             marks: [Digits::NONE; CELLS],
+            placements: [None; CELLS],
             cursor: 0,
             mode: Mode::Digit,
             undo: Vec::new(),
@@ -189,7 +206,7 @@ impl Game {
         }
         self.record(|g| {
             if g.board.get(cell).is_some() {
-                g.board.set(cell, None);
+                g.erase(cell);
             } else {
                 g.candidates[cell] = None;
                 g.marks[cell] = Digits::NONE;
@@ -269,16 +286,62 @@ impl Game {
     }
 
     /// Writes the digit and takes it out of the notes of every cell it sees.
-    /// The cell's own notes go too, since a digit hides them.
+    /// The cell's own notes go too, since a digit hides them. A digit already
+    /// there is erased first.
     fn place(&mut self, cell: Cell, digit: u8) {
+        if self.board.get(cell) == Some(digit) {
+            return;
+        }
+        self.erase(cell);
+        let mut placement = Placement {
+            candidates: self.candidates[cell].take(),
+            marks: std::mem::take(&mut self.marks[cell]),
+            candidates_from: 0,
+            marks_from: 0,
+        };
         self.board.set(cell, Some(digit));
-        self.candidates[cell] = None;
-        self.marks[cell] = Digits::NONE;
-        for p in peers(cell) {
-            if let Some(set) = &mut self.candidates[p] {
+        for (i, p) in peers(cell).enumerate() {
+            if let Some(set) = &mut self.candidates[p]
+                && set.contains(digit)
+            {
                 set.remove(digit);
+                placement.candidates_from |= 1 << i;
             }
-            self.marks[p].remove(digit);
+            if self.marks[p].contains(digit) {
+                self.marks[p].remove(digit);
+                placement.marks_from |= 1 << i;
+            }
+        }
+        self.placements[cell] = Some(placement);
+    }
+
+    /// Takes the player's digit out of `cell` and gives back the notes placing
+    /// it took away. A note comes back only where the digit is still possible,
+    /// and a candidate only to a cell that still has candidates written.
+    fn erase(&mut self, cell: Cell) {
+        let Some(digit) = self.board.get(cell) else {
+            return;
+        };
+        let placement = self.placements[cell]
+            .take()
+            .expect("every digit the player placed has a placement");
+        self.board.set(cell, None);
+
+        let ruled_out = Digits::ALL.without(self.board.possible(cell));
+        self.candidates[cell] = placement.candidates.map(|set| set.without(ruled_out));
+        self.marks[cell] = placement.marks.without(ruled_out);
+        for (i, p) in peers(cell).enumerate() {
+            if self.board.get(p).is_some() || !self.board.possible(p).contains(digit) {
+                continue;
+            }
+            if placement.candidates_from & 1 << i != 0
+                && let Some(set) = &mut self.candidates[p]
+            {
+                set.insert(digit);
+            }
+            if placement.marks_from & 1 << i != 0 {
+                self.marks[p].insert(digit);
+            }
         }
     }
 
@@ -307,6 +370,7 @@ impl Game {
             digit: self.board.get(cell),
             candidates: self.candidates[cell],
             marks: self.marks[cell],
+            placement: self.placements[cell],
         }
     }
 
@@ -314,6 +378,7 @@ impl Game {
         self.board.set(cell, state.digit);
         self.candidates[cell] = state.candidates;
         self.marks[cell] = state.marks;
+        self.placements[cell] = state.placement;
     }
 }
 
@@ -494,6 +559,57 @@ mod tests {
         assert_eq!(g.board().get(R1C3), None);
         assert_eq!(g.candidates(R1C3), digits(&[1, 2, 4]));
         assert!(g.marks(3).contains(4));
+    }
+
+    #[test]
+    fn erasing_a_digit_gives_back_the_notes_its_placement_removed() {
+        let mut g = at(R1C3);
+        g.fill_candidates();
+        g.mode = Mode::BoxMark;
+        g.cursor = 5; // r1c6
+        g.press(4);
+        g.mode = Mode::Digit;
+        g.cursor = R1C3;
+        let before = snapshot(&g);
+
+        g.press(4);
+        g.clear();
+        assert_eq!(snapshot(&g), before);
+    }
+
+    #[test]
+    fn overwriting_a_digit_gives_back_the_old_one_and_takes_the_new() {
+        let mut g = at(R1C3);
+        g.fill_candidates();
+        g.press(4);
+        g.press(2);
+        assert!(g.candidates(5).contains(4)); // r1c6
+        assert!(!g.candidates(5).contains(2));
+        assert_eq!(g.board().get(R1C3), Some(2));
+    }
+
+    #[test]
+    fn erasing_gives_back_only_notes_that_are_still_possible() {
+        let mut g = game();
+        g.fill_candidates();
+        g.mode = Mode::Candidate;
+        g.cursor = R1C8;
+        g.press(4); // the player takes 4 out of r1c8 by hand
+        g.mode = Mode::Digit;
+        g.cursor = R1C3;
+        g.press(4);
+        g.cursor = 8; // r1c9, which lost its 4 to r1c3
+        g.clear(); // the player clears its candidates
+        g.cursor = 21; // r3c4, which sees r1c6 but not r1c3 or r1c7
+        g.press(4);
+
+        g.cursor = R1C3;
+        g.clear();
+        assert!(g.candidates(6).contains(4)); // r1c7: given back
+        assert!(!g.candidates(5).contains(4)); // r1c6: the 4 at r3c4 rules it out
+        assert!(!g.candidates(R1C8).contains(4)); // placing took nothing there
+        assert_eq!(g.candidates[8], None);
+        assert_eq!(g.candidates(R1C3), digits(&[1, 2, 4]));
     }
 
     #[test]
@@ -768,6 +884,37 @@ mod tests {
                 g.redo();
             }
             prop_assert_eq!(snapshot(&g), end);
+        }
+
+        #[test]
+        fn erasing_a_placed_digit_gives_back_every_note_still_possible(
+            ops in prop::collection::vec(op(), 0..60),
+            digit in 1u8..=9,
+        ) {
+            let mut g = game();
+            for op in &ops {
+                apply(&mut g, op);
+            }
+            prop_assume!(g.board().get(g.cursor()).is_none());
+            let before = snapshot(&g);
+
+            g.mode = Mode::Digit;
+            g.press(digit);
+            g.clear();
+            let after = snapshot(&g);
+
+            for cell in 0..CELLS {
+                let (was, now) = (before[cell], after[cell]);
+                let ruled_out = Digits::ALL.without(g.board().possible(cell));
+                let possible = |set: Digits| set.without(ruled_out);
+                prop_assert_eq!(now.digit, was.digit);
+                prop_assert_eq!(now.candidates.map(possible), was.candidates.map(possible));
+                prop_assert_eq!(possible(now.marks), possible(was.marks));
+                // Nothing comes back that wasn't there.
+                prop_assert_eq!(now.candidates.is_some(), was.candidates.is_some());
+                prop_assert!(now.candidates.unwrap_or_default().without(was.candidates.unwrap_or_default()).is_empty());
+                prop_assert!(now.marks.without(was.marks).is_empty());
+            }
         }
     }
 }
