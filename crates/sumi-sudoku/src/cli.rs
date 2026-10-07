@@ -1,4 +1,5 @@
-//! The command line: `sumi` plays, `sumi rate` and `sumi gen` work on puzzles.
+//! The command line: `sumi` and `sumi new` play, `sumi rate` and `sumi gen` work
+//! on puzzles.
 
 use std::io::{self, BufRead, Write};
 use std::process::ExitCode;
