@@ -1,6 +1,8 @@
-//! Graded Hard and Expert puzzles built into the program, since they are
-//! too rare to generate while a player waits. `data/README.md` says where
-//! they come from.
+//! Graded Hard and Expert puzzles built into the program. Hard ones are
+//! about 1 in 300 random puzzles, too rare to generate while a player waits.
+//! Expert ones generate in tens of milliseconds on a laptop; they come from
+//! here too, as the plan's hybrid decision has it. `data/README.md` says
+//! where the puzzles come from.
 
 use rand::Rng;
 use rand::seq::IndexedRandom;

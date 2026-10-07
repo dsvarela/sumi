@@ -1,13 +1,15 @@
 # Data
 
-`bank.txt` is built into sumi: graded Hard and Expert puzzles, which are too
-rare to generate while a player waits. Edit it only by rebuilding it, since a
-test re-grades every line and fails on any difference.
+`bank.txt` is built into sumi: graded Hard and Expert puzzles, which sumi
+plays instead of generating them. Edit it only by rebuilding it, since a test
+re-grades every line and fails on any difference.
 
-Each line is a puzzle and its grade, as `sumi rate` prints them: the puzzle,
-level, score, steps at that level, and hardest technique. The first line
-names the technique order the grades were made with. Every puzzle is
-symmetric, has one solution, and if Expert needs two Expert steps or more.
+The first line names the technique order the grades were made with, and the
+second names the columns. Each line after them is a puzzle and its grade, as
+`sumi rate` prints them when reading standard input: the puzzle, level,
+score, steps at the hardest technique's level, and hardest technique. Every
+puzzle is symmetric and has one solution. Every Expert one needs two Expert
+steps or more, counted along sumi's own solving path.
 
 ## Where the puzzles come from
 

@@ -325,7 +325,8 @@ impl Game {
 
     /// Writes the digit and hides it in the notes of every cell it sees. The
     /// cell's own notes are hidden too, since a digit covers them. A digit
-    /// already there is erased first.
+    /// already there is erased first, unless it is the same digit, which
+    /// changes nothing.
     fn place(&mut self, cell: Cell, digit: u8) {
         if self.board.get(cell) == Some(digit) {
             return;

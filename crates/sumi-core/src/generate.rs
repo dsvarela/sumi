@@ -41,15 +41,19 @@ pub(crate) fn generate<R: Rng + ?Sized>(rng: &mut R) -> Puzzle {
     }
 }
 
-/// Makes puzzles of one level, all different. Easy, Medium and Expert ones
-/// are generated until one grades at the level; an Expert one must also need
-/// two Expert steps or more. Hard puzzles are rare at random, so once one is
-/// found, the next are made by moving a pair of its clues, which gives a Hard
-/// puzzle far more often.
+/// Makes puzzles of one level, all different.
+///
+/// - Easy, Medium and Expert ones are generated until one grades at the
+///   level. An Expert one must also need two Expert steps or more.
+/// - Hard ones are about 1 in 300 at random. Every Hard puzzle found becomes
+///   a seed, and the next are made by moving a pair of a seed's clues, which
+///   gives a Hard puzzle far more often. A seed is retired after 50 tries,
+///   since its neighbours look alike. With no seed left, or when a move
+///   leaves several solutions, a fresh random puzzle is tried instead.
 #[derive(Clone)]
 pub struct LevelGenerator {
     level: Level,
-    /// Hard puzzles found so far, each with how often it has been tried.
+    /// Hard puzzles not yet retired, each with how often it has been tried.
     seeds: Vec<(Puzzle, u32)>,
     made: HashSet<Grid>,
 }
@@ -68,7 +72,8 @@ impl LevelGenerator {
         }
     }
 
-    /// The same generator state always gives the same puzzle.
+    /// A generator in the same state, given an rng in the same state, gives
+    /// the same puzzle.
     pub fn next<R: Rng + ?Sized>(&mut self, rng: &mut R) -> (Puzzle, Grade) {
         loop {
             let puzzle = match self.level {
@@ -99,7 +104,8 @@ impl LevelGenerator {
 }
 
 /// Takes one symmetric pair of clues away and adds another from the
-/// solution, then takes away pairs again while the solution stays unique.
+/// solution, then minimises, which may take away any pairs, the new one
+/// included.
 fn move_clue_pair<R: Rng + ?Sized>(rng: &mut R, puzzle: &Puzzle) -> Option<Puzzle> {
     let halves = 0..=CELLS / 2;
     let given: Vec<usize> = halves
@@ -124,8 +130,9 @@ fn move_clue_pair<R: Rng + ?Sized>(rng: &mut R, puzzle: &Puzzle) -> Option<Puzzl
     })
 }
 
-/// Takes clues away in symmetric pairs, in random order, keeping each removal
-/// that leaves one solution. `clues` must have exactly that one solution.
+/// Tries taking away every symmetric pair of clues once, in random order,
+/// keeping each removal that leaves one solution. `clues` must have exactly
+/// that one solution.
 fn minimise<R: Rng + ?Sized>(rng: &mut R, mut clues: Grid, solution: &Grid) -> Grid {
     // Cell i pairs with 80 - i, its mirror through the centre; the centre cell
     // pairs with itself.

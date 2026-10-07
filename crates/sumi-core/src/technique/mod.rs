@@ -1,4 +1,4 @@
-//! The solving techniques, and the order hints and grading try them in.
+//! The solving techniques, and the order they are tried in.
 
 mod claiming;
 mod colouring;
@@ -87,12 +87,13 @@ pub enum Level {
     Beyond,
 }
 
-/// Bumped whenever [`ORDER`] changes, since a puzzle's grade depends on the
-/// order and stored grades must then be redone.
+/// Bumped whenever a puzzle's grade can change: a change to [`ORDER`], to a
+/// technique's search or score, or to how `find` chooses. Stored grades must
+/// then be redone, and the bank test fails until they are.
 pub const ORDER_VERSION: u32 = 1;
 
-/// Easiest first. Hints and grading take the first technique that finds a
-/// step.
+/// Easiest first. Grading takes the first technique that finds a step, and
+/// hints are to do the same.
 pub static ORDER: &[&dyn Technique] = &[
     &FullHouse,
     &HiddenSingle,

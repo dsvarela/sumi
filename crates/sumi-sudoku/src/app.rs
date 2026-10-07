@@ -133,7 +133,7 @@ impl Session {
 }
 
 /// Easy and Medium puzzles are generated on the spot; Hard and Expert ones
-/// are too rare for that and come from the bank.
+/// come from the bank, which says why.
 fn new_puzzle(rng: &mut Xoshiro256PlusPlus, level: Option<Level>) -> Puzzle {
     match level {
         None => generate_solvable(rng).0,

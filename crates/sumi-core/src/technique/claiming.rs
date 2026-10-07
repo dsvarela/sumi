@@ -1,5 +1,6 @@
-//! Claiming: when a digit's spots in a row or column all lie in one box, the
-//! digit goes in that line, so the rest of the box can't have it.
+//! Claiming: a digit's spots in a row or column all lie in one box. The
+//! line's copy of the digit is then in that box, so the rest of the box
+//! can't have it.
 
 use crate::digits::Digits;
 use crate::grid::{Cell, House, box_of};

@@ -1,6 +1,7 @@
 //! Positions from HoDoKu's technique pages, each with the candidates shown
-//! there: <https://hodoku.sourceforge.net/en/tech_intro.php>. The step each
-//! page shows is written in the test that uses the position.
+//! there: <https://hodoku.sourceforge.net/en/tech_intro.php>. Each one's doc
+//! quotes the step the page shows, and the test that uses it checks that
+//! step.
 
 use crate::digits::Digits;
 use crate::grid::{CELLS, Cell, Grid};

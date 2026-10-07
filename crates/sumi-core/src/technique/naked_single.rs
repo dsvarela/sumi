@@ -24,8 +24,8 @@ impl Technique for NakedSingle {
         p.empty_cells()
             .filter_map(|cell| {
                 let digit = p.candidates(cell).only()?;
-                // Every digit the cell sees rules out a candidate, so its whole
-                // row, column and box are the area.
+                // The digits in its row, column and box together leave one,
+                // so all three are its houses.
                 let houses = vec![
                     House::Box(box_of(cell)),
                     House::Row(row(cell)),

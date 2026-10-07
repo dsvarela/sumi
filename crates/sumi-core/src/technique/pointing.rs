@@ -1,5 +1,6 @@
-//! Pointing: when a digit's spots in a box all lie in one row or column, the
-//! digit goes in that box, so the rest of the line can't have it.
+//! Pointing: a digit's spots in a box all lie in one row or column. The
+//! box's copy of the digit is then in that line, so the rest of the line
+//! can't have it.
 
 use crate::digits::Digits;
 use crate::grid::{Cell, House, col, row};
@@ -10,8 +11,8 @@ use crate::technique::{Level, Technique};
 pub struct Pointing;
 
 impl Technique for Pointing {
-    /// "Pointing triple" when there are three cells, which the hint wording
-    /// decides from the step.
+    /// The name for two cells. With three it is a pointing triple, which
+    /// only the step's cells tell apart.
     fn name(&self) -> &'static str {
         "Pointing pair"
     }

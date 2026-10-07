@@ -106,8 +106,9 @@ mod tests {
         assert_eq!(g.level, Level::Easy);
     }
 
-    /// Puzzles from grantm's public-domain bank, graded the same by
-    /// research/grader_b.py, which shares no code with this module.
+    /// Puzzles from grantm's public-domain bank. research/grader_b.py, which
+    /// shares no code with this module, gives each the same level and hardest
+    /// technique; the scores and step counts are sumi's own.
     #[test]
     fn the_level_is_the_hardest_technique_used() {
         let cases = [
