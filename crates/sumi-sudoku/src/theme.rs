@@ -16,8 +16,16 @@ pub struct Theme {
     pub box_line: Color,
     pub clue: Color,
     pub digit: Color,
+    pub candidate: Color,
+    pub box_mark: Color,
     /// Background of the selected cell.
     pub cursor: Color,
+    /// Background of cells holding the digit under the cursor.
+    pub same_digit: Color,
+    /// Background of the cursor's row, column and box.
+    pub peer: Color,
+    /// Background of cells the candidate filter lights up.
+    pub filter: Color,
     pub conflict: Color,
 }
 
@@ -34,7 +42,12 @@ impl Theme {
             box_line: Color::Rgb(0x56, 0x5f, 0x89),
             clue: Color::Rgb(0xc0, 0xca, 0xf5),
             digit: Color::Rgb(0x7d, 0xcf, 0xff),
+            candidate: Color::Rgb(0x73, 0x7a, 0xa2),
+            box_mark: Color::Rgb(0xff, 0x9e, 0x64),
             cursor: Color::Rgb(0x2e, 0x3c, 0x64),
+            same_digit: Color::Rgb(0x1f, 0x26, 0x40),
+            peer: Color::Rgb(0x0d, 0x0e, 0x14),
+            filter: Color::Rgb(0x3a, 0x30, 0x1c),
             conflict: Color::Rgb(0xf7, 0x76, 0x8e),
         }
     }

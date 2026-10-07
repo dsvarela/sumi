@@ -8,12 +8,31 @@ use crate::game::Direction;
 pub enum Action {
     Step(Direction),
     Jump(Direction),
-    /// `None` clears the cell.
-    Write(Option<u8>),
+    /// A digit key: places, or toggles a note, depending on the mode.
+    Digit(u8),
+    Clear,
+    NextMode,
+    FillCandidates,
+    RefillCandidates,
+    MarksToCandidates,
+    /// Clears the notes of the current mode's layer from the whole board.
+    ClearLayer,
+    ClearAllNotes,
+    ToggleNotes,
+    /// The next key picks what the candidate filter shows.
+    Filter,
     Undo,
     Redo,
     Confirm,
     Quit,
+}
+
+/// What the key after `f` asks the candidate filter for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterKey {
+    Digit(u8),
+    TwoCandidates,
+    Off,
 }
 
 pub fn action(key: KeyEvent) -> Option<Action> {
@@ -30,14 +49,32 @@ pub fn action(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('J') => Action::Jump(Direction::Down),
         KeyCode::Char('K') => Action::Jump(Direction::Up),
         KeyCode::Char('L') => Action::Jump(Direction::Right),
-        KeyCode::Char(c @ '1'..='9') => Action::Write(Some(c as u8 - b'0')),
-        KeyCode::Char('0') | KeyCode::Backspace | KeyCode::Delete => Action::Write(None),
+        KeyCode::Char(c @ '1'..='9') => Action::Digit(c as u8 - b'0'),
+        KeyCode::Char('0') | KeyCode::Backspace | KeyCode::Delete => Action::Clear,
+        KeyCode::Char('n') => Action::NextMode,
+        KeyCode::Char('a') => Action::FillCandidates,
+        KeyCode::Char('A') => Action::RefillCandidates,
+        KeyCode::Char('t') => Action::MarksToCandidates,
+        KeyCode::Char('x') => Action::ClearLayer,
+        KeyCode::Char('X') => Action::ClearAllNotes,
+        KeyCode::Char('v') => Action::ToggleNotes,
+        KeyCode::Char('f') => Action::Filter,
         KeyCode::Char('u') => Action::Undo,
         KeyCode::Enter => Action::Confirm,
         KeyCode::Char('q') => Action::Quit,
         _ => return None,
     };
     Some(action)
+}
+
+/// Reads the key after `f`. Any key without a meaning here cancels.
+pub fn filter_key(key: KeyEvent) -> Option<FilterKey> {
+    match key.code {
+        KeyCode::Char(c @ '1'..='9') => Some(FilterKey::Digit(c as u8 - b'0')),
+        KeyCode::Char('b') => Some(FilterKey::TwoCandidates),
+        KeyCode::Char('0') => Some(FilterKey::Off),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -49,13 +86,10 @@ mod tests {
     }
 
     #[test]
-    fn digits_place_and_zero_clears() {
-        assert_eq!(
-            action(key(KeyCode::Char('7'))),
-            Some(Action::Write(Some(7)))
-        );
-        assert_eq!(action(key(KeyCode::Char('0'))), Some(Action::Write(None)));
-        assert_eq!(action(key(KeyCode::Backspace)), Some(Action::Write(None)));
+    fn digits_and_clearing() {
+        assert_eq!(action(key(KeyCode::Char('7'))), Some(Action::Digit(7)));
+        assert_eq!(action(key(KeyCode::Char('0'))), Some(Action::Clear));
+        assert_eq!(action(key(KeyCode::Backspace)), Some(Action::Clear));
     }
 
     #[test]
@@ -67,6 +101,10 @@ mod tests {
             action(key(KeyCode::Char('h'))),
             Some(Action::Step(Direction::Left))
         );
+        assert_eq!(
+            action(key(KeyCode::Char('A'))),
+            Some(Action::RefillCandidates)
+        );
     }
 
     #[test]
@@ -75,5 +113,19 @@ mod tests {
         assert_eq!(action(ctrl('r')), Some(Action::Redo));
         assert_eq!(action(ctrl('c')), Some(Action::Quit));
         assert_eq!(action(ctrl('u')), None);
+    }
+
+    #[test]
+    fn the_key_after_f() {
+        assert_eq!(
+            filter_key(key(KeyCode::Char('4'))),
+            Some(FilterKey::Digit(4))
+        );
+        assert_eq!(
+            filter_key(key(KeyCode::Char('b'))),
+            Some(FilterKey::TwoCandidates)
+        );
+        assert_eq!(filter_key(key(KeyCode::Char('0'))), Some(FilterKey::Off));
+        assert_eq!(filter_key(key(KeyCode::Esc)), None);
     }
 }
