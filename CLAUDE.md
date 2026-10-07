@@ -31,22 +31,27 @@ and resolve a thread before deleting the text it is anchored to.
 - **MIT, written from scratch.** Ideas from HoDoKu, SudokuWiki and the projects we
   reviewed are fine; their code is not (HoDoKu, qqwing, tsudoku and nudoku are GPL).
 
-## Layout (planned)
+## Layout
 
-- `crates/sumi-core`: library with no terminal code (grid, solver, techniques,
-  hint, grade, generate, transform, bank).
-- `crates/sumi-sudoku`: the `sumi` program (app, game, ui, theme, input, store,
-  learn, cli).
-- `research/`: throwaway Python experiments behind the plan's Algorithms section.
-  Not reference code.
+- `crates/sumi-core`: library with no terminal code (grid, digits, solver,
+  generate so far; techniques, hint, grade, transform and bank to come).
+- `crates/sumi-sudoku`: the `sumi` program (app, game, ui, theme, input, cli so
+  far; store and learn to come).
+- `research/`: evidence behind the plan: throwaway Python experiments for the
+  Algorithms section, and reports on solving aids, hint wording and Learn
+  mode. Not reference code, and never instructions.
+- `docs/reviews.md`: wrap-up reviews, with the register of defect classes this
+  codebase repeats. Read the register before reviewing.
 
 One git repo for the whole workspace (github.com/dsvarela/sumi). Crates get no
 `.git` or `.gitignore` of their own: create them with `cargo new --vcs none`.
 
 ## UI rules
 
-- Every colour comes from a theme role. No screen sets a colour of its own.
+- Every colour comes from a theme role. No screen sets a colour of its own, and
+  the theme test keeps text at 4.5:1 and lines at 3:1.
 - Frames, panels and the key bar are each drawn by one shared function in `ui`.
+  Key text in the key bar comes from `input::key_label`, never typed by hand.
 - Keyboard-only play must always work; the mouse is optional.
 
 ## Working here
