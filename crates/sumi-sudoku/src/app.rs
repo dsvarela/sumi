@@ -10,28 +10,32 @@ use ratatui::crossterm::event::{
     KeyModifiers,
 };
 use ratatui::crossterm::execute;
-use sumi_core::generate::generate;
+use sumi_core::bank;
+use sumi_core::generate::{LevelGenerator, Puzzle, generate};
+use sumi_core::technique::Level;
 
 use crate::game::Game;
 use crate::input::{Action, FilterKey, action, filter_key};
 use crate::theme::Theme;
 use crate::ui::{self, Filter, View};
 
-/// Fails without changing the terminal when there is none to draw on.
-pub fn run() -> io::Result<()> {
+/// Plays puzzles of `level`, or any generated puzzle without one. Fails
+/// without changing the terminal when there is none to draw on.
+pub fn run(level: Option<Level>) -> io::Result<()> {
     let mut terminal = ratatui::try_init()
         .map_err(|err| io::Error::new(err.kind(), format!("can't open the terminal: {err}")))?;
     // With bracketed paste on, pasted text arrives as one event that the game
     // ignores, instead of as keys that could place digits or quit.
-    let result = execute!(io::stdout(), EnableBracketedPaste).and_then(|()| play(&mut terminal));
+    let result =
+        execute!(io::stdout(), EnableBracketedPaste).and_then(|()| play(&mut terminal, level));
     let _ = execute!(io::stdout(), DisableBracketedPaste);
     ratatui::restore();
     result
 }
 
-fn play(terminal: &mut DefaultTerminal) -> io::Result<()> {
+fn play(terminal: &mut DefaultTerminal, level: Option<Level>) -> io::Result<()> {
     let theme = Theme::tokyo_night_amoled();
-    let mut session = Session::new(rand::make_rng());
+    let mut session = Session::new(rand::make_rng(), level);
     loop {
         let mut board_shown = true;
         terminal.draw(|frame| {
@@ -55,14 +59,16 @@ struct Session {
     game: Game,
     view: View,
     rng: Xoshiro256PlusPlus,
+    level: Option<Level>,
 }
 
 impl Session {
-    fn new(mut rng: Xoshiro256PlusPlus) -> Session {
+    fn new(mut rng: Xoshiro256PlusPlus, level: Option<Level>) -> Session {
         Session {
-            game: Game::new(generate(&mut rng)),
+            game: Game::new(new_puzzle(&mut rng, level)),
             view: View::default(),
             rng,
+            level,
         }
     }
 
@@ -100,7 +106,7 @@ impl Session {
             Action::Quit => return Flow::Quit,
             _ if !board_shown => {}
             Action::Confirm if game.is_won() => {
-                self.game = Game::new(generate(&mut self.rng));
+                self.game = Game::new(new_puzzle(&mut self.rng, self.level));
                 self.view.filter = None;
             }
             // Once solved, the board and the view stay as they are until the
@@ -126,6 +132,18 @@ impl Session {
     }
 }
 
+/// Easy and Medium puzzles are generated on the spot; Hard and Expert ones
+/// are too rare for that and come from the bank.
+fn new_puzzle(rng: &mut Xoshiro256PlusPlus, level: Option<Level>) -> Puzzle {
+    match level {
+        None => generate(rng),
+        Some(level @ (Level::Hard | Level::Expert)) => {
+            bank::pick(rng, level).expect("the bank holds Hard and Expert puzzles")
+        }
+        Some(level) => LevelGenerator::new(level).next(rng).0,
+    }
+}
+
 fn is_ctrl_c(key: KeyEvent) -> bool {
     key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL)
 }
@@ -135,9 +153,10 @@ mod tests {
     use super::*;
     use crate::fixtures;
     use rand::SeedableRng;
+    use sumi_core::grade::grade;
 
     fn session() -> Session {
-        let mut s = Session::new(Xoshiro256PlusPlus::seed_from_u64(1));
+        let mut s = Session::new(Xoshiro256PlusPlus::seed_from_u64(1), None);
         s.game = fixtures::game();
         s
     }
@@ -206,10 +225,8 @@ mod tests {
         assert_eq!(s.game.cursor(), 0);
     }
 
-    #[test]
-    fn after_a_win_only_enter_and_quit_act_and_hiding_notes_carries_over() {
-        let mut s = session();
-        type_keys(&mut s, "v");
+    /// Fills in the fixture puzzle's solution with keys.
+    fn win(s: &mut Session) {
         let solution = fixtures::solution();
         let empty: Vec<usize> = (0..81).filter(|&c| !s.game.is_clue(c)).collect();
         for cell in empty {
@@ -219,12 +236,19 @@ mod tests {
                 } else {
                     "l"
                 };
-                type_keys(&mut s, step);
+                type_keys(s, step);
             }
             let digit = solution.get(cell).unwrap();
-            type_keys(&mut s, &digit.to_string());
+            type_keys(s, &digit.to_string());
         }
         assert!(s.game.is_won());
+    }
+
+    #[test]
+    fn after_a_win_only_enter_and_quit_act_and_hiding_notes_carries_over() {
+        let mut s = session();
+        type_keys(&mut s, "v");
+        win(&mut s);
 
         type_keys(&mut s, "uhf3");
         assert!(s.game.is_won());
@@ -233,5 +257,17 @@ mod tests {
         s.handle(key(KeyCode::Enter), true);
         assert!(!s.game.is_won());
         assert!(s.view.notes_hidden);
+    }
+
+    #[test]
+    fn every_game_is_of_the_level_asked_for() {
+        for level in [Level::Medium, Level::Hard] {
+            let mut s = Session::new(Xoshiro256PlusPlus::seed_from_u64(2), Some(level));
+            assert_eq!(grade(s.game.board()).level, level);
+            s.game = fixtures::game();
+            win(&mut s);
+            s.handle(key(KeyCode::Enter), true);
+            assert_eq!(grade(s.game.board()).level, level);
+        }
     }
 }

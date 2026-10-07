@@ -25,6 +25,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Play puzzles of one level.
+    New {
+        #[arg(value_enum)]
+        level: LevelArg,
+    },
     /// Say whether a puzzle has one solution, and how hard it is. With no
     /// puzzle, rate each line of standard input, one per output line.
     Rate {
@@ -68,7 +73,8 @@ impl From<LevelArg> for Level {
 
 pub fn run() -> ExitCode {
     match Cli::parse().command {
-        None => play(),
+        None => play(None),
+        Some(Command::New { level }) => play(Some(level.into())),
         Some(Command::Rate {
             puzzle: Some(puzzle),
         }) => rate(&puzzle),
@@ -96,8 +102,8 @@ fn piped(result: io::Result<bool>) -> ExitCode {
     }
 }
 
-fn play() -> ExitCode {
-    match crate::app::run() {
+fn play(level: Option<Level>) -> ExitCode {
+    match crate::app::run(level) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("sumi: {err}");
