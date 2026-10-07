@@ -7,7 +7,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand, ValueEnum};
 use rand::SeedableRng;
 use rand::rngs::Xoshiro256PlusPlus;
-use sumi_core::generate::{LevelGenerator, generate};
+use sumi_core::generate::{LevelGenerator, generate_solvable};
 use sumi_core::grade::{Grade, grade};
 use sumi_core::grid::Grid;
 use sumi_core::solver::{Solutions, solve};
@@ -212,7 +212,7 @@ fn gen_puzzles(count: u32, seed: Option<u64>, level: Option<Level>) -> io::Resul
     for _ in 0..count {
         let puzzle = match &mut generator {
             Some(generator) => generator.next(&mut rng).0,
-            None => generate(&mut rng),
+            None => generate_solvable(&mut rng).0,
         };
         writeln!(out, "{}", puzzle.clues)?;
     }

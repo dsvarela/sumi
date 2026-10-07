@@ -11,7 +11,7 @@ use ratatui::crossterm::event::{
 };
 use ratatui::crossterm::execute;
 use sumi_core::bank;
-use sumi_core::generate::{LevelGenerator, Puzzle, generate};
+use sumi_core::generate::{LevelGenerator, Puzzle, generate_solvable};
 use sumi_core::technique::Level;
 
 use crate::game::Game;
@@ -136,7 +136,7 @@ impl Session {
 /// are too rare for that and come from the bank.
 fn new_puzzle(rng: &mut Xoshiro256PlusPlus, level: Option<Level>) -> Puzzle {
     match level {
-        None => generate(rng),
+        None => generate_solvable(rng).0,
         Some(level @ (Level::Hard | Level::Expert)) => {
             bank::pick(rng, level).expect("the bank holds Hard and Expert puzzles")
         }

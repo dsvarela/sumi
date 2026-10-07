@@ -17,10 +17,23 @@ pub struct Puzzle {
     pub solution: Grid,
 }
 
+/// A puzzle of any level sumi's techniques can finish, with its grade. A
+/// Beyond puzzle is never offered, since no hint could help with it; about
+/// 1 in 10 random puzzles is one.
+pub fn generate_solvable<R: Rng + ?Sized>(rng: &mut R) -> (Puzzle, Grade) {
+    loop {
+        let puzzle = generate(rng);
+        let grade = grade(&puzzle.clues).expect("generated puzzles have one solution");
+        if grade.level != Level::Beyond {
+            return (puzzle, grade);
+        }
+    }
+}
+
 /// The same generator state always gives the same puzzle. No symmetric pair
 /// of clues can be removed from the result without a second solution
-/// appearing.
-pub fn generate<R: Rng + ?Sized>(rng: &mut R) -> Puzzle {
+/// appearing. Its level is anything, Beyond included.
+pub(crate) fn generate<R: Rng + ?Sized>(rng: &mut R) -> Puzzle {
     let solution = random_full_grid(rng);
     Puzzle {
         clues: minimise(rng, solution, &solution),
@@ -229,6 +242,15 @@ mod tests {
             moved += usize::from(puzzle.solution == seed.solution);
         }
         assert!(moved > 0);
+    }
+
+    #[test]
+    fn solvable_puzzles_are_never_beyond() {
+        let mut rng = Xoshiro256PlusPlus::seed_from_u64(4);
+        for _ in 0..100 {
+            let (puzzle, grade) = generate_solvable(&mut rng);
+            assert_ne!(grade.level, Level::Beyond, "{}", puzzle.clues);
+        }
     }
 
     #[test]
