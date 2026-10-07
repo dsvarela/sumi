@@ -1,4 +1,4 @@
-//! The command line: `sumi rate` and `sumi gen`.
+//! The command line: `sumi` plays, `sumi rate` and `sumi gen` work on puzzles.
 
 use std::process::ExitCode;
 
@@ -17,7 +17,7 @@ use sumi_core::solver::{Solutions, solve};
 )]
 struct Cli {
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Subcommand)]
@@ -40,10 +40,21 @@ enum Command {
 
 pub fn run() -> ExitCode {
     match Cli::parse().command {
-        Command::Rate { puzzle } => rate(&puzzle),
-        Command::Gen { count, seed } => {
+        None => play(),
+        Some(Command::Rate { puzzle }) => rate(&puzzle),
+        Some(Command::Gen { count, seed }) => {
             gen_puzzles(count, seed);
             ExitCode::SUCCESS
+        }
+    }
+}
+
+fn play() -> ExitCode {
+    match crate::app::run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("sumi: {err}");
+            ExitCode::FAILURE
         }
     }
 }
