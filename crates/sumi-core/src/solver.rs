@@ -1,6 +1,6 @@
 //! Brute-force solving by backtracking. Used to check that a puzzle has
-//! exactly one solution and to fill a grid at random; the techniques a person
-//! would use live elsewhere.
+//! exactly one solution and to fill a grid at random. It guesses, so it says
+//! nothing about how a person would solve the puzzle.
 
 use crate::grid::{CELLS, Grid, box_of, col, row};
 
@@ -178,7 +178,7 @@ pub(crate) mod tests {
     fn an_emptied_deadly_rectangle_has_two_solutions() {
         // Four cells in two rows of one band, holding a b / b a: the digits can
         // swap without breaking any row, column or box, so emptying them leaves
-        // exactly two solutions.
+        // a second solution.
         let solution: Grid = SOLUTION.parse().unwrap();
         let at = |r: usize, c: usize| solution.get(r * 9 + c);
         let rectangle = (0..9)

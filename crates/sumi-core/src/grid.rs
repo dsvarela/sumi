@@ -76,6 +76,9 @@ pub fn peers(cell: Cell) -> impl Iterator<Item = Cell> {
     (0..CELLS).filter(move |&other| sees(cell, other))
 }
 
+/// Rows, columns and boxes are numbered from 0 here, boxes left to right
+/// and top to bottom. Text for players counts from 1: r1c1 is cell 0, and
+/// "box 1" is `box_of` 0.
 pub fn row(cell: Cell) -> usize {
     cell / 9
 }
@@ -245,9 +248,9 @@ mod tests {
         assert!(solution.is_solved());
         assert!(!LINE.parse::<Grid>().unwrap().is_solved());
 
-        let mut swapped = solution;
-        swapped.set(0, Some(3));
-        assert!(!swapped.is_solved());
+        let mut changed = solution;
+        changed.set(0, Some(3));
+        assert!(!changed.is_solved());
     }
 
     #[test]
