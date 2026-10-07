@@ -1,0 +1,10 @@
+[package]
+name = "sumi-core"
+version = "0.1.0"
+description = "Sudoku engine for sumi: grid, solver and generator"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rand = "0.10.3"

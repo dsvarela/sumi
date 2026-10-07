@@ -1,0 +1,5 @@
+//! The Sudoku engine behind sumi. It knows nothing about terminals.
+
+pub mod generate;
+pub mod grid;
+pub mod solver;
