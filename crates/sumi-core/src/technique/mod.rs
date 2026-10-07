@@ -1,6 +1,7 @@
 //! The solving techniques, and the order hints and grading try them in.
 
 mod claiming;
+mod fish;
 mod full_house;
 mod hidden_single;
 mod naked_single;
@@ -11,6 +12,7 @@ mod subset;
 pub(crate) mod examples;
 
 pub use claiming::Claiming;
+pub use fish::Fish;
 pub use full_house::FullHouse;
 pub use hidden_single::HiddenSingle;
 pub use naked_single::NakedSingle;
@@ -62,6 +64,12 @@ pub static ORDER: &[&dyn Technique] = &[
     &Claiming,
     &NakedSubset::<2>,
     &HiddenSubset::<2>,
+    &NakedSubset::<3>,
+    &HiddenSubset::<3>,
+    &Fish::<2>,
+    &NakedSubset::<4>,
+    &Fish::<3>,
+    &HiddenSubset::<4>,
 ];
 
 /// Every way to choose `k` of `items`, keeping their order.
@@ -141,6 +149,29 @@ mod tests {
         for (i, a) in ORDER.iter().enumerate() {
             assert!(ORDER[i + 1..].iter().all(|b| a.name() != b.name()));
         }
+    }
+
+    /// The plan's table of levels, in search order.
+    #[test]
+    fn the_order_is_the_plans() {
+        use Level::*;
+        let plan = [
+            ("Full house", Easy),
+            ("Hidden single", Easy),
+            ("Naked single", Easy),
+            ("Pointing pair", Medium),
+            ("Claiming", Medium),
+            ("Naked pair", Medium),
+            ("Hidden pair", Medium),
+            ("Naked triple", Hard),
+            ("Hidden triple", Hard),
+            ("X-Wing", Hard),
+            ("Naked quad", Hard),
+            ("Swordfish", Hard),
+            ("Hidden quad", Hard),
+        ];
+        let order: Vec<_> = ORDER.iter().map(|t| (t.name(), t.level())).collect();
+        assert_eq!(order, plan);
     }
 
     #[test]

@@ -119,7 +119,9 @@ fn level(size: usize) -> Level {
 mod tests {
     use super::*;
     use crate::technique::examples::{
-        HIDDEN_PAIR_1, HIDDEN_PAIR_2, NAKED_PAIR_1, NAKED_PAIR_2, check,
+        HIDDEN_PAIR_1, HIDDEN_PAIR_2, HIDDEN_QUAD_1, HIDDEN_QUAD_2, HIDDEN_TRIPLE_1,
+        HIDDEN_TRIPLE_2, NAKED_PAIR_1, NAKED_PAIR_2, NAKED_QUAD_1, NAKED_QUAD_2, NAKED_TRIPLE_1,
+        NAKED_TRIPLE_2, check,
     };
 
     #[test]
@@ -139,6 +141,50 @@ mod tests {
             &HiddenSubset::<2>,
             &HIDDEN_PAIR_2,
             "r1c2<>1, r1c12<>2, r1c12<>3, r1c12<>5, r1c12<>8, r1c1<>9",
+        );
+    }
+
+    #[test]
+    fn naked_triple() {
+        check(&NakedSubset::<3>, &NAKED_TRIPLE_1, "r1c2<>6");
+        check(
+            &NakedSubset::<3>,
+            &NAKED_TRIPLE_2,
+            "r1c46,r2c456,r3c6<>1, r1c46,r2c456,r3c6<>2, r1c46,r3c6<>6",
+        );
+    }
+
+    #[test]
+    fn hidden_triple() {
+        check(&HiddenSubset::<3>, &HIDDEN_TRIPLE_1, "r9c2<>1, r9c3<>6");
+        check(
+            &HiddenSubset::<3>,
+            &HIDDEN_TRIPLE_2,
+            "r468c6<>1, r8c6<>3, r468c6<>4, r4c6<>7, r468c6<>8",
+        );
+    }
+
+    #[test]
+    fn naked_quad() {
+        check(
+            &NakedSubset::<4>,
+            &NAKED_QUAD_1,
+            "r8c7<>3, r8c7<>8, r8c8<>9",
+        );
+        check(
+            &NakedSubset::<4>,
+            &NAKED_QUAD_2,
+            "r7c12,r89c1,r9c2<>4, r7c12,r9c12<>6, r7c2<>9",
+        );
+    }
+
+    #[test]
+    fn hidden_quad() {
+        check(&HiddenSubset::<4>, &HIDDEN_QUAD_1, "r7c5<>3, r78c5<>6");
+        check(
+            &HiddenSubset::<4>,
+            &HIDDEN_QUAD_2,
+            "r238c9<>3, r128c9<>6, r123c9<>7, r18c9<>8",
         );
     }
 }
