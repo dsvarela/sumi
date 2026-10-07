@@ -48,7 +48,10 @@ impl Technique for UniqueRectangle {
                     if ab.len() != 2 || others.clone().any(|&c| p.candidates(c) != ab) {
                         continue;
                     }
-                    if p.candidates(odd).intersection(ab) != ab {
+                    // Four corners of just a and b are the deadly pattern
+                    // itself: the puzzle has no single solution to rely on.
+                    let fourth = p.candidates(odd);
+                    if fourth.intersection(ab) != ab || fourth == ab {
                         continue;
                     }
                     let houses: Vec<House> = rows
@@ -106,6 +109,13 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].removals, [(12, [1, 2].into_iter().collect())]);
         assert!(UniqueRectangle.all(&rectangle([0, 3])).is_empty());
+
+        let mut candidates = [Digits::ALL; CELLS];
+        for cell in [0, 3, 9, 12] {
+            candidates[cell] = [1, 2].into_iter().collect();
+        }
+        let deadly = Position::with_candidates(&Grid::EMPTY, candidates).known_unique();
+        assert!(UniqueRectangle.all(&deadly).is_empty());
     }
 
     #[test]
