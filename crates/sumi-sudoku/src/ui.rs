@@ -1,16 +1,18 @@
-//! Drawing. Screens take every colour from the theme and draw their frame and
-//! key bar with the shared functions here, so they all look alike.
+//! Drawing. Every colour comes from the theme, and every screen is meant to
+//! draw its frame and key bar with `frame_block` and `key_bar`, so that
+//! screens added later look like this one.
 
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Paragraph, Widget};
+use ratatui::widgets::{Block, BorderType, Paragraph, Widget, Wrap};
 
 use sumi_core::grid::{Cell, col, row, sees};
 
 use crate::game::{Game, Mode};
+use crate::input::{Action, key_label};
 use crate::theme::Theme;
 
 /// A cell is 7 columns by 3 rows, with a one-character line between cells.
@@ -37,23 +39,27 @@ pub enum Filter {
     TwoCandidates,
 }
 
+/// The board inside its frame: the smallest window the game can be drawn in.
+const NEEDED: (u16, u16) = (BOARD_WIDTH + 2, BOARD_HEIGHT + 2);
+
+/// Whether `draw` shows the board in a window of this size. The app asks
+/// this too, so keys never act on a board the player can't see.
+pub fn fits(area: Rect) -> bool {
+    area.width >= NEEDED.0 && area.height >= NEEDED.1
+}
+
 pub fn draw(frame: &mut Frame, game: &Game, view: &View, theme: &Theme) {
     let area = frame.area();
     frame.render_widget(Block::new().style(Style::new().bg(theme.background)), area);
-
-    let needed = Rect::new(0, 0, BOARD_WIDTH + 2, BOARD_HEIGHT + 2);
-    if area.width < needed.width || area.height < needed.height {
-        too_small(frame, needed, theme);
+    if !fits(area) {
+        too_small(frame, theme);
         return;
     }
 
-    let outer = area.centered(
-        Constraint::Length(needed.width),
-        Constraint::Length(needed.height),
-    );
+    let outer = area.centered(Constraint::Length(NEEDED.0), Constraint::Length(NEEDED.1));
     let block = frame_block(theme)
         .title_top(status(game, view, theme).right_aligned())
-        .title_bottom(key_bar(keys(game, view), theme).centered());
+        .title_bottom(key_bar(&keys(game, view), theme).centered());
     let inner = block.inner(outer);
     frame.render_widget(block, outer);
     frame.render_widget(Board { game, view, theme }, inner);
@@ -65,7 +71,7 @@ fn status(game: &Game, view: &View, theme: &Theme) -> Line<'static> {
     }
     let mut parts = Vec::new();
     if view.notes_hidden {
-        parts.push("notes hidden".to_string());
+        parts.push("candidates and box marks hidden".to_string());
     }
     match view.filter {
         Some(Filter::Digit(d)) => parts.push(format!("filter {d}")),
@@ -86,44 +92,52 @@ fn status(game: &Game, view: &View, theme: &Theme) -> Line<'static> {
     ))
 }
 
-fn keys(game: &Game, view: &View) -> &'static [(&'static str, &'static str)] {
-    if game.is_won() {
-        return &[("Enter", "new game"), ("q", "quit")];
-    }
+/// The keys the key bar offers, as key text and what the key does. Key
+/// text comes from `input::key_label`, so it always matches the bindings.
+fn keys(game: &Game, view: &View) -> Vec<(&'static str, &'static str)> {
     if view.awaiting_filter {
-        return &[
+        // The key after f is read by `input::filter_key`, not `input::action`.
+        return vec![
             ("1-9", "digit"),
             ("b", "pairs"),
             ("0", "off"),
             ("other", "cancel"),
         ];
     }
-    match game.mode() {
-        Mode::Digit => &[
-            ("1-9", "place"),
-            ("0", "clear"),
-            ("n", "mode"),
-            ("a", "fill"),
-            ("f", "filter"),
-            ("u", "undo"),
-            ("q", "quit"),
-        ],
-        Mode::Candidate => &[
-            ("1-9", "candidate"),
-            ("a", "fill"),
-            ("A", "refill"),
-            ("x", "clear all"),
-            ("n", "mode"),
-            ("u", "undo"),
-        ],
-        Mode::BoxMark => &[
-            ("1-9", "box mark"),
-            ("t", "to candidates"),
-            ("x", "clear all"),
-            ("n", "mode"),
-            ("u", "undo"),
-        ],
-    }
+    let actions: &[(Action, &str)] = if game.is_won() {
+        &[(Action::Confirm, "new game"), (Action::Quit, "quit")]
+    } else {
+        match game.mode() {
+            Mode::Digit => &[
+                (Action::Digit(1), "place"),
+                (Action::Clear, "clear"),
+                (Action::NextMode, "mode"),
+                (Action::FillCandidates, "fill"),
+                (Action::Filter, "filter"),
+                (Action::Undo, "undo"),
+                (Action::Quit, "quit"),
+            ],
+            Mode::Candidate => &[
+                (Action::Digit(1), "toggle"),
+                (Action::FillCandidates, "fill"),
+                (Action::ClearLayer, "clear candidates"),
+                (Action::ClearAllNotes, "clear both"),
+                (Action::NextMode, "mode"),
+                (Action::Quit, "quit"),
+            ],
+            Mode::BoxMark => &[
+                (Action::Digit(1), "toggle"),
+                (Action::MarksToCandidates, "to candidates"),
+                (Action::ClearLayer, "clear box marks"),
+                (Action::NextMode, "mode"),
+                (Action::Quit, "quit"),
+            ],
+        }
+    };
+    actions
+        .iter()
+        .map(|&(action, words)| (key_label(action), words))
+        .collect()
 }
 
 /// The rounded frame every screen sits in, titled with the program's name.
@@ -153,19 +167,19 @@ pub fn key_bar(keys: &[(&str, &str)], theme: &Theme) -> Line<'static> {
     Line::from(spans)
 }
 
-fn too_small(frame: &mut Frame, needed: Rect, theme: &Theme) {
+/// The message wraps, so a narrow window still shows as much of it as fits.
+fn too_small(frame: &mut Frame, theme: &Theme) {
     let area = frame.area();
     let message = format!(
-        "Make the window at least {}×{}.\nIt is {}×{} now.",
-        needed.width, needed.height, area.width, area.height
+        "Make the window at least {}×{}. It is {}×{} now.",
+        NEEDED.0, NEEDED.1, area.width, area.height
     );
-    let height = 2.min(area.height);
-    let line = area.centered_vertically(Constraint::Length(height));
     frame.render_widget(
         Paragraph::new(message)
             .style(Style::new().fg(theme.text))
+            .wrap(Wrap { trim: true })
             .centered(),
-        line,
+        area.centered_vertically(Constraint::Length(4.min(area.height))),
     );
 }
 
@@ -224,12 +238,28 @@ impl Board<'_> {
         if let Some(bg) = self.background(cell) {
             buf.set_style(rect, Style::new().bg(bg));
         }
+        if cell == self.game.cursor() {
+            // Corner marks show the cursor without relying on colour. Notes
+            // never use a cell's first or last column, so they don't collide.
+            let mark = Style::new().fg(self.theme.accent);
+            let (right, bottom) = (x + CELL_WIDTH - 1, y + CELL_HEIGHT - 1);
+            for (cx, cy, symbol) in [
+                (x, y, "┌"),
+                (right, y, "┐"),
+                (x, bottom, "└"),
+                (right, bottom, "┘"),
+            ] {
+                buf.set_string(cx, cy, symbol, mark);
+            }
+        }
 
         match self.game.board().get(cell) {
             Some(digit) => {
+                // On a solved board every digit is complete, and dimming them
+                // all would grey out the finished puzzle.
                 let colour = if conflict {
                     self.theme.conflict
-                } else if self.game.is_complete(digit) {
+                } else if self.game.is_complete(digit) && !self.game.is_won() {
                     self.theme.dimmed
                 } else if self.game.is_clue(cell) {
                     self.theme.clue
@@ -275,9 +305,10 @@ impl Board<'_> {
         }
     }
 
-    /// The cursor wins over the filter, which wins over the same-digit
-    /// highlight, which wins over the shading of the cursor's row, column and
-    /// box.
+    /// The cursor wins over the filter and the same-digit highlight, and
+    /// those win over the shading of the cursor's row, column and box. The
+    /// filter lights only empty cells and the same-digit highlight only
+    /// filled ones, so those two never compete.
     fn background(&self, cell: Cell) -> Option<Color> {
         let game = self.game;
         let cursor = game.cursor();
@@ -302,8 +333,8 @@ impl Board<'_> {
 }
 
 /// Where a vertical line `kx` (0 to 9, left to right) crosses a horizontal
-/// line `ky`. Every third line is heavy, the outer edge included. Returns the
-/// symbol and whether any part of it is heavy.
+/// line `ky` (0 to 9, top to bottom). Every third line is heavy, the outer
+/// edge included. Returns the symbol and whether any part of it is heavy.
 fn junction(kx: u16, ky: u16) -> (&'static str, bool) {
     let heavy_v = kx.is_multiple_of(3);
     let heavy_h = ky.is_multiple_of(3);
@@ -333,23 +364,9 @@ fn junction(kx: u16, ky: u16) -> (&'static str, bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::game::Direction;
+    use crate::fixtures::{game, solution};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
-    use sumi_core::generate::Puzzle;
-    use sumi_core::grid::Grid;
-    use sumi_core::solver::{Solutions, solve};
-
-    const CLUES: &str =
-        "53..7....6..195....98....6.8...6...34..8.3..17...2...6.6....28....419..5....8..79";
-
-    fn game() -> Game {
-        let clues: Grid = CLUES.parse().unwrap();
-        let Solutions::Unique(solution) = solve(&clues) else {
-            panic!("test puzzle has one solution");
-        };
-        Game::new(Puzzle { clues, solution })
-    }
 
     fn render(game: &Game, view: &View) -> TestBackend {
         let mut terminal = Terminal::new(TestBackend::new(75, 39)).unwrap();
@@ -366,8 +383,10 @@ mod tests {
         (5 + 8 * col(cell) as u16, 3 + 4 * row(cell) as u16)
     }
 
-    /// Moves the cursor from r1c1 to `cell`.
+    /// Moves the cursor from wherever it is to `cell`, going right along the
+    /// row and then down the column, wrapping as needed.
     fn go(game: &mut Game, cell: Cell) {
+        use crate::game::Direction;
         while game.cursor() != cell {
             if col(game.cursor()) != col(cell) {
                 game.step(Direction::Right);
@@ -412,6 +431,24 @@ mod tests {
     }
 
     #[test]
+    fn the_cursor_has_corner_marks() {
+        let mut game = game();
+        go(&mut game, 2);
+        let backend = render(&game, &View::default());
+        let (x, y) = middle(2);
+        let b = backend.buffer();
+        let corners = [
+            b[(x - 3, y - 1)].symbol(),
+            b[(x + 3, y - 1)].symbol(),
+            b[(x - 3, y + 1)].symbol(),
+            b[(x + 3, y + 1)].symbol(),
+        ];
+        assert_eq!(corners, ["┌", "┐", "└", "┘"]);
+        let (x, y) = middle(3);
+        assert_eq!(b[(x - 3, y - 1)].symbol(), " ");
+    }
+
+    #[test]
     fn notes_sit_in_fixed_spots_and_can_be_hidden() {
         let theme = Theme::tokyo_night_amoled();
         let mut game = game();
@@ -426,21 +463,16 @@ mod tests {
         let backend = render(&game, &View::default());
         let buffer = backend.buffer();
         let (x, y) = middle(2);
+        let at = |dx: i16, dy: i16| {
+            let cell = &buffer[((x as i16 + dx) as u16, (y as i16 + dy) as u16)];
+            (cell.symbol().to_string(), cell.fg)
+        };
         // 1 top left, 2 top middle, 4 middle left, 5 in the centre.
-        assert_eq!(
-            (buffer[(x - 2, y - 1)].symbol(), buffer[(x - 2, y - 1)].fg),
-            ("1", theme.candidate)
-        );
-        assert_eq!(
-            (buffer[(x, y - 1)].symbol(), buffer[(x, y - 1)].fg),
-            ("2", theme.box_mark)
-        );
-        assert_eq!(buffer[(x - 2, y)].symbol(), "4");
+        assert_eq!(at(-2, -1), ("1".into(), theme.candidate));
+        assert_eq!(at(0, -1), ("2".into(), theme.box_mark));
+        assert_eq!(at(-2, 0).0, "4");
         // 5 is already in row 1, so that candidate shows as a clash.
-        assert_eq!(
-            (buffer[(x, y)].symbol(), buffer[(x, y)].fg),
-            ("5", theme.conflict)
-        );
+        assert_eq!(at(0, 0), ("5".into(), theme.conflict));
 
         let hidden = View {
             notes_hidden: true,
@@ -450,33 +482,59 @@ mod tests {
         assert_eq!(backend.buffer()[(x - 2, y - 1)].symbol(), " ");
     }
 
+    /// Each check puts two highlights on the same cell, so it fails if
+    /// their order in `background` is swapped.
     #[test]
-    fn highlights_rank_cursor_filter_same_digit_peers() {
+    fn the_cursor_beats_the_filter_and_both_highlights_beat_peer_shading() {
         let theme = Theme::tokyo_night_amoled();
-        let mut game = game();
-        go(&mut game, 1); // the clue 3 at r1c2
         let filter_4 = View {
             filter: Some(Filter::Digit(4)),
             ..View::default()
         };
-        let backend = render(&game, &filter_4);
-        let bg = |cell| backend.buffer()[middle(cell)].bg;
+        let bg = |game: &Game, view: &View, cell| render(game, view).buffer()[middle(cell)].bg;
 
-        assert_eq!(bg(1), theme.cursor);
-        assert_eq!(bg(2), theme.filter); // r1c3 could hold 4, and sees the cursor
-        assert_eq!(bg(0), theme.peer); // a clue in the same row
-        assert_eq!(bg(41), theme.same_digit); // the clue 3 at r5c6
-        assert_eq!(bg(80), theme.background); // r9c9: none of them
+        let mut game = game();
+        go(&mut game, 2); // r1c3, where 4 is possible
+        assert_eq!(bg(&game, &filter_4, 2), theme.cursor);
+        // r1c6 could hold 4 and shares row 1 with the cursor.
+        assert_eq!(bg(&game, &filter_4, 5), theme.filter);
+
+        game.press(5); // r1c3 now holds a 5, in the same row as the clue 5 at r1c1
+        go(&mut game, 0);
+        let plain = View::default();
+        assert_eq!(bg(&game, &plain, 2), theme.same_digit); // a peer holding 5
+        assert_eq!(bg(&game, &plain, 14), theme.same_digit); // r2c6, not a peer
+        assert_eq!(bg(&game, &plain, 36), theme.peer); // r5c1 holds 4
     }
 
     #[test]
-    fn a_complete_digit_is_dimmed() {
+    fn the_pairs_filter_lights_cells_with_two_candidates() {
         let theme = Theme::tokyo_night_amoled();
         let mut game = game();
-        let solution: Grid =
-            "534678912672195348198342567859761423426853791713924856961537284287419635345286179"
-                .parse()
-                .unwrap();
+        go(&mut game, 2); // r1c3: possible 1, 2, 4
+        game.next_mode();
+        game.press(1);
+        game.press(4);
+        go(&mut game, 80); // move away so the cursor doesn't cover it
+        let pairs = View {
+            filter: Some(Filter::TwoCandidates),
+            ..View::default()
+        };
+        let backend = render(&game, &pairs);
+        assert_eq!(backend.buffer()[middle(2)].bg, theme.filter);
+
+        go(&mut game, 2);
+        game.press(2); // three candidates now
+        go(&mut game, 80);
+        let backend = render(&game, &pairs);
+        assert_ne!(backend.buffer()[middle(2)].bg, theme.filter);
+    }
+
+    #[test]
+    fn a_complete_digit_is_dimmed_but_not_on_a_solved_board() {
+        let theme = Theme::tokyo_night_amoled();
+        let mut game = game();
+        let solution = solution();
         for cell in 0..81 {
             if solution.get(cell) == Some(5) && !game.is_clue(cell) {
                 go(&mut game, cell);
@@ -485,20 +543,33 @@ mod tests {
         }
         let backend = render(&game, &View::default());
         assert_eq!(backend.buffer()[middle(0)].fg, theme.dimmed);
+
+        for cell in 0..81 {
+            if !game.is_clue(cell) && game.board().get(cell).is_none() {
+                go(&mut game, cell);
+                game.press(solution.get(cell).unwrap());
+            }
+        }
+        assert!(game.is_won());
+        let backend = render(&game, &View::default());
+        assert_eq!(backend.buffer()[middle(0)].fg, theme.clue);
     }
 
     #[test]
     fn every_key_bar_fits_under_the_board() {
         let mut game = game();
-        for view in [
+        let views = [
             View::default(),
             View {
                 awaiting_filter: true,
                 ..View::default()
             },
-        ] {
+        ];
+        for view in views {
             for _ in 0..3 {
-                let width = key_bar(keys(&game, &view), &Theme::tokyo_night_amoled()).width();
+                let width = key_bar(&keys(&game, &view), &Theme::tokyo_night_amoled()).width();
+                // The bottom border has BOARD_WIDTH columns between its
+                // corners; keep one line character visible at each end.
                 assert!(
                     width <= usize::from(BOARD_WIDTH) - 2,
                     "{:?}: {width}",

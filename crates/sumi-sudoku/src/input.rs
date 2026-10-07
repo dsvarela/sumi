@@ -1,4 +1,4 @@
-//! Keys to actions. Remapping from config.toml arrives with the settings page.
+//! Keys to actions, and the key text the key bar shows for each action.
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -35,11 +35,17 @@ pub enum FilterKey {
     Off,
 }
 
+/// Keys held with Alt mean nothing here, so Alt+h doesn't move like h.
 pub fn action(key: KeyEvent) -> Option<Action> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    if key.modifiers.contains(KeyModifiers::ALT) {
+        return None;
+    }
     let action = match key.code {
         KeyCode::Char('c') if ctrl => Action::Quit,
         KeyCode::Char('r') if ctrl => Action::Redo,
+        // Terminals that send ^H for Backspace arrive as Ctrl+h.
+        KeyCode::Char('h') if ctrl => Action::Clear,
         _ if ctrl => return None,
         KeyCode::Char('h') | KeyCode::Left => Action::Step(Direction::Left),
         KeyCode::Char('j') | KeyCode::Down => Action::Step(Direction::Down),
@@ -69,11 +75,40 @@ pub fn action(key: KeyEvent) -> Option<Action> {
 
 /// Reads the key after `f`. Any key without a meaning here cancels.
 pub fn filter_key(key: KeyEvent) -> Option<FilterKey> {
+    if key
+        .modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+    {
+        return None;
+    }
     match key.code {
         KeyCode::Char(c @ '1'..='9') => Some(FilterKey::Digit(c as u8 - b'0')),
         KeyCode::Char('b') => Some(FilterKey::TwoCandidates),
         KeyCode::Char('0') => Some(FilterKey::Off),
         _ => None,
+    }
+}
+
+/// The key text the key bar shows for `action`. The tests check every label
+/// against [`action`], so the two cannot drift apart.
+pub fn key_label(action: Action) -> &'static str {
+    match action {
+        Action::Step(_) => "hjkl",
+        Action::Jump(_) => "HJKL",
+        Action::Digit(_) => "1-9",
+        Action::Clear => "0",
+        Action::NextMode => "n",
+        Action::FillCandidates => "a",
+        Action::RefillCandidates => "A",
+        Action::MarksToCandidates => "t",
+        Action::ClearLayer => "x",
+        Action::ClearAllNotes => "X",
+        Action::ToggleNotes => "v",
+        Action::Filter => "f",
+        Action::Undo => "u",
+        Action::Redo => "^r",
+        Action::Confirm => "Enter",
+        Action::Quit => "q",
     }
 }
 
@@ -115,6 +150,60 @@ mod tests {
         assert_eq!(action(ctrl('u')), None);
     }
 
+    /// The key events a label stands for: "^r" is Ctrl+r, "1-9" each digit,
+    /// and any other label each of its characters.
+    fn keys_of(label: &str) -> Vec<KeyEvent> {
+        match label {
+            "Enter" => vec![key(KeyCode::Enter)],
+            "1-9" => ('1'..='9').map(|c| key(KeyCode::Char(c))).collect(),
+            l if l.starts_with('^') => l[1..]
+                .chars()
+                .map(|c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL))
+                .collect(),
+            l => l.chars().map(|c| key(KeyCode::Char(c))).collect(),
+        }
+    }
+
+    #[test]
+    fn every_key_label_names_keys_that_do_that_action() {
+        let all = [
+            Action::Step(Direction::Up),
+            Action::Jump(Direction::Up),
+            Action::Digit(1),
+            Action::Clear,
+            Action::NextMode,
+            Action::FillCandidates,
+            Action::RefillCandidates,
+            Action::MarksToCandidates,
+            Action::ClearLayer,
+            Action::ClearAllNotes,
+            Action::ToggleNotes,
+            Action::Filter,
+            Action::Undo,
+            Action::Redo,
+            Action::Confirm,
+            Action::Quit,
+        ];
+        for wanted in all {
+            for k in keys_of(key_label(wanted)) {
+                let got = action(k).unwrap_or_else(|| panic!("{k:?} does nothing"));
+                assert_eq!(
+                    std::mem::discriminant(&got),
+                    std::mem::discriminant(&wanted),
+                    "{k:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn alt_keys_do_nothing_and_ctrl_h_clears() {
+        let alt_h = KeyEvent::new(KeyCode::Char('h'), KeyModifiers::ALT);
+        assert_eq!(action(alt_h), None);
+        let ctrl_h = KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL);
+        assert_eq!(action(ctrl_h), Some(Action::Clear));
+    }
+
     #[test]
     fn the_key_after_f() {
         assert_eq!(
@@ -127,5 +216,7 @@ mod tests {
         );
         assert_eq!(filter_key(key(KeyCode::Char('0'))), Some(FilterKey::Off));
         assert_eq!(filter_key(key(KeyCode::Esc)), None);
+        let ctrl_4 = KeyEvent::new(KeyCode::Char('4'), KeyModifiers::CONTROL);
+        assert_eq!(filter_key(ctrl_4), None);
     }
 }

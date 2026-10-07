@@ -1,13 +1,13 @@
 ---
 source: crates/sumi-sudoku/src/ui.rs
-expression: "render(&game(), 40, 10)"
+expression: terminal.backend()
 ---
 "                                        "
 "                                        "
 "                                        "
+"  Make the window at least 75×39. It is "
+"               40×10 now.               "
 "                                        "
-"     Make the window at least 75×39.    "
-"            It is 40×10 now.            "
 "                                        "
 "                                        "
 "                                        "
