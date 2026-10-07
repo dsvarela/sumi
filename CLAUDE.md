@@ -13,6 +13,11 @@ Read it before proposing features or structure. Its second tab, "Research:
 algorithms", has the technique order, grading and generation findings;
 `research/report.md` is the same report as a file.
 
+When a decision is made in conversation, write it into the plan in the same
+turn. The plan is long: read it by search or by section, not whole. Daniel
+answers questions in doc comments addressed to Claude; reply in that thread,
+and resolve a thread before deleting the text it is anchored to.
+
 ## Principles
 
 - **Calm by default.** No stress, no grind, no racing a clock. Timer and stats are
@@ -34,6 +39,15 @@ algorithms", has the technique order, grading and generation findings;
   learn, cli).
 - `research/`: throwaway Python experiments behind the plan's Algorithms section.
   Not reference code.
+
+One git repo for the whole workspace (github.com/dsvarela/sumi). Crates get no
+`.git` or `.gitignore` of their own: create them with `cargo new --vcs none`.
+
+## UI rules
+
+- Every colour comes from a theme role. No screen sets a colour of its own.
+- Frames, panels and the key bar are each drawn by one shared function in `ui`.
+- Keyboard-only play must always work; the mouse is optional.
 
 ## Working here
 
