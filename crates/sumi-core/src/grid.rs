@@ -3,6 +3,8 @@
 use std::fmt;
 use std::str::FromStr;
 
+use crate::digits::Digits;
+
 /// Cells are numbered 0 to 80, row by row from the top left.
 pub type Cell = usize;
 
@@ -56,11 +58,22 @@ impl Grid {
     pub fn is_solved(&self) -> bool {
         self.filled() == CELLS && !self.conflicts().contains(&true)
     }
+
+    /// The digits no placed digit in the cell's row, column or box rules out.
+    /// The cell's own digit, if any, is ignored.
+    pub fn possible(&self, cell: Cell) -> Digits {
+        Digits::ALL.without(peers(cell).filter_map(|p| self.get(p)).collect())
+    }
 }
 
 /// Two different cells that share a row, column or box.
 pub fn sees(a: Cell, b: Cell) -> bool {
     a != b && (row(a) == row(b) || col(a) == col(b) || box_of(a) == box_of(b))
+}
+
+/// The 20 cells that share a row, column or box with `cell`.
+pub fn peers(cell: Cell) -> impl Iterator<Item = Cell> {
+    (0..CELLS).filter(move |&other| sees(cell, other))
 }
 
 pub fn row(cell: Cell) -> usize {
@@ -235,6 +248,22 @@ mod tests {
         let mut swapped = solution;
         swapped.set(0, Some(3));
         assert!(!swapped.is_solved());
+    }
+
+    #[test]
+    fn peers_are_the_twenty_cells_a_cell_sees() {
+        assert_eq!(peers(40).count(), 20);
+        assert!(peers(40).all(|p| sees(40, p)));
+    }
+
+    #[test]
+    fn possible_digits_leave_out_what_peers_hold() {
+        let grid: Grid = LINE.parse().unwrap();
+        // r1c3 sees 5 3 7 in row 1, 8 in column 3, 6 9 8 in box 1.
+        let expected: Digits = [1, 2, 4].into_iter().collect();
+        assert_eq!(grid.possible(2), expected);
+        // A clue's own digit is not counted against it.
+        assert!(grid.possible(0).contains(5));
     }
 
     #[test]
