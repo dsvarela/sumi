@@ -73,6 +73,10 @@ pub enum Level {
     Beyond,
 }
 
+/// Bumped whenever [`ORDER`] changes, since a puzzle's grade depends on the
+/// order and stored grades must then be redone.
+pub const ORDER_VERSION: u32 = 1;
+
 /// Easiest first. Hints and grading take the first technique that finds a
 /// step.
 pub static ORDER: &[&dyn Technique] = &[
@@ -241,6 +245,9 @@ mod tests {
         ];
         let order: Vec<_> = ORDER.iter().map(|t| (t.name(), t.level())).collect();
         assert_eq!(order, plan);
+        // A change to the list above changes grades: bump ORDER_VERSION with
+        // it, and rebuild the bank.
+        assert_eq!(ORDER_VERSION, 1);
     }
 
     #[test]

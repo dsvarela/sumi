@@ -6,3 +6,7 @@ members = ["crates/*"]
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/dsvarela/sumi"
+
+# Grading the bank in the tests solves a thousand puzzles step by step.
+[profile.dev.package.sumi-core]
+opt-level = 2
