@@ -194,8 +194,14 @@ impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             ParseError::WrongLength(n) => write!(f, "expected 81 cells, found {n}"),
-            ParseError::BadChar { position, found } => {
-                write!(f, "cell {}: '{found}' is not 1 to 9, 0 or .", position + 1)
+            ParseError::BadChar { position, found } if *position < CELLS => write!(
+                f,
+                "r{}c{}: '{found}' is not 1 to 9, 0 or .",
+                row(*position) + 1,
+                col(*position) + 1
+            ),
+            ParseError::BadChar { found, .. } => {
+                write!(f, "'{found}' after the 81st cell is not 1 to 9, 0 or .")
             }
         }
     }
@@ -248,6 +254,18 @@ mod tests {
                 position: 0,
                 found: 'x'
             })
+        );
+    }
+
+    #[test]
+    fn a_bad_character_is_named_by_its_cell() {
+        let error = |text: &str| text.parse::<Grid>().unwrap_err().to_string();
+        let mut text = ".".repeat(81);
+        text.replace_range(10..11, "x");
+        assert_eq!(error(&text), "r2c2: 'x' is not 1 to 9, 0 or .");
+        assert_eq!(
+            error(&format!("{}x", ".".repeat(81))),
+            "'x' after the 81st cell is not 1 to 9, 0 or ."
         );
     }
 
