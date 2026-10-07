@@ -263,11 +263,11 @@ mod tests {
     fn every_game_is_of_the_level_asked_for() {
         for level in [Level::Medium, Level::Hard] {
             let mut s = Session::new(Xoshiro256PlusPlus::seed_from_u64(2), Some(level));
-            assert_eq!(grade(s.game.board()).level, level);
+            assert_eq!(grade(s.game.board()).unwrap().level, level);
             s.game = fixtures::game();
             win(&mut s);
             s.handle(key(KeyCode::Enter), true);
-            assert_eq!(grade(s.game.board()).level, level);
+            assert_eq!(grade(s.game.board()).unwrap().level, level);
         }
     }
 }

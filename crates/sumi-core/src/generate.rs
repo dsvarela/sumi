@@ -62,7 +62,7 @@ impl LevelGenerator {
                 Level::Hard => self.moved_seed(rng).unwrap_or_else(|| generate(rng)),
                 _ => generate(rng),
             };
-            let grade = grade(&puzzle.clues);
+            let grade = grade(&puzzle.clues).expect("generated puzzles have one solution");
             let wanted = grade.level == self.level
                 && (self.level != Level::Expert || grade.hardest_steps >= 2);
             if wanted && self.made.insert(puzzle.clues) {
@@ -182,7 +182,7 @@ mod tests {
             let mut generator = LevelGenerator::new(level);
             let (a, grade) = generator.next(&mut rng);
             assert_eq!(grade.level, level);
-            assert_eq!(grade, crate::grade::grade(&a.clues));
+            assert_eq!(Some(grade.clone()), crate::grade::grade(&a.clues));
             let (b, _) = generator.next(&mut rng);
             assert_ne!(a, b);
             if level == Level::Expert {

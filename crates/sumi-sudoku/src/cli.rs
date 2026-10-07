@@ -1,14 +1,14 @@
 //! The command line: `sumi` and `sumi new` play, `sumi rate` and `sumi gen` work
 //! on puzzles.
 
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use rand::SeedableRng;
 use rand::rngs::Xoshiro256PlusPlus;
 use sumi_core::generate::{LevelGenerator, generate};
-use sumi_core::grade::grade;
+use sumi_core::grade::{Grade, grade};
 use sumi_core::grid::Grid;
 use sumi_core::solver::{Solutions, solve};
 use sumi_core::technique::Level;
@@ -31,8 +31,11 @@ enum Command {
         #[arg(value_enum)]
         level: LevelArg,
     },
-    /// Say whether a puzzle has one solution, and how hard it is. With no
-    /// puzzle, rate each line of standard input, one per output line.
+    /// Say whether a puzzle has one solution and, if it has, how hard it is.
+    /// With no puzzle, rate the first word of each line of standard input,
+    /// skipping blank lines and lines starting with #. Each output line is
+    /// the puzzle, then its level, score, steps at the hardest technique's
+    /// level and hardest technique, or why it has no grade.
     Rate {
         /// 81 cells, row by row: 1 to 9, with 0 or . for an empty cell.
         puzzle: Option<String>,
@@ -79,6 +82,10 @@ pub fn run() -> ExitCode {
         Some(Command::Rate {
             puzzle: Some(puzzle),
         }) => rate(&puzzle),
+        Some(Command::Rate { puzzle: None }) if io::stdin().is_terminal() => {
+            eprintln!("sumi: give a puzzle, or pipe puzzles in, one per line");
+            ExitCode::FAILURE
+        }
         Some(Command::Rate { puzzle: None }) => {
             piped(rate_lines(io::stdin().lock(), &mut io::stdout().lock()))
         }
@@ -123,36 +130,60 @@ fn rate(input: &str) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let grade = grade(&grid);
-    let verdict = match solve(&grid) {
-        Solutions::None => "no solution",
-        Solutions::Unique(_) => "unique",
-        Solutions::Multiple => "more than one solution",
+    let clues = grid.filled();
+    match grade(&grid) {
+        Some(grade) => println!("unique, {clues} clues, {}", describe(&grade)),
+        None => println!("{}, {clues} clues", no_grade(&grid)),
+    }
+    ExitCode::SUCCESS
+}
+
+/// `Hard: X-Wing (1 step at that level, score 804)`.
+fn describe(grade: &Grade) -> String {
+    let Some(hardest) = grade.hardest else {
+        return format!("{:?}: no step needed", grade.level);
     };
-    let hardest = grade.hardest.map_or("no step", |t| t.name());
+    if grade.level == Level::Beyond {
+        return format!(
+            "Beyond: sumi's techniques run out, the hardest used being {}",
+            hardest.name()
+        );
+    }
     let steps = match grade.hardest_steps {
         1 => "1 step".to_string(),
         n => format!("{n} steps"),
     };
-    println!(
-        "{verdict}, {} clues, {:?}: {hardest} ({steps} at that level, score {})",
-        grid.filled(),
+    format!(
+        "{:?}: {} ({steps} at that level, score {})",
         grade.level,
+        hardest.name(),
         grade.score
-    );
-    ExitCode::SUCCESS
+    )
+}
+
+/// Why a puzzle `grade` turned down has no grade.
+fn no_grade(grid: &Grid) -> &'static str {
+    match solve(grid) {
+        Solutions::None => "no solution",
+        Solutions::Multiple => "more than one solution",
+        Solutions::Unique(_) => unreachable!("a puzzle with one solution has a grade"),
+    }
 }
 
 /// Rates the first word of each line, printing the puzzle and its grade, or
-/// why it has none. A line that isn't a puzzle is reported on standard error,
-/// and the rest are still rated. Returns whether every line was a puzzle.
+/// why it has none. Blank lines and lines starting with `#` are skipped. A
+/// line that isn't a puzzle is reported on standard error, and the rest are
+/// still rated. Returns whether every other line was a puzzle.
 fn rate_lines(input: impl BufRead, out: &mut impl Write) -> io::Result<bool> {
     let mut all_read = true;
-    for (number, line) in input.lines().enumerate() {
-        let line = line?;
+    for (number, line) in input.split(b'\n').enumerate() {
+        let line = String::from_utf8_lossy(&line?).into_owned();
         let Some(word) = line.split_whitespace().next() else {
             continue;
         };
+        if word.starts_with('#') {
+            continue;
+        }
         let grid: Grid = match word.parse() {
             Ok(grid) => grid,
             Err(err) => {
@@ -161,10 +192,9 @@ fn rate_lines(input: impl BufRead, out: &mut impl Write) -> io::Result<bool> {
                 continue;
             }
         };
-        match solve(&grid) {
-            Solutions::Unique(_) => writeln!(out, "{grid} {}", grade(&grid))?,
-            Solutions::None => writeln!(out, "{grid} no solution")?,
-            Solutions::Multiple => writeln!(out, "{grid} more than one solution")?,
+        match grade(&grid) {
+            Some(grade) => writeln!(out, "{grid} {grade}")?,
+            None => writeln!(out, "{grid} {}", no_grade(&grid))?,
         }
     }
     out.flush()?;
@@ -197,8 +227,10 @@ mod tests {
     #[test]
     fn rate_reads_a_list_and_skips_lines_that_are_not_puzzles() {
         let input = "\
+# a comment
 53..7....6..195....98....6.8...6...34..8.3..17...2...6.6....28....419..5....8..79 easy
 not a puzzle
+...67.912...19534.198.455.785..61........3791.1.92.8..961....84...41.6..3..2...79
 
 .................................................................................
 ";
@@ -209,8 +241,45 @@ not a puzzle
             String::from_utf8(out).unwrap(),
             "\
 53..7....6..195....98....6.8...6...34..8.3..17...2...6.6....28....419..5....8..79 Easy 504 51 Hidden single
+...67.912...19534.198.455.785..61........3791.1.92.8..961....84...41.6..3..2...79 no solution
 ................................................................................. more than one solution
 "
+        );
+    }
+
+    /// The bank's own file reads without complaint.
+    #[test]
+    fn rate_skips_comments_and_blank_lines() {
+        let input = "# sumi puzzle bank\n\n53..7....6..195....98....6.8...6...34..8.3..17...2...6.6....28....419..5....8..79\n";
+        assert!(rate_lines(input.as_bytes(), &mut Vec::new()).unwrap());
+    }
+
+    #[test]
+    fn rate_goes_on_past_a_line_that_is_not_text() {
+        let input = b"\xff\xfe\n53..7....6..195....98....6.8...6...34..8.3..17...2...6.6....28....419..5....8..79\n";
+        let mut out = Vec::new();
+        assert!(!rate_lines(&input[..], &mut out).unwrap());
+        assert!(
+            String::from_utf8(out)
+                .unwrap()
+                .ends_with("Easy 504 51 Hidden single\n")
+        );
+    }
+
+    #[test]
+    fn describe_says_what_the_grade_means() {
+        let line = |puzzle: &str| describe(&grade(&puzzle.parse().unwrap()).unwrap());
+        assert_eq!(
+            line(
+                "4..6.9..5..3.4.6.....7.1............7...9...1.81...53..68...95...5...2..1...7...8"
+            ),
+            "Hard: X-Wing (1 step at that level, score 804)"
+        );
+        assert_eq!(
+            line(
+                "8.......3....3..191..6.548..6...7....7..5..6....3...5..154.2..663..9....7.......8"
+            ),
+            "Beyond: sumi's techniques run out, the hardest used being 2-String Kite"
         );
     }
 }

@@ -56,7 +56,7 @@ mod tests {
             Some(format!("# sumi puzzle bank, technique order {ORDER_VERSION}").as_str())
         );
         for (clues, _, line) in lines() {
-            assert_eq!(grade(&clues).to_string(), line, "{clues}");
+            assert_eq!(grade(&clues).unwrap().to_string(), line, "{clues}");
         }
     }
 
@@ -70,7 +70,7 @@ mod tests {
             );
             assert!(matches!(solve(&clues), Solutions::Unique(_)), "{clues}");
             if level == Level::Expert {
-                assert!(grade(&clues).hardest_steps >= 2, "{clues}");
+                assert!(grade(&clues).unwrap().hardest_steps >= 2, "{clues}");
             }
             count[(level == Level::Expert) as usize] += 1;
         }
@@ -108,7 +108,7 @@ mod tests {
         let mut rng = Xoshiro256PlusPlus::seed_from_u64(1);
         for level in [Level::Hard, Level::Expert] {
             let puzzle = pick(&mut rng, level).unwrap();
-            assert_eq!(grade(&puzzle.clues).level, level);
+            assert_eq!(grade(&puzzle.clues).unwrap().level, level);
             assert_eq!(solve(&puzzle.clues), Solutions::Unique(puzzle.solution));
         }
         assert_eq!(pick(&mut rng, Level::Easy), None);

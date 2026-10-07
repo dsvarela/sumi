@@ -22,13 +22,13 @@ pub struct Grade {
     pub score: u32,
 }
 
-/// Uniqueness techniques are used only when the puzzle has exactly one
-/// solution.
-pub fn grade(clues: &Grid) -> Grade {
-    let mut p = Position::new(clues);
-    if matches!(solve(clues), Solutions::Unique(_)) {
-        p = p.known_unique();
-    }
+/// `None` for a puzzle without exactly one solution, which has no grade:
+/// with clashing clues the techniques could fill the grid regardless.
+pub fn grade(clues: &Grid) -> Option<Grade> {
+    let Solutions::Unique(_) = solve(clues) else {
+        return None;
+    };
+    let mut p = Position::new(clues).known_unique();
     let mut grade = Grade {
         level: Level::Easy,
         hardest: None,
@@ -43,7 +43,7 @@ pub fn grade(clues: &Grid) -> Grade {
             .find_map(|(i, t)| Some((i, t.find(&p)?)))
         else {
             grade.level = Level::Beyond;
-            return grade;
+            return Some(grade);
         };
         let technique = ORDER[index];
         grade.score += technique.score();
@@ -63,7 +63,7 @@ pub fn grade(clues: &Grid) -> Grade {
         }
         p.apply(&step);
     }
-    grade
+    Some(grade)
 }
 
 /// `Expert 1240 2 Y-Wing`: level, score, steps at the level, hardest
@@ -83,7 +83,19 @@ mod tests {
     use super::*;
 
     fn grade_of(puzzle: &str) -> Grade {
-        grade(&puzzle.parse().unwrap())
+        grade(&puzzle.parse().unwrap()).unwrap()
+    }
+
+    /// Row 3 has two 5s, so there is no solution, though the techniques
+    /// would fill the rest of the grid with hidden singles.
+    #[test]
+    fn only_a_puzzle_with_one_solution_has_a_grade() {
+        for puzzle in [
+            "...67.912...19534.198.455.785..61........3791.1.92.8..961....84...41.6..3..2...79",
+            ".................................................................................",
+        ] {
+            assert_eq!(grade(&puzzle.parse().unwrap()), None, "{puzzle}");
+        }
     }
 
     #[test]
