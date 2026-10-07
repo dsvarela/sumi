@@ -5,6 +5,68 @@ its mechanism, what was fixed and where, what was closed by decision and why,
 and where deferred items went. The class register at the end names the
 defect shapes this codebase repeats; hunt them by name in later reviews.
 
+## 2026-10-08: milestone 4 (8b42e02..f1b26d7)
+
+Four read-only lanes: the untested surfaces run for real (the CLI, a
+pseudo-terminal), the techniques and their call sites, the record against
+the code, and the comments. They reported 76 findings, with overlap (`sumi
+rate` grading puzzles without one solution was found by three lanes). No
+lane came back clean. All 20 techniques were sound on correct candidates.
+Six fixes were structural.
+
+**Prediction against result.** Predicted, and found: `all` listing one
+step once per house, the two forms of `sumi rate` disagreeing, erase going
+wrong after other actions, and record drift. Predicted, and wrong: a
+definition gap in a technique the proptest never reaches (only the
+degenerate unique rectangle turned up). Not predicted: `grade` calling
+grids with clashing clues Easy, bare `sumi` serving Beyond puzzles, three
+tests that could not fail, and the bank's stated reason being false for
+Expert.
+
+### Fixed
+
+| Class | Finding and mechanism | Fix |
+| --- | --- | --- |
+| Two things must agree | Each placement kept a record of the notes it took. Erasing out of order lost notes, since a peer holding a digit was skipped; two clashing digits lost a note for good; clearing notes or `t` left the record behind, so erasing brought box marks back | Each cell keeps the notes placed digits rule out as hidden notes, shown again once no placed digit rules them out; clearing clears them; a property erases several digits in any order (structural, 1115101) |
+| Two meanings, one value | `grade` solved any grid, so clashing clues the techniques could fill came out Easy, and `sumi rate <puzzle>` printed a level for puzzles with no solution | `grade` returns `None` without exactly one solution; both forms of `rate` say why (structural, 4d55144) |
+| Two meanings, one value | "Beyond: 2-String Kite (1 step at that level)" counted Expert steps under a Beyond heading | Beyond is described as the techniques running out (4d55144) |
+| Two things must agree | `all` listed a step once per row, column or box it could be read from: hidden singles 2.1 times on average, so hint rung 1's count would be wrong | Techniques implement `search`; `all` keeps each effect once, simplest form (structural, 1190faf) |
+| Two things must agree | `Position::with_candidates` kept a candidate a placed digit rules out, and a hidden single then placed a second copy of the digit | Such candidates are dropped (structural, 668c398) |
+| Plan vs code | Bare `sumi` and `sumi gen` gave Beyond puzzles, about 1 in 10, which the plan never generates | `generate_solvable` skips them; the unrated generator is crate-private (structural, dc2d25e) |
+| A test that cannot fail | The soundness property checked only the first technique that found a step at each position; it passed with unique rectangle accepting four boxes | Every technique at every position; it now fails on that mutant (structural, f217709) |
+| A test that cannot fail | The tie-break test's pairs were already met in top-left order; the Hard generation test passed with moving clues off | Fixtures that tell the branches apart, each watched failing (1190faf, f217709) |
+| Small | Unique rectangle with all four corners {a,b} emptied all four | Needs a fourth corner with more (ff493bf) |
+| Small | `rate` stopped at a non-UTF-8 line, called `#` lines errors, waited silently on a terminal; level names were case-sensitive; `--help` never said what bare `sumi` does; parse errors named cells "cell 11" | Fixed (4d55144, c44bd59, f1b26d7) |
+| Record | Comments gave rarity as the bank's reason for Expert, which generates in tens of milliseconds; "every step every technique finds" overstated the property; pointing and claiming did not state their inference; ORDER_VERSION's rule missed scores and the tie-break | Corrected (24b7ad2); four local commit messages reworded before publishing (tree unchanged) |
+
+### Closed by decision
+
+- **`t` replaces candidates crossed out by hand.** That is what Fill means,
+  decided 2026-10-08; `u` brings them back. Its key bar wording is milestone
+  6's.
+- **Step counts disagree with research/grader_b.py on 156 bank lines.** The
+  count follows the solving path, and the two graders differ in the order of
+  the Easy techniques. The data README says the count is sumi's own.
+- **A failed clue move falls back to a fresh random puzzle.** It costs
+  time, not correctness; the generator's docs say so.
+- **Hidden single picks the top-left cell, not a box first.** The plan's
+  rule is fewest cells, then the top left.
+- **Long sentences in a few technique comments.** Under the comment
+  checker's threshold; not rewritten.
+
+### Deferred
+
+| Item | Goes to |
+| --- | --- |
+| After a wrong digit, `a` fills candidates without the digits it rules out, and erasing it doesn't add them | Question to Daniel in the plan, on the Notes list |
+| Expert puzzles come from the bank though they generate in tens of milliseconds | Question to Daniel in the plan, on the Puzzles decision |
+| Grading compared only with research/grader_b.py, not HoDoKu or SE as the plan's Testing list asks | Needs HoDoKu downloaded; question to Daniel on the Testing list |
+| Generated Hard puzzles are near-duplicates: median 4 cells from the nearest, 111 solution grids for 250 puzzles | Milestone 7, with transform and canonical-form duplicates |
+| A session can repeat a bank puzzle | Milestone 7, which remembers played puzzles with the stats |
+| Hidden notes must be saved with the game | Milestone 7, autosave |
+| The level isn't shown while playing | Milestone 6, status line |
+| "Pointing triple" for three cells; one placement counted once across Easy techniques | Milestone 5, hint wording and rung 1 |
+
 ## 2026-10-07: milestones 1 to 3 (394b758..c29aa73)
 
 Four read-only lanes: the untested surfaces run in a real terminal, call
@@ -74,8 +136,8 @@ test, and the shared-screen helpers. None described the pre-rewrite API.
 
 | Class | Seen | Hunt for |
 | --- | --- | --- |
-| Two things must agree, nothing makes them agree | 3 (key bar, board shown vs input, plan vs code) | Text, sizes or rules stated in two files |
-| Two meanings, one value | 2 (empty notes, complete digit) | An empty set, zero or `None` standing for more than one state |
+| Two things must agree, nothing makes them agree | 7 (key bar, board shown vs input, plan vs code, placement records vs notes, one step per house, stale candidates, comments vs measurements) | Text, sizes or rules stated in two files; a record of a change that later changes don't update |
+| Two meanings, one value | 4 (empty notes, complete digit, a grade for an invalid grid, Beyond's step count) | An empty set, zero or `None` standing for more than one state |
 | Input from where the player isn't looking | 3 (hidden board, paste, modifiers) | Any path from an event to a game change that skips what is on screen |
-| A test that cannot fail | 6 | Tests whose fixture can't tell the order or the branch apart; mutate the line the name claims |
-| No instrument | 1 (contrast) | A rule in the plan or CLAUDE.md that no test checks |
+| A test that cannot fail | 9 | Tests whose fixture can't tell the order or the branch apart; a loop that stops checking early; mutate the line the name claims |
+| No instrument | 2 (contrast, outside grader) | A rule in the plan or CLAUDE.md that no test checks |
