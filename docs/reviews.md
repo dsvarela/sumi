@@ -58,8 +58,8 @@ test, and the shared-screen helpers. None described the pre-rewrite API.
 
 | Item | Goes to |
 | --- | --- |
-| Erasing a wrong digit doesn't give back the candidates its placement removed (undo does) | Daniel's decision, then milestone 5 |
-| `t` merges box marks into candidates; in a cell without candidates the marks become its only ones | Daniel's decision |
+| Erasing a wrong digit doesn't give back the candidates its placement removed (undo does) | Decided 2026-10-08: erasing or overwriting gives back exactly what the placement removed. Start of milestone 4 |
+| `t` merges box marks into candidates; in a cell without candidates the marks become its only ones | Decided 2026-10-08: `t` fills full candidates and clears box marks by default; a setting chooses merging instead. Start of milestone 4; the setting's page in milestone 6 |
 | SIGTERM or SIGHUP leaves the terminal on the alternate screen, and loses the game | Milestone 7, with autosave |
 | `q` quits without saving | Milestone 7 |
 | No phone layout: the game needs 75×39 | Milestone 6, dense layout |
