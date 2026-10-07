@@ -24,7 +24,7 @@ impl Technique for WWing {
         150
     }
 
-    fn all(&self, p: &Position) -> Vec<Step> {
+    fn search(&self, p: &Position) -> Vec<Step> {
         let mut steps = Vec::new();
         for pair in choose(&bivalue_cells(p), 2) {
             let [a, b] = pair[..] else { unreachable!() };

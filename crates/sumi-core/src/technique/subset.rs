@@ -39,7 +39,7 @@ impl<const N: usize> Technique for NakedSubset<N> {
         }
     }
 
-    fn all(&self, p: &Position) -> Vec<Step> {
+    fn search(&self, p: &Position) -> Vec<Step> {
         let mut steps = Vec::new();
         for house in House::ALL {
             // A cell with one candidate is a naked single, not part of a subset.
@@ -92,7 +92,7 @@ impl<const N: usize> Technique for HiddenSubset<N> {
         }
     }
 
-    fn all(&self, p: &Position) -> Vec<Step> {
+    fn search(&self, p: &Position) -> Vec<Step> {
         let mut steps = Vec::new();
         for house in House::ALL {
             // A digit with one spot is a hidden single, not part of a subset.

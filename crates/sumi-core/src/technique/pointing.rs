@@ -24,7 +24,7 @@ impl Technique for Pointing {
         50
     }
 
-    fn all(&self, p: &Position) -> Vec<Step> {
+    fn search(&self, p: &Position) -> Vec<Step> {
         let mut steps = Vec::new();
         for b in 0..9 {
             let house = House::Box(b);

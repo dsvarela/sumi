@@ -20,7 +20,7 @@ impl Technique for NakedSingle {
         4
     }
 
-    fn all(&self, p: &Position) -> Vec<Step> {
+    fn search(&self, p: &Position) -> Vec<Step> {
         p.empty_cells()
             .filter_map(|cell| {
                 let digit = p.candidates(cell).only()?;

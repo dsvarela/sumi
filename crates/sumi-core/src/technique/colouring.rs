@@ -28,7 +28,7 @@ impl Technique for SimpleColouring {
         150
     }
 
-    fn all(&self, p: &Position) -> Vec<Step> {
+    fn search(&self, p: &Position) -> Vec<Step> {
         let mut steps = Vec::new();
         for digit in 1..=9 {
             let only: Digits = [digit].into_iter().collect();

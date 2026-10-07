@@ -28,7 +28,7 @@ impl<const N: usize> Technique for Fish<N> {
         if N == 2 { 140 } else { 150 }
     }
 
-    fn all(&self, p: &Position) -> Vec<Step> {
+    fn search(&self, p: &Position) -> Vec<Step> {
         let mut steps = Vec::new();
         for digit in 1..=9 {
             steps.extend(fish::<N>(p, digit, House::Row, House::Col, col));

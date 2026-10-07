@@ -22,7 +22,7 @@ impl Technique for Claiming {
         50
     }
 
-    fn all(&self, p: &Position) -> Vec<Step> {
+    fn search(&self, p: &Position) -> Vec<Step> {
         let mut steps = Vec::new();
         for line in &House::ALL[9..] {
             let line = *line;

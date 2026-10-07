@@ -22,7 +22,7 @@ impl Technique for FullHouse {
         4
     }
 
-    fn all(&self, p: &Position) -> Vec<Step> {
+    fn search(&self, p: &Position) -> Vec<Step> {
         let mut steps = Vec::new();
         for house in House::ALL {
             let cells = house.cells();

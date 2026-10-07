@@ -20,7 +20,7 @@ impl Technique for HiddenSingle {
         14
     }
 
-    fn all(&self, p: &Position) -> Vec<Step> {
+    fn search(&self, p: &Position) -> Vec<Step> {
         let mut steps = Vec::new();
         for house in House::ALL {
             for digit in 1..=9 {

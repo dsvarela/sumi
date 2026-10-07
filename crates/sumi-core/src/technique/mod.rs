@@ -47,17 +47,31 @@ pub trait Technique: Sync {
     /// within a level. The values are HoDoKu's defaults.
     fn score(&self) -> u32;
 
-    /// Every step this technique finds in `p`. Each one places a digit or
-    /// removes at least one candidate. The same pattern may be listed once
-    /// per row, column or box it can be read from.
-    fn all(&self, p: &Position) -> Vec<Step>;
+    /// Every step this technique finds in `p`, in the order it looks. Each
+    /// one places a digit or removes at least one candidate. A pattern read
+    /// from several rows, columns or boxes may be listed once for each.
+    fn search(&self, p: &Position) -> Vec<Step>;
 
-    /// The step a hint shows: the one with the fewest cells, then the one
-    /// whose cells come first reading from the top left.
+    /// Every distinct step, simplest first: the fewest cells, then the cells
+    /// that come first reading from the top left. Steps with the same effect
+    /// are one step, kept in their simplest form, so the count is how many
+    /// different things the technique can do here.
+    fn all(&self, p: &Position) -> Vec<Step> {
+        let mut steps = self.search(p);
+        steps.sort_by(|a, b| (a.cells.len(), &a.cells).cmp(&(b.cells.len(), &b.cells)));
+        let mut distinct: Vec<Step> = Vec::new();
+        for step in steps {
+            let same = |s: &Step| s.placement == step.placement && s.removals == step.removals;
+            if !distinct.iter().any(same) {
+                distinct.push(step);
+            }
+        }
+        distinct
+    }
+
+    /// The simplest step, so the same position always gives the same one.
     fn find(&self, p: &Position) -> Option<Step> {
-        self.all(p)
-            .into_iter()
-            .min_by(|a, b| (a.cells.len(), &a.cells).cmp(&(b.cells.len(), &b.cells)))
+        self.all(p).into_iter().next()
     }
 }
 
@@ -283,20 +297,45 @@ mod tests {
         assert_eq!(Pointing.find(&p).unwrap().cells, [79, 80]);
     }
 
-    /// Two naked pairs in row 1: r1c1-r1c2 on {1,2} and r1c8-r1c9 on {8,9}.
-    /// The first comes first from the top left, though both have 2 cells.
+    /// Two naked pairs: r4c4-r4c5 on {8,9}, found first since boxes are
+    /// read before rows, and r1c1-r1c9 on {1,2}, which is nearer the top
+    /// left. Both have 2 cells, so the top left decides.
     #[test]
     fn find_takes_the_fewest_cells_then_the_top_left() {
         let pair = |a: u8, b: u8| -> Digits { [a, b].into_iter().collect() };
         let mut candidates = [Digits::ALL; 81];
         candidates[0] = pair(1, 2);
-        candidates[1] = pair(1, 2);
-        candidates[7] = pair(8, 9);
-        candidates[8] = pair(8, 9);
+        candidates[8] = pair(1, 2);
+        candidates[30] = pair(8, 9);
+        candidates[31] = pair(8, 9);
         let p = Position::with_candidates(&Grid::EMPTY, candidates);
 
-        let all = NakedSubset::<2>.all(&p);
-        assert!(all.iter().any(|s| s.cells == [7, 8]));
-        assert_eq!(NakedSubset::<2>.find(&p).unwrap().cells, [0, 1]);
+        assert_eq!(NakedSubset::<2>.search(&p)[0].cells, [30, 31]);
+        assert_eq!(NakedSubset::<2>.find(&p).unwrap().cells, [0, 8]);
+    }
+
+    /// A step read from both its box and its row is listed once.
+    #[test]
+    fn all_lists_each_effect_once() {
+        let examples = [
+            &examples::HIDDEN_PAIR_1,
+            &examples::HIDDEN_PAIR_2,
+            &examples::NAKED_SINGLE_1,
+            &examples::W_WING_2,
+        ];
+        let mut repeats = 0;
+        for example in examples {
+            let p = example.position().known_unique();
+            for technique in ORDER {
+                let all = technique.all(&p);
+                repeats += technique.search(&p).len() - all.len();
+                for (i, a) in all.iter().enumerate() {
+                    for b in &all[i + 1..] {
+                        assert!(a.placement != b.placement || a.removals != b.removals);
+                    }
+                }
+            }
+        }
+        assert!(repeats > 0, "the examples have no repeated step to drop");
     }
 }

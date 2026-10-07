@@ -24,7 +24,7 @@ impl Technique for UniqueRectangle {
         100
     }
 
-    fn all(&self, p: &Position) -> Vec<Step> {
+    fn search(&self, p: &Position) -> Vec<Step> {
         if !p.is_unique() {
             return Vec::new();
         }
