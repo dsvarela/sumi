@@ -4,8 +4,9 @@
 use crate::digits::Digits;
 use crate::grid::{Cell, House};
 use crate::position::Position;
-use crate::step::Step;
+use crate::step::{Explanation, Step};
 use crate::technique::{Level, Technique};
+use crate::words;
 
 pub struct FullHouse;
 
@@ -20,6 +21,22 @@ impl Technique for FullHouse {
 
     fn score(&self) -> u32 {
         4
+    }
+
+    fn definition(&self, _step: &Step) -> String {
+        "A row, column or box with one empty cell left.".into()
+    }
+
+    fn explain(&self, step: &Step) -> Explanation {
+        let (cell, digit) = step.placement.expect("a full house places a digit");
+        let house = words::house(step.houses[0]);
+        Explanation {
+            area: format!("{}.", words::capital(&house)),
+            area_houses: step.houses.clone(),
+            effect: format!("Place {digit} in {}.", words::cell(cell)),
+            reason: format!("It is the only digit {house} lacks."),
+            second_group: Vec::new(),
+        }
     }
 
     fn search(&self, p: &Position) -> Vec<Step> {

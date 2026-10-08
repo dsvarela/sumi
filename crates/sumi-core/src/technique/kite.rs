@@ -6,8 +6,9 @@
 use crate::digits::Digits;
 use crate::grid::{Cell, House, box_of};
 use crate::position::Position;
-use crate::step::Step;
-use crate::technique::{Level, Technique, seen_by_all, strong_links};
+use crate::step::{Explanation, Step};
+use crate::technique::{Level, Technique, removed_cells, seen_by_all, strong_links};
+use crate::words;
 
 pub struct Kite;
 
@@ -22,6 +23,30 @@ impl Technique for Kite {
 
     fn score(&self) -> u32 {
         150
+    }
+
+    fn definition(&self, _step: &Step) -> String {
+        "A digit's 2-spot row and 2-spot column that meet in a box.".into()
+    }
+
+    /// The key cells are the row's end and the column's end outside the box.
+    fn explain(&self, step: &Step) -> Explanation {
+        let digit = step.digits.only().expect("a kite is about one digit");
+        let [a, b] = step.key_cells[..] else {
+            panic!("a kite names its two ends")
+        };
+        Explanation {
+            area: format!("On digit {digit}, {}.", words::house_list(&step.houses)),
+            area_houses: step.houses.clone(),
+            effect: words::removing(&step.removals),
+            reason: format!(
+                "{} or {} must be {digit}, and {}.",
+                words::cell(a),
+                words::cell(b),
+                words::see_all(&removed_cells(step), "both")
+            ),
+            second_group: Vec::new(),
+        }
     }
 
     fn search(&self, p: &Position) -> Vec<Step> {
@@ -46,14 +71,17 @@ impl Technique for Kite {
                             let targets: Vec<Cell> = seen_by_all(&[row_end, col_end])
                                 .filter(|c| !cells.contains(c))
                                 .collect();
-                            steps.extend(Step::removing(
-                                &Kite,
-                                p,
-                                only,
-                                vec![row, col, House::Box(b)],
-                                cells,
-                                targets.into_iter().map(|c| (c, only)),
-                            ));
+                            steps.extend(
+                                Step::removing(
+                                    &Kite,
+                                    p,
+                                    only,
+                                    vec![row, col, House::Box(b)],
+                                    cells,
+                                    targets.into_iter().map(|c| (c, only)),
+                                )
+                                .map(|step| step.keyed(vec![row_end, col_end])),
+                            );
                         }
                     }
                 }

@@ -5,8 +5,9 @@
 use crate::digits::Digits;
 use crate::grid::{Cell, House, box_of};
 use crate::position::Position;
-use crate::step::Step;
+use crate::step::{Explanation, Step};
 use crate::technique::{Level, Technique};
+use crate::words;
 
 pub struct Claiming;
 
@@ -21,6 +22,28 @@ impl Technique for Claiming {
 
     fn score(&self) -> u32 {
         50
+    }
+
+    fn definition(&self, _step: &Step) -> String {
+        "In a row or column, all spots for a digit lie in one box.".into()
+    }
+
+    fn explain(&self, step: &Step) -> Explanation {
+        let digit = step.digits.only().expect("claiming is about one digit");
+        let [line, house] = step.houses[..] else {
+            panic!("claiming has a line and a box")
+        };
+        let (line, house) = (words::house(line), words::house(house));
+        Explanation {
+            area: format!("On digit {digit}, {line} and {house}."),
+            area_houses: step.houses.clone(),
+            effect: words::removing(&step.removals),
+            reason: format!(
+                "{} must put its {digit} in {house}, so the rest of {house} can't.",
+                words::capital(&line)
+            ),
+            second_group: Vec::new(),
+        }
     }
 
     fn search(&self, p: &Position) -> Vec<Step> {

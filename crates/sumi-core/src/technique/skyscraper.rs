@@ -6,8 +6,9 @@
 use crate::digits::Digits;
 use crate::grid::{Cell, House, col, row};
 use crate::position::Position;
-use crate::step::Step;
-use crate::technique::{Level, Technique, choose, seen_by_all, strong_links};
+use crate::step::{Explanation, Step};
+use crate::technique::{Level, Technique, choose, removed_cells, seen_by_all, strong_links};
+use crate::words;
 
 pub struct Skyscraper;
 
@@ -22,6 +23,35 @@ impl Technique for Skyscraper {
 
     fn score(&self) -> u32 {
         130
+    }
+
+    fn definition(&self, step: &Step) -> String {
+        let lines = match step.houses[0] {
+            House::Row(_) => "rows",
+            _ => "columns",
+        };
+        format!("Two {lines} with 2 spots each for a digit, lined up at one end.")
+    }
+
+    /// The key cells are the two roofs: the ends that are not in line.
+    fn explain(&self, step: &Step) -> Explanation {
+        let digit = step.digits.only().expect("a skyscraper is about one digit");
+        let [a, b] = step.key_cells[..] else {
+            panic!("a skyscraper names its two roofs")
+        };
+        let links = step.houses[..2].to_vec();
+        Explanation {
+            area: format!("On digit {digit}, {}.", words::houses(&links)),
+            area_houses: links,
+            effect: words::removing(&step.removals),
+            reason: format!(
+                "{} or {} must be {digit}, and {}.",
+                words::cell(a),
+                words::cell(b),
+                words::see_all(&removed_cells(step), "both")
+            ),
+            second_group: Vec::new(),
+        }
     }
 
     fn search(&self, p: &Position) -> Vec<Step> {
@@ -52,14 +82,17 @@ impl Technique for Skyscraper {
                             let targets: Vec<Cell> = seen_by_all(&[roof_a, roof_b])
                                 .filter(|c| !cells.contains(c))
                                 .collect();
-                            steps.extend(Step::removing(
-                                &Skyscraper,
-                                p,
-                                only,
-                                vec![line_a, line_b, base_house(across(base_a))],
-                                cells,
-                                targets.into_iter().map(|c| (c, only)),
-                            ));
+                            steps.extend(
+                                Step::removing(
+                                    &Skyscraper,
+                                    p,
+                                    only,
+                                    vec![line_a, line_b, base_house(across(base_a))],
+                                    cells,
+                                    targets.into_iter().map(|c| (c, only)),
+                                )
+                                .map(|step| step.keyed(vec![roof_a, roof_b])),
+                            );
                         }
                     }
                 }

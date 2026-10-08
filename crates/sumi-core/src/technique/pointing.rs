@@ -5,8 +5,9 @@
 use crate::digits::Digits;
 use crate::grid::{Cell, House, col, row};
 use crate::position::Position;
-use crate::step::Step;
+use crate::step::{Explanation, Step};
 use crate::technique::{Level, Technique};
+use crate::words;
 
 pub struct Pointing;
 
@@ -23,6 +24,36 @@ impl Technique for Pointing {
 
     fn score(&self) -> u32 {
         50
+    }
+
+    fn title(&self, step: &Step) -> String {
+        if step.cells.len() == 3 {
+            "Pointing triple".into()
+        } else {
+            self.name().into()
+        }
+    }
+
+    fn definition(&self, _step: &Step) -> String {
+        "In a box, all spots for a digit lie in one row or column.".into()
+    }
+
+    fn explain(&self, step: &Step) -> Explanation {
+        let digit = step.digits.only().expect("pointing is about one digit");
+        let [house, line] = step.houses[..] else {
+            panic!("pointing has a box and a line")
+        };
+        let (house, line) = (words::house(house), words::house(line));
+        Explanation {
+            area: format!("On digit {digit}, {house} and {line}."),
+            area_houses: step.houses.clone(),
+            effect: words::removing(&step.removals),
+            reason: format!(
+                "{} must put its {digit} in {line}, so the rest of {line} can't.",
+                words::capital(&house)
+            ),
+            second_group: Vec::new(),
+        }
     }
 
     fn search(&self, p: &Position) -> Vec<Step> {

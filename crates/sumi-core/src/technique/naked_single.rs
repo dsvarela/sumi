@@ -2,8 +2,9 @@
 
 use crate::grid::{House, box_of, col, row};
 use crate::position::Position;
-use crate::step::Step;
+use crate::step::{Explanation, Step};
 use crate::technique::{Level, Technique};
+use crate::words;
 
 pub struct NakedSingle;
 
@@ -18,6 +19,21 @@ impl Technique for NakedSingle {
 
     fn score(&self) -> u32 {
         4
+    }
+
+    fn definition(&self, _step: &Step) -> String {
+        "A cell with only one candidate left.".into()
+    }
+
+    fn explain(&self, step: &Step) -> Explanation {
+        let (cell, digit) = step.placement.expect("a naked single places a digit");
+        Explanation {
+            area: format!("{}: its row, column and box.", words::cell(cell)),
+            area_houses: step.houses.clone(),
+            effect: format!("Place {digit} in {}.", words::cell(cell)),
+            reason: "Its row, column and box rule out every other digit.".into(),
+            second_group: Vec::new(),
+        }
     }
 
     fn search(&self, p: &Position) -> Vec<Step> {

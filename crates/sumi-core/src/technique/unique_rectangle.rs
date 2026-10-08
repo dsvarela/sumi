@@ -6,8 +6,9 @@
 
 use crate::grid::{Cell, House, box_of};
 use crate::position::Position;
-use crate::step::Step;
+use crate::step::{Explanation, Step};
 use crate::technique::{Level, Technique, choose};
+use crate::words;
 
 pub struct UniqueRectangle;
 
@@ -22,6 +23,23 @@ impl Technique for UniqueRectangle {
 
     fn score(&self) -> u32 {
         100
+    }
+
+    fn definition(&self, _step: &Step) -> String {
+        "One solution means two digits can't swap in a rectangle.".into()
+    }
+
+    fn explain(&self, step: &Step) -> Explanation {
+        let digits = words::digits(step.digits);
+        Explanation {
+            area: format!("Digits {digits}, {}.", words::houses(&step.houses)),
+            area_houses: step.houses.clone(),
+            effect: words::removing(&step.removals),
+            reason: format!(
+                "Otherwise {digits} could swap in the other corners, giving two solutions."
+            ),
+            second_group: Vec::new(),
+        }
     }
 
     fn search(&self, p: &Position) -> Vec<Step> {

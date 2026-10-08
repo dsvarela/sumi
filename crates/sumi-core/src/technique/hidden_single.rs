@@ -2,8 +2,9 @@
 
 use crate::grid::House;
 use crate::position::Position;
-use crate::step::Step;
+use crate::step::{Explanation, Step};
 use crate::technique::{Level, Technique};
+use crate::words;
 
 pub struct HiddenSingle;
 
@@ -18,6 +19,22 @@ impl Technique for HiddenSingle {
 
     fn score(&self) -> u32 {
         14
+    }
+
+    fn definition(&self, _step: &Step) -> String {
+        "A digit with only one possible cell in a row, column or box.".into()
+    }
+
+    fn explain(&self, step: &Step) -> Explanation {
+        let (cell, digit) = step.placement.expect("a hidden single places a digit");
+        let house = words::house(step.houses[0]);
+        Explanation {
+            area: format!("On digit {digit}, {house}."),
+            area_houses: step.houses.clone(),
+            effect: format!("Place {digit} in {}.", words::cell(cell)),
+            reason: format!("No other cell in {house} can hold {digit}."),
+            second_group: Vec::new(),
+        }
     }
 
     fn search(&self, p: &Position) -> Vec<Step> {

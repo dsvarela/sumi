@@ -10,8 +10,9 @@
 use crate::digits::Digits;
 use crate::grid::{CELLS, Cell, House, sees};
 use crate::position::Position;
-use crate::step::Step;
-use crate::technique::{Level, Technique, strong_links};
+use crate::step::{Explanation, Step};
+use crate::technique::{Level, Technique, removed_cells, shared_house, strong_links};
+use crate::words;
 
 pub struct SimpleColouring;
 
@@ -26,6 +27,57 @@ impl Technique for SimpleColouring {
 
     fn score(&self) -> u32 {
         150
+    }
+
+    fn definition(&self, _step: &Step) -> String {
+        "Link a digit's 2-spot pairs; one half of the chain is true.".into()
+    }
+
+    fn look_for(&self, _step: &Step) -> String {
+        "Look for simple colouring.".into()
+    }
+
+    /// The key cells are group A. A step that removes from group A itself is
+    /// a wrap; one that removes from cells outside the chain is a trap.
+    fn explain(&self, step: &Step) -> Explanation {
+        let digit = step.digits.only().expect("colouring is about one digit");
+        let group_a = &step.key_cells;
+        let removed = removed_cells(step);
+        let wrap = removed.iter().all(|c| group_a.contains(c));
+        let (effect, reason) = if wrap {
+            let (a, b) = group_a
+                .iter()
+                .flat_map(|&a| group_a.iter().map(move |&b| (a, b)))
+                .find(|&(a, b)| sees(a, b))
+                .expect("a wrap has two cells of one group that see each other");
+            (
+                format!("Remove {digit} from every A cell."),
+                format!(
+                    "Two A cells share {}, so group A can't be the {digit}s.",
+                    words::house(shared_house(a, b))
+                ),
+            )
+        } else {
+            (
+                words::removing(&step.removals),
+                format!(
+                    "Either all A cells or all B cells are {digit}, and {}.",
+                    words::see_all(&removed, "both")
+                ),
+            )
+        };
+        Explanation {
+            area: format!("On digit {digit}: groups A and B."),
+            area_houses: step.houses.clone(),
+            effect,
+            reason,
+            second_group: step
+                .cells
+                .iter()
+                .copied()
+                .filter(|c| !group_a.contains(c))
+                .collect(),
+        }
     }
 
     fn search(&self, p: &Position) -> Vec<Step> {
@@ -59,14 +111,17 @@ impl Technique for SimpleColouring {
                     let cells = side(c);
                     let wraps = cells.iter().any(|&a| cells.iter().any(|&b| sees(a, b)));
                     if wraps {
-                        steps.extend(Step::removing(
-                            &SimpleColouring,
-                            p,
-                            only,
-                            houses.clone(),
-                            chain.clone(),
-                            cells.iter().map(|&x| (x, only)),
-                        ));
+                        steps.extend(
+                            Step::removing(
+                                &SimpleColouring,
+                                p,
+                                only,
+                                houses.clone(),
+                                chain.clone(),
+                                cells.iter().map(|&x| (x, only)),
+                            )
+                            .map(|step| step.keyed(cells.clone())),
+                        );
                     }
                 }
                 let (a, b) = (side(true), side(false));
@@ -75,14 +130,17 @@ impl Technique for SimpleColouring {
                         && a.iter().any(|&y| sees(x, y))
                         && b.iter().any(|&y| sees(x, y))
                 });
-                steps.extend(Step::removing(
-                    &SimpleColouring,
-                    p,
-                    only,
-                    houses,
-                    chain.clone(),
-                    trapped.map(|x| (x, only)).collect::<Vec<_>>(),
-                ));
+                steps.extend(
+                    Step::removing(
+                        &SimpleColouring,
+                        p,
+                        only,
+                        houses,
+                        chain.clone(),
+                        trapped.map(|x| (x, only)).collect::<Vec<_>>(),
+                    )
+                    .map(|step| step.keyed(a.clone())),
+                );
             }
         }
         steps

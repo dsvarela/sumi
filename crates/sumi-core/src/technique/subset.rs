@@ -10,8 +10,9 @@
 use crate::digits::Digits;
 use crate::grid::{Cell, House};
 use crate::position::Position;
-use crate::step::Step;
+use crate::step::{Explanation, Step};
 use crate::technique::{Level, Technique, choose};
+use crate::words;
 
 pub struct NakedSubset<const N: usize>;
 
@@ -36,6 +37,30 @@ impl<const N: usize> Technique for NakedSubset<N> {
             2 => 60,
             3 => 80,
             _ => 120,
+        }
+    }
+
+    fn definition(&self, _step: &Step) -> String {
+        match N {
+            2 => "Two cells in one row, column or box hold only 2 candidates between them.",
+            3 => "Three cells whose candidates, together, are only 3 digits.",
+            _ => "Four cells whose candidates, together, are only 4 digits.",
+        }
+        .into()
+    }
+
+    fn explain(&self, step: &Step) -> Explanation {
+        let house = words::house(step.houses[0]);
+        let digits = words::digits(step.digits);
+        Explanation {
+            area: format!("{}.", words::capital(&house)),
+            area_houses: step.houses.clone(),
+            effect: format!("Remove {digits} elsewhere in {house}."),
+            reason: format!(
+                "{} must hold these digits, so the rest of {house} can't.",
+                words::cells(&step.cells)
+            ),
+            second_group: Vec::new(),
         }
     }
 
@@ -89,6 +114,36 @@ impl<const N: usize> Technique for HiddenSubset<N> {
             2 => 70,
             3 => 100,
             _ => 150,
+        }
+    }
+
+    fn definition(&self, _step: &Step) -> String {
+        match N {
+            2 => "Two digits whose only spots are the same two cells.",
+            3 => "Three digits whose only spots are the same three cells.",
+            _ => "Four digits whose only spots are the same four cells.",
+        }
+        .into()
+    }
+
+    fn explain(&self, step: &Step) -> Explanation {
+        let house = words::house(step.houses[0]);
+        let digits = words::digits(step.digits);
+        let removed: Vec<Cell> = step.removals.iter().map(|&(c, _)| c).collect();
+        let cells = match N {
+            2 => "both cells",
+            3 => "all three cells",
+            _ => "all four cells",
+        };
+        Explanation {
+            area: format!("Digits {digits}, {house}."),
+            area_houses: step.houses.clone(),
+            effect: format!(
+                "Remove the other candidates from {}.",
+                words::cells(&removed)
+            ),
+            reason: format!("Digits {digits} need {cells} in {house}."),
+            second_group: Vec::new(),
         }
     }
 

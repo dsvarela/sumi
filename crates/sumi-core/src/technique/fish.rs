@@ -6,8 +6,9 @@
 use crate::digits::Digits;
 use crate::grid::{Cell, House, col, row};
 use crate::position::Position;
-use crate::step::Step;
+use crate::step::{Explanation, Step};
 use crate::technique::{Level, Technique, choose};
+use crate::words;
 
 pub struct Fish<const N: usize>;
 
@@ -26,6 +27,46 @@ impl<const N: usize> Technique for Fish<N> {
 
     fn score(&self) -> u32 {
         if N == 2 { 140 } else { 150 }
+    }
+
+    fn definition(&self, step: &Step) -> String {
+        let (base, cover) = match step.houses[0] {
+            House::Row(_) => ("rows", "columns"),
+            _ => ("columns", "rows"),
+        };
+        let count = if N == 2 { "Two" } else { "Three" };
+        format!(
+            "{count} {base} where a digit fits only in the same {} {cover}.",
+            count.to_lowercase()
+        )
+    }
+
+    fn explain(&self, step: &Step) -> Explanation {
+        let digit = step.digits.only().expect("a fish is about one digit");
+        let (bases, covers) = step.houses.split_at(N);
+        let cover_kind = match covers[0] {
+            House::Row(_) => "rows",
+            _ => "columns",
+        };
+        let bases_text = words::houses(bases);
+        Explanation {
+            area: format!("On digit {digit}, {bases_text}."),
+            area_houses: bases.to_vec(),
+            effect: words::removing(&step.removals),
+            // A Swordfish names three lines each way, so it says less to keep
+            // the effect and its reason within four lines of the panel.
+            reason: format!(
+                "{} put their {digit}s in {}, so {}.",
+                words::capital(&bases_text),
+                words::houses(covers),
+                if N == 2 {
+                    format!("the rest of those {cover_kind} can't")
+                } else {
+                    "no other cell there can".to_string()
+                }
+            ),
+            second_group: Vec::new(),
+        }
     }
 
     fn search(&self, p: &Position) -> Vec<Step> {

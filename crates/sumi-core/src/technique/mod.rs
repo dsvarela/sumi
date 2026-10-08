@@ -35,7 +35,7 @@ pub use y_wing::YWing;
 
 use crate::grid::{CELLS, Cell, House, box_of, col, row, sees};
 use crate::position::Position;
-use crate::step::Step;
+use crate::step::{Explanation, Step};
 
 pub trait Technique: Sync {
     /// The name players see, such as "Hidden single" or "Y-Wing".
@@ -68,6 +68,37 @@ pub trait Technique: Sync {
         }
         distinct
     }
+
+    /// What the technique looks for, in one sentence. It depends on the step
+    /// only where the technique has a row and a column form.
+    fn definition(&self, step: &Step) -> String;
+
+    /// The step's name as the hint says it, which `name` alone can't give
+    /// when the name depends on the step, such as a pointing triple.
+    fn title(&self, _step: &Step) -> String {
+        self.name().to_string()
+    }
+
+    /// "Look for a hidden single." for the hint's second rung.
+    fn look_for(&self, step: &Step) -> String {
+        let title = self.title(step);
+        let mut chars = title.chars();
+        let first = chars.next().unwrap_or(' ');
+        let second = chars.next().unwrap_or(' ');
+        // "Hidden single" reads as "a hidden single"; "X-Wing" keeps its
+        // capitals.
+        let name = if second.is_lowercase() {
+            format!("{}{}", first.to_lowercase(), &title[first.len_utf8()..])
+        } else {
+            title
+        };
+        let an = name.starts_with(['a', 'e', 'i', 'o', 'X']);
+        format!("Look for {} {name}.", if an { "an" } else { "a" })
+    }
+
+    /// The wording of a step this technique found, from its fields. Panics
+    /// on a step another technique found.
+    fn explain(&self, step: &Step) -> Explanation;
 
     /// The simplest step, so the same position always gives the same one.
     fn find(&self, p: &Position) -> Option<Step> {
@@ -116,6 +147,11 @@ pub static ORDER: &[&dyn Technique] = &[
     &UniqueRectangle,
     &SimpleColouring,
 ];
+
+/// The cells a step removes candidates from, in cell order.
+fn removed_cells(step: &Step) -> Vec<Cell> {
+    step.removals.iter().map(|&(cell, _)| cell).collect()
+}
 
 /// A digit's only two spots in a house, so one of them holds it. Houses
 /// are taken from `houses` in order.

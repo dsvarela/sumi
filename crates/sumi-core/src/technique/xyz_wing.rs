@@ -4,8 +4,9 @@
 
 use crate::grid::{Cell, sees};
 use crate::position::Position;
-use crate::step::Step;
-use crate::technique::{Level, Technique, bivalue_cells, seen_by_all, shared_house};
+use crate::step::{Explanation, Step};
+use crate::technique::{Level, Technique, bivalue_cells, removed_cells, seen_by_all, shared_house};
+use crate::words;
 
 pub struct XyzWing;
 
@@ -20,6 +21,32 @@ impl Technique for XyzWing {
 
     fn score(&self) -> u32 {
         180
+    }
+
+    fn definition(&self, _step: &Step) -> String {
+        "A Y-Wing whose middle cell also holds the shared digit.".into()
+    }
+
+    /// The key cells are the pivot, then its two wings.
+    fn explain(&self, step: &Step) -> Explanation {
+        let [pivot, a, b] = step.key_cells[..] else {
+            panic!("an XYZ-Wing names its pivot and wings")
+        };
+        let z = step.removals[0]
+            .1
+            .only()
+            .expect("an XYZ-Wing removes one digit");
+        let three = words::list(&[pivot, a, b].map(words::cell));
+        Explanation {
+            area: format!("Middle cell {}; digit {z}.", words::cell(pivot)),
+            area_houses: step.houses.clone(),
+            effect: words::removing(&step.removals),
+            reason: format!(
+                "One of {three} must be {z}, and {}.",
+                words::see_all(&removed_cells(step), "all three")
+            ),
+            second_group: Vec::new(),
+        }
     }
 
     fn search(&self, p: &Position) -> Vec<Step> {
@@ -43,14 +70,17 @@ impl Technique for XyzWing {
                         continue;
                     }
                     let targets: Vec<Cell> = seen_by_all(&[pivot, a, b]).collect();
-                    steps.extend(Step::removing(
-                        &XyzWing,
-                        p,
-                        xyz,
-                        vec![shared_house(pivot, a), shared_house(pivot, b)],
-                        vec![pivot, a, b],
-                        targets.into_iter().map(|c| (c, z)),
-                    ));
+                    steps.extend(
+                        Step::removing(
+                            &XyzWing,
+                            p,
+                            xyz,
+                            vec![shared_house(pivot, a), shared_house(pivot, b)],
+                            vec![pivot, a, b],
+                            targets.into_iter().map(|c| (c, z)),
+                        )
+                        .map(|step| step.keyed(vec![pivot, a, b])),
+                    );
                 }
             }
         }
