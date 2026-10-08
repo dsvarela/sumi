@@ -93,6 +93,7 @@ roles! {
 /// What a theme file holds. With `extends`, the colours it lists replace the
 /// base theme's and the rest carry over; without it, every role is needed.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct File {
     name: String,
     extends: Option<String>,
@@ -155,34 +156,57 @@ impl Theme {
     pub fn load_all(user_dir: Option<&Path>) -> (Vec<(String, Theme)>, Vec<String>) {
         let mut themes: Vec<(String, Theme)> = Vec::new();
         let mut warnings = Vec::new();
-        let mut add = |id: String, source: Result<String, String>| {
-            let theme = source.and_then(|src| Theme::parse(&src, &themes));
-            match theme {
-                Ok(theme) => match themes.iter_mut().find(|(known, _)| *known == id) {
-                    Some(slot) => slot.1 = theme,
-                    None => themes.push((id, theme)),
-                },
-                Err(err) => warnings.push(format!("theme {id}: {err}")),
-            }
-        };
         for (id, src) in BUILTIN {
-            add((*id).to_string(), Ok((*src).to_string()));
+            add(&mut themes, &mut warnings, id, Ok((*src).to_string()));
         }
-        let mut files: Vec<_> = user_dir
-            .and_then(|dir| std::fs::read_dir(dir).ok())
-            .into_iter()
-            .flatten()
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| path.extension().is_some_and(|ext| ext == "toml"))
-            .collect();
-        files.sort();
-        for path in files {
-            let id = path.file_stem().unwrap_or_default().to_string_lossy();
-            add(
-                id.to_string(),
-                std::fs::read_to_string(&path).map_err(|err| err.to_string()),
-            );
+        let mut pending: Vec<(String, Result<String, String>)> = Vec::new();
+        if let Some(dir) = user_dir {
+            match std::fs::read_dir(dir) {
+                Ok(entries) => {
+                    let mut files: Vec<_> = entries
+                        .filter_map(Result::ok)
+                        .map(|entry| entry.path())
+                        .filter(|path| path.extension().is_some_and(|ext| ext == "toml"))
+                        .collect();
+                    files.sort();
+                    for path in files {
+                        let id = path.file_stem().unwrap_or_default().to_string_lossy();
+                        let src = std::fs::read_to_string(&path).map_err(|err| err.to_string());
+                        pending.push((id.to_string(), src));
+                    }
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => warnings.push(format!("{}: {err}", dir.display())),
+            }
+        }
+        // A theme may extend one whose file sorts after it: each round loads
+        // the themes whose base is loaded, until a round loads none. What is
+        // left extends a theme that never loads, and says so.
+        loop {
+            let waiting = |src: &Result<String, String>, themes: &[(String, Theme)]| {
+                let base = src
+                    .as_ref()
+                    .ok()
+                    .and_then(|src| toml::from_str::<File>(src).ok())
+                    .and_then(|file| file.extends);
+                base.is_some_and(|base| !themes.iter().any(|(id, _)| *id == base))
+            };
+            let before = pending.len();
+            let mut still = Vec::new();
+            for (id, src) in pending {
+                if waiting(&src, &themes) {
+                    still.push((id, src));
+                } else {
+                    add(&mut themes, &mut warnings, &id, src);
+                }
+            }
+            pending = still;
+            if pending.len() == before {
+                break;
+            }
+        }
+        for (id, src) in pending {
+            add(&mut themes, &mut warnings, &id, src);
         }
         (themes, warnings)
     }
@@ -249,9 +273,26 @@ impl Theme {
     }
 }
 
+/// Reads a theme file as `id` into `themes`, replacing a theme of the same
+/// id, or says in `warnings` why it can't.
+fn add(
+    themes: &mut Vec<(String, Theme)>,
+    warnings: &mut Vec<String>,
+    id: &str,
+    source: Result<String, String>,
+) {
+    match source.and_then(|src| Theme::parse(&src, themes)) {
+        Ok(theme) => match themes.iter_mut().find(|(known, _)| known == id) {
+            Some(slot) => slot.1 = theme,
+            None => themes.push((id.to_string(), theme)),
+        },
+        Err(err) => warnings.push(format!("theme {id}: {err}")),
+    }
+}
+
 fn hex(value: &str) -> Option<Color> {
     let digits = value.strip_prefix('#')?;
-    if digits.len() != 6 || !digits.is_ascii() {
+    if digits.len() != 6 || !digits.chars().all(|c| c.is_ascii_hexdigit()) {
         return None;
     }
     let channel = |i: usize| u8::from_str_radix(&digits[i..i + 2], 16).ok();
@@ -420,6 +461,50 @@ mod tests {
         assert_eq!(nord.1.name, "My Nord");
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].starts_with("theme broken: "), "{warnings:?}");
+    }
+
+    /// A theme may extend one whose file sorts after its own; a misspelt
+    /// table is an error, not a theme that silently ignores it.
+    #[test]
+    fn user_themes_extend_in_any_order_and_unknown_tables_are_named() {
+        let dir = std::env::temp_dir().join(format!("sumi-order-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let write = |name: &str, src: &str| std::fs::write(dir.join(name), src).unwrap();
+        write("a-child.toml", "name = \"Child\"\nextends = \"b-base\"\n");
+        write(
+            "b-base.toml",
+            "name = \"Base\"\nextends = \"nord\"\n[colors]\naccent = \"#010203\"\n",
+        );
+        write(
+            "c-typo.toml",
+            "name = \"Typo\"\nextends = \"nord\"\n[colours]\naccent = \"#010203\"\n",
+        );
+        write("d-loop.toml", "name = \"Loop\"\nextends = \"e-loop\"\n");
+        write("e-loop.toml", "name = \"Loop\"\nextends = \"d-loop\"\n");
+        let (themes, warnings) = Theme::load_all(Some(&dir));
+        std::fs::remove_dir_all(&dir).unwrap();
+        let child = &themes.iter().find(|(id, _)| id == "a-child").unwrap().1;
+        assert_eq!(child.accent, Color::Rgb(1, 2, 3));
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.starts_with("theme c-typo: ") && w.contains("colours")),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.starts_with("theme d-loop: ")),
+            "{warnings:?}"
+        );
+        assert_eq!(warnings.len(), 3, "{warnings:?}");
+    }
+
+    #[test]
+    fn a_colour_is_six_hex_digits() {
+        assert_eq!(hex("#0a0B0c"), Some(Color::Rgb(10, 11, 12)));
+        for bad in ["#+1+2+3", "0a0b0c", "#0a0b0", "#0a0b0g", "#0a0b0c0"] {
+            assert_eq!(hex(bad), None, "{bad}");
+        }
     }
 
     #[test]
