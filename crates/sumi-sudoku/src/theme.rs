@@ -39,6 +39,9 @@ pub struct Theme {
     pub hint_removal: Color,
     /// The digit a hint places.
     pub hint_placement: Color,
+    /// No colour is set at all (NO_COLOR). What colour showed is then shown
+    /// by attributes: a hint's cells are drawn reversed.
+    pub monochrome: bool,
 }
 
 impl Theme {
@@ -66,6 +69,46 @@ impl Theme {
             hint_cell: Color::Rgb(0x12, 0x35, 0x3a),
             hint_removal: Color::Rgb(0xff, 0x6b, 0x6b),
             hint_placement: Color::Rgb(0x9e, 0xce, 0x6a),
+            monochrome: false,
+        }
+    }
+
+    /// The terminal's own colours and none of ours.
+    pub fn monochrome() -> Theme {
+        let c = Color::Reset;
+        Theme {
+            background: c,
+            text: c,
+            dimmed: c,
+            accent: c,
+            frame: c,
+            line: c,
+            box_line: c,
+            clue: c,
+            digit: c,
+            candidate: c,
+            box_mark: c,
+            cursor: c,
+            same_digit: c,
+            peer: c,
+            filter: c,
+            conflict: c,
+            wrong_digit: c,
+            hint_area: c,
+            hint_cell: c,
+            hint_removal: c,
+            hint_placement: c,
+            monochrome: true,
+        }
+    }
+
+    /// The theme to start with. `no_color` is whether NO_COLOR is set to
+    /// something, which no-color.org says turns colour off.
+    pub fn for_environment(no_color: bool) -> Theme {
+        if no_color {
+            Theme::monochrome()
+        } else {
+            Theme::tokyo_night_amoled()
         }
     }
 }

@@ -385,6 +385,9 @@ impl Board<'_> {
         if let Some(bg) = self.background(cell) {
             buf.set_style(rect, Style::new().bg(bg));
         }
+        if self.theme.monochrome && self.rung.as_ref().is_some_and(|r| r.cells.contains(&cell)) {
+            buf.set_style(rect, Style::new().add_modifier(Modifier::REVERSED));
+        }
         if cell == self.game.cursor() {
             // Corner marks show the cursor without relying on colour. Notes
             // never use a cell's first or last column, so they don't collide.
@@ -416,7 +419,15 @@ impl Board<'_> {
                 } else {
                     self.theme.digit
                 };
-                let mut style = Style::new().fg(colour).add_modifier(Modifier::BOLD);
+                // Each kind of digit differs by more than hue: clues are
+                // bold, a clash is reversed and a wrong digit underlined.
+                let mut style = Style::new().fg(colour);
+                if self.game.is_clue(cell) {
+                    style = style.add_modifier(Modifier::BOLD);
+                }
+                if conflict {
+                    style = style.add_modifier(Modifier::REVERSED);
+                }
                 if checked {
                     style = style.add_modifier(Modifier::UNDERLINED);
                 }
@@ -485,12 +496,14 @@ impl Board<'_> {
             let mut style = if marks.contains(digit) {
                 Style::new()
                     .fg(self.theme.box_mark)
-                    .add_modifier(Modifier::BOLD)
+                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
             } else {
                 Style::new().fg(self.theme.candidate)
             };
             if self.game.note_clashes(cell, digit) {
-                style = style.fg(self.theme.conflict);
+                style = style
+                    .fg(self.theme.conflict)
+                    .add_modifier(Modifier::REVERSED);
             }
             buf.set_string(
                 x + 1 + 2 * (spot % 3),
@@ -574,9 +587,13 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     fn render(game: &Game, view: &View) -> TestBackend {
+        render_in(game, view, &Theme::tokyo_night_amoled())
+    }
+
+    fn render_in(game: &Game, view: &View, theme: &Theme) -> TestBackend {
         let mut terminal = Terminal::new(TestBackend::new(NEEDED.0, NEEDED.1)).unwrap();
         terminal
-            .draw(|frame| draw(frame, game, view, &Theme::tokyo_night_amoled()))
+            .draw(|frame| draw(frame, game, view, theme))
             .unwrap();
         terminal.backend().clone()
     }
@@ -633,6 +650,112 @@ mod tests {
         let backend = render(&game, &View::default());
         assert_eq!(backend.buffer()[middle(2)].fg, theme.digit);
         assert_eq!(backend.buffer()[middle(0)].fg, theme.clue);
+    }
+
+    /// With NO_COLOR nothing on screen sets a colour, in the plainest game
+    /// and in one with every highlight, hint and mark on.
+    #[test]
+    fn the_monochrome_theme_sets_no_colour_anywhere() {
+        let mut game = game();
+        game.fill_candidates();
+        go(&mut game, 2);
+        game.press(5);
+        let view = View {
+            checked: game.wrong_digits(),
+            filter: Some(Filter::Digit(5)),
+            ..open_hint(pointing_hint(), 5)
+        };
+        let backend = render_in(&game, &view, &Theme::monochrome());
+        for cell in backend.buffer().content() {
+            assert_eq!((cell.fg, cell.bg), (Color::Reset, Color::Reset), "{cell:?}");
+        }
+    }
+
+    /// Without colour the cells of a hint's pattern are drawn reversed.
+    #[test]
+    fn the_monochrome_theme_reverses_a_hints_cells() {
+        let game = game();
+        let view = open_hint(pointing_hint(), 4);
+        let backend = render_in(&game, &view, &Theme::monochrome());
+        let reversed = |cell| {
+            backend.buffer()[middle(cell)]
+                .modifier
+                .contains(Modifier::REVERSED)
+        };
+        assert!(reversed(79));
+        assert!(!reversed(70));
+        let coloured = render(&game, &view);
+        let modifier = coloured.buffer()[middle(79)].modifier;
+        assert!(
+            !modifier.contains(Modifier::REVERSED),
+            "colour has its own cue"
+        );
+    }
+
+    #[test]
+    fn no_colour_is_chosen_by_the_environment_variable() {
+        assert!(Theme::for_environment(true).monochrome);
+        assert!(!Theme::for_environment(false).monochrome);
+    }
+
+    /// A candidate's spot on the screen, relative to its cell's middle.
+    fn note_at(cell: Cell, digit: u8) -> (u16, u16) {
+        let (x, y) = middle(cell);
+        let spot = u16::from(digit - 1);
+        (x - 2 + 2 * (spot % 3), y - 1 + spot / 3)
+    }
+
+    /// Colour must not be the only way to tell things apart: a clue is bold
+    /// and a digit the player typed is not.
+    #[test]
+    fn clues_are_bold_and_typed_digits_are_not() {
+        let mut game = game();
+        go(&mut game, 2);
+        game.press(4);
+        let backend = render(&game, &View::default());
+        let buffer = backend.buffer();
+        assert!(buffer[middle(0)].modifier.contains(Modifier::BOLD));
+        assert!(!buffer[middle(2)].modifier.contains(Modifier::BOLD));
+    }
+
+    /// A clash is shown by reversing the digit, whatever the colours are.
+    #[test]
+    fn a_clash_reverses_the_digit_and_the_note() {
+        let mut game = game();
+        go(&mut game, 2);
+        game.press(5); // clashes with the clue 5 at r1c1
+        game.next_mode();
+        go(&mut game, 3);
+        game.press(5); // a candidate 5 in a row that holds a 5
+        game.press(2);
+        let backend = render(&game, &View::default());
+        let buffer = backend.buffer();
+        let reversed = |pos| buffer[pos].modifier.contains(Modifier::REVERSED);
+        assert!(reversed(middle(2)));
+        assert!(reversed(middle(0)));
+        assert!(reversed(note_at(3, 5)));
+        assert!(!reversed(note_at(3, 2)));
+        assert!(!reversed(middle(1)));
+    }
+
+    /// A box mark and a candidate differ by more than hue.
+    #[test]
+    fn a_box_mark_is_underlined_and_a_candidate_is_not() {
+        let mut game = game();
+        game.next_mode();
+        go(&mut game, 3);
+        game.press(7);
+        game.next_mode();
+        game.press(8);
+        let backend = render(&game, &View::default());
+        let buffer = backend.buffer();
+        let underlined = |digit| {
+            buffer[note_at(3, digit)]
+                .modifier
+                .contains(Modifier::UNDERLINED)
+        };
+        assert!(underlined(8));
+        assert!(!underlined(7));
     }
 
     /// The board's top line carries the column numbers and its left line the

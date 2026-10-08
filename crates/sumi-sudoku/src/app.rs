@@ -34,7 +34,8 @@ pub fn run(level: Option<Level>) -> io::Result<()> {
 }
 
 fn play(terminal: &mut DefaultTerminal, level: Option<Level>) -> io::Result<()> {
-    let theme = Theme::tokyo_night_amoled();
+    let no_color = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
+    let theme = Theme::for_environment(no_color);
     let mut session = Session::new(rand::make_rng(), level);
     loop {
         let mut board_shown = true;
