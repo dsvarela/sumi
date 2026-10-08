@@ -5,6 +5,44 @@ its mechanism, what was fixed and where, what was closed by decision and why,
 and where deferred items went. The class register at the end names the
 defect shapes this codebase repeats; hunt them by name in later reviews.
 
+## 2026-10-08: milestone 5, second read (a7cab37..0168f9b)
+
+The milestone was built and first reviewed on Sonnet 5.5, so the same
+range was read again on Opus 5.5, one reader, no lanes, then checked with
+a mutation sweep of 21 changes to the lines the commits added. No defect
+reached a player; the findings are in the commits, the record and the
+tests.
+
+### Fixed
+
+| Class | Finding and mechanism | Fix |
+| --- | --- | --- |
+| Two things must agree | A hint stayed open unless the key was on a hand-kept list of actions that leave the board alone. An editing action added to the list would let Enter apply a step to a board it was not found on, and placing overwrites a digit | The game keeps a revision bumped by every change, undo and redo included; a hint closes as soon as the game's revision differs from its own (structural, 87b1284) |
+| No instrument | The panel's height assumed every rung wraps to two lines at the board's width; it held only through the core's four-lines-at-30-columns test | Hints followed through Hard and Expert bank puzzles are wrapped as ratatui draws them and must fit (d4237f7) |
+| A test that cannot fail | Mutants survived in the step count's containment direction, the number of cells rung 4 names, and "sees" for one cell | A test for each, watched failing under its mutant (2ebf930) |
+| Small | "Look for a claiming"; a removal phrase joined groups that could only be one; an assert repeating the filter above it | Fixed (c6bdbb7, 75fd487, 28776e7); a test pins the second rung's opening for all 20 techniques |
+
+### Corrections to the first review
+
+- **Three commits do more than one thing**, against the commits rules: b8ac738
+  (the hint ladder, and `c` and `r`, whose marks were not drawn until
+  5f6f615), e96cb5b (three wording and counting fixes), and 99a49a6 (five
+  fixes, its subject naming one: the hidden-board guard, check marks' life,
+  the notice, the status line's width, and `apply_hint` writing a cell as
+  fill does). Their bodies also describe the old code in the past tense.
+  The history is published, so this record stands in for a rewrite.
+- **"Each has a test that fails under its mutant"** was written before half
+  of those mutants were run. The sweep has now run them all: every one
+  fails a test.
+- **"CLAUDE.md's layout still says hint is to come"** stopped being true
+  with 6367065.
+- **Process slips during the milestone:** several tests were written after
+  the code they test and first ran green (the mutation sweep stands in for
+  watching them fail); `cargo fmt -p sumi-core` and `rustfmt` on `lib.rs`
+  reformatted the bank session's uncommitted `bank.rs` and `grade.rs`
+  (`cargo fmt --all --check` is clean now, so nothing is left to undo); and
+  scratch files were deleted with `rm` rather than `trash-put`.
+
 ## 2026-10-08: milestone 5 (81a57a3..5f6f615)
 
 Four read-only lanes: the wording of all 20 techniques against their steps, the
@@ -51,8 +89,7 @@ tests that could not fail.
   and not enforced by the types; see the deferral.
 - **b8ac738 bundles `c` and `r` with the ladder.** The history is not
   published; rewriting it would cost more than it tells.
-- **CLAUDE.md's layout** still says hint is to come; left for Daniel to
-  change.
+- **CLAUDE.md's layout** still said hint was to come; changed in 6367065.
 - **Equivalent mutants:** the clue filter in `wrong_digits` and the clamp in
   `set_hint_start`.
 
@@ -196,8 +233,8 @@ test, and the shared-screen helpers. None described the pre-rewrite API.
 
 | Class | Seen | Hunt for |
 | --- | --- | --- |
-| Two things must agree, nothing makes them agree | 11 (status line vs title, effect line vs removals, count vs containment, fill vs hint removal; before: key bar, board shown vs input, plan vs code, placement records vs notes, one step per house, stale candidates, comments vs measurements) | Text, sizes or rules stated in two files; a record of a change that later changes don't update |
+| Two things must agree, nothing makes them agree | 12 (a list of keys vs what changes the board, status line vs title, effect line vs removals, count vs containment, fill vs hint removal; before: key bar, board shown vs input, plan vs code, placement records vs notes, one step per house, stale candidates, comments vs measurements) | Text, sizes or rules stated in two files; a record of a change that later changes don't update |
 | Two meanings, one value | 4 (empty notes, complete digit, a grade for an invalid grid, Beyond's step count) | An empty set, zero or `None` standing for more than one state |
 | Input from where the player isn't looking | 5 (hidden board, paste, modifiers, view changing under a hidden board, marks across games) | Any path from an event to a game change that skips what is on screen |
-| A test that cannot fail | 17 | Tests whose fixture can't tell the order or the branch apart; a loop that stops checking early; mutate the line the name claims |
-| No instrument | 2 (contrast, outside grader) | A rule in the plan or CLAUDE.md that no test checks |
+| A test that cannot fail | 20 | Tests whose fixture can't tell the order or the branch apart; a loop that stops checking early; mutate the line the name claims |
+| No instrument | 3 (contrast, outside grader, panel fit) | A rule in the plan or CLAUDE.md that no test checks |
