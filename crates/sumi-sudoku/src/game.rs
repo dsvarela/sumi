@@ -1,5 +1,6 @@
-//! One game in progress: the puzzle, the player's digits and notes, the
-//! cursor, the input mode, and the undo history.
+//! One game in progress: the puzzle and its rating, the player's digits
+//! and notes, the cursor, the input mode, the undo history, the hints and
+//! reveals used, and the time played.
 
 use std::time::{Duration, Instant};
 use sumi_core::digits::Digits;

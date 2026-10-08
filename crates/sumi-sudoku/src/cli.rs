@@ -1,5 +1,5 @@
-//! The command line: `sumi` and `sumi new` play, `sumi rate` and `sumi gen` work
-//! on puzzles.
+//! The command line: `sumi` opens the menu, `sumi new` plays, `sumi rate` and
+//! `sumi gen` work on puzzles.
 
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::process::ExitCode;
@@ -18,7 +18,7 @@ use sumi_core::technique::Level;
     name = "sumi",
     version,
     about = "A calm terminal Sudoku game that teaches",
-    after_help = "With no command, sumi plays a puzzle of any level its techniques can finish."
+    after_help = "With no command, sumi opens its menu."
 )]
 struct Cli {
     #[command(subcommand)]

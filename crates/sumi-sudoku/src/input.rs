@@ -25,7 +25,8 @@ pub enum Action {
     Redo,
     /// Opens the hint, or moves it up a rung.
     Hint,
-    /// Closes the hint, or the marks a check left.
+    /// Esc: closes what is open (the hint, the key list, a menu), clears the
+    /// marks a check left, or opens the pause menu.
     Close,
     /// Marks the digits that differ from the solution.
     Check,

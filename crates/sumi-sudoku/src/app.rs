@@ -612,9 +612,9 @@ impl Session {
         self.settle();
     }
 
-    /// What follows any key or click: the clock stops at a win, a hint
-    /// closes when the game has changed, and check marks go with their
-    /// digits.
+    /// What follows any key or click: a house it completed pulses, or the
+    /// board waves at a win, and the clock stops; a hint closes when the
+    /// game has changed, and check marks go with their digits.
     fn settle(&mut self) {
         // A win's wave stands in for the pulses of the houses it completed.
         let complete = complete_houses(self.game.board());
@@ -697,8 +697,9 @@ impl Session {
             Action::Help => self.view.help = true,
             Action::Confirm if game.is_won() => return Flow::NewGame,
             Action::Close if game.is_won() => return Flow::Menu,
-            // Once solved, the board and the view stay as they are until the
-            // next game: Enter and quitting are the only keys that act.
+            // Once solved, the board and the view stay as they are: Enter
+            // (a new game), Esc (the menu), i and quitting are the keys that
+            // act.
             _ if game.is_won() => {}
             Action::Pause => {
                 self.view.paused = true;

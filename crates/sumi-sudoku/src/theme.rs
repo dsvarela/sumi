@@ -17,8 +17,8 @@ macro_rules! roles {
             pub name: String,
             $($(#[$doc])* pub $role: Color,)*
             /// No colour is set at all (NO_COLOR). What colour showed is then
-            /// shown by attributes: a hint's cells and the filter's are drawn
-            /// reversed.
+            /// shown by attributes: a hint's cells, the filter's and an
+            /// animation's strong light are drawn reversed.
             pub monochrome: bool,
         }
 
@@ -70,7 +70,8 @@ roles! {
     box_mark,
     /// Background of the selected cell.
     cursor,
-    /// Background of cells holding the digit under the cursor.
+    /// Background of cells holding the digit under the cursor, and an
+    /// animation's strong light.
     same_digit,
     /// Background of the cursor's row, column and box.
     peer,
@@ -79,8 +80,8 @@ roles! {
     conflict,
     /// Digits `c` found different from the solution.
     wrong_digit,
-    /// Background of the rows, columns and boxes a hint points at, and of the
-    /// second group of a colouring.
+    /// Background of the rows, columns and boxes a hint points at, of the
+    /// second group of a colouring, and of an animation's faint light.
     hint_area,
     /// Background of the cells that make a hint's pattern.
     hint_cell,

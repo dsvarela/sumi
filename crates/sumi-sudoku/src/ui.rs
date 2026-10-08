@@ -1,6 +1,6 @@
-//! Drawing. Every colour comes from the theme, and every screen is meant to
-//! draw its frame and key bar with `frame_block` and `key_bar`, so that
-//! screens added later look like this one.
+//! Drawing, and where a click lands. Every colour comes from the theme, and
+//! every frame, panel and key bar is drawn with `frame_block`, `panel_block`
+//! and `key_bar`, so that screens added later look like these.
 
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
@@ -35,7 +35,7 @@ const BOARD_HEIGHT: u16 = 9 * (CELL_HEIGHT + 1) + 1;
 const PANEL_HEIGHT: u16 = 5;
 
 /// The dense layout's hint area has no border: the rung's number and four
-/// lines of text, which every rung fits in at 30 columns.
+/// lines of text, which every rung fits in at the layout's width.
 const DENSE_PANEL_HEIGHT: u16 = 5;
 
 /// The pad under the board: each digit, and under it how many are left to
@@ -154,7 +154,7 @@ pub enum Filter {
 
 const FRAME_WIDTH: u16 = BOARD_WIDTH + 2;
 
-/// The full layout's board inside its frame and the panel under it.
+/// The full layout's board inside its frame, the pad and the panel under it.
 #[cfg(test)]
 const NEEDED: (u16, u16) = Density::Full.needed();
 
@@ -445,7 +445,6 @@ fn paused(theme: &Theme) -> Paragraph<'static> {
     .centered()
 }
 
-/// The hint's words under its rung's number, or how to ask for one.
 /// The panel's words: the hint, how to ask for one, or once the puzzle is
 /// solved, what it took.
 fn hint_text(game: &Game, view: &View, theme: &Theme) -> Paragraph<'static> {
@@ -687,8 +686,9 @@ fn keys(game: &Game, view: &View) -> Vec<(&'static str, &'static str)> {
         .collect()
 }
 
-/// The rounded frame every screen sits in. A game titles it with the
-/// program's name; a menu has the logo inside.
+/// The rounded frame the full layout, the menus and the settings sit in. A
+/// game titles it with the program's name; a menu has the logo inside. The
+/// dense layout has none: the board's outline is its frame.
 pub fn frame_block(theme: &Theme) -> Block<'static> {
     Block::bordered()
         .border_type(BorderType::Rounded)
@@ -939,8 +939,8 @@ impl Board<'_> {
         if let Some(bg) = self.background(cell) {
             buf.set_style(rect, Style::new().bg(bg));
         }
-        // Without colour, the two highlights whose cells nothing else names
-        // are drawn reversed: a hint's pattern and the filter's cells.
+        // Without colour, what nothing else names is drawn reversed: a
+        // hint's pattern, the filter's cells and an animation's strong light.
         let hint_cell = self.rung.as_ref().is_some_and(|r| r.cells.contains(&cell));
         let pulse = self.light(cell) == Some(Light::Strong);
         if self.theme.monochrome && (hint_cell || pulse || self.filtered(cell)) {
@@ -1118,9 +1118,10 @@ impl Board<'_> {
     }
 
     /// A hint's cells win over everything, the cursor's corner marks being
-    /// enough to find the cursor. The cursor wins over the filter and the
-    /// same-digit highlight, and those win over a hint's area, which wins
-    /// over the shading of the cursor's row, column and box. The
+    /// enough to find the cursor. The cursor wins over an animation's light,
+    /// which wins over the filter and the same-digit highlight; those win
+    /// over a hint's area, which wins over the shading of the cursor's row,
+    /// column and box. The
     /// filter lights only empty cells and the same-digit highlight only
     /// filled ones, so those two never compete.
     fn background(&self, cell: Cell) -> Option<Color> {
@@ -1248,8 +1249,6 @@ fn menu_keys(menu: &Menu) -> Vec<(&'static str, &'static str)> {
     keys
 }
 
-/// A menu in its frame, with the biggest logo that fits above the items
-/// and the key bar under it.
 /// Where a menu's parts go: the box, the logo that fits, the column the
 /// logo and items are drawn in, and the key bar's rows.
 struct MenuAreas {
@@ -1369,8 +1368,6 @@ pub struct SettingsPage<'a> {
     pub note: Option<&'a str>,
 }
 
-/// The settings page's rows: a heading for each group, its settings, and
-/// a line where a group has none.
 /// A row of the settings page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SettingsRow {
@@ -1658,7 +1655,6 @@ mod tests {
         }
     }
 
-    /// Without colour the cells of a hint's pattern are drawn reversed.
     /// Without colour the filter's cells are drawn reversed: with notes
     /// hidden nothing else says which cells it lights.
     #[test]
@@ -1683,6 +1679,7 @@ mod tests {
         assert!(!reversed(off));
     }
 
+    /// Without colour the cells of a hint's pattern are drawn reversed.
     #[test]
     fn the_monochrome_theme_reverses_a_hints_cells() {
         let game = game();

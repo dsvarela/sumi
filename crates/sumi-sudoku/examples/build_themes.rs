@@ -29,7 +29,8 @@ use colour::{
 const LIFT: f64 = 8.0;
 
 /// Each highlight: the role it moves toward, and its target contrast
-/// against the background. Different hues keep the highlights apart.
+/// against the background. Highlights that share a source colour are kept
+/// apart by their targets.
 const HIGHLIGHTS: [(&str, &str, f64); 6] = [
     ("cursor", "accent", 1.7),
     ("hint_cell", "hint_placement", 1.7),

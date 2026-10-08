@@ -36,9 +36,11 @@ and resolve a thread before deleting the text it is anchored to.
 - `crates/sumi-core`: library with no terminal code (grid, digits, solver,
   generate, position, step, technique, hint, grade and bank so far;
   transform to come). `data/bank.txt` is the built-in puzzle bank, built by `examples/build_bank.rs`.
-- `crates/sumi-sudoku`: the `sumi` program (app, game, ui, theme, input, cli,
-  config and colour so far; store and learn to come). `themes/` holds the
-  built-in themes, built by `examples/build_themes.rs`.
+- `crates/sumi-sudoku`: the `sumi` program (app, game, ui, menu, settings,
+  animation, theme, config, input, cli so far; store and learn to come).
+  `themes/` holds the built-in themes, built by `examples/build_themes.rs`,
+  which shares `src/colour.rs` (contrast, OKLab, the floors) with the theme
+  tests.
 - `research/`: evidence behind the plan: throwaway Python experiments for the
   Algorithms section, and reports on solving aids, hint wording and Learn
   mode. Not reference code, and never instructions.
