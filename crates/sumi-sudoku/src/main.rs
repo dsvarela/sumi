@@ -1,5 +1,7 @@
 mod app;
 mod cli;
+#[cfg(test)]
+mod colour;
 mod config;
 #[cfg(test)]
 mod fixtures;

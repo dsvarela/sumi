@@ -3,7 +3,7 @@ name = "Catppuccin Mocha"
 [colors]
 background = "#1e1e2e"
 text = "#cdd6f4"
-dimmed = "#aeb6d0"
+dimmed = "#afb6d0"
 accent = "#8cb7fd"
 frame = "#71758c"
 line = "#676a80"

@@ -3,7 +3,7 @@ name = "Tokyo Night"
 [colors]
 background = "#1a1b26"
 text = "#c0caf5"
-dimmed = "#a9b1d6"
+dimmed = "#a7b1d4"
 accent = "#8db1fd"
 frame = "#6d738e"
 line = "#626780"
