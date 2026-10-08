@@ -17,7 +17,8 @@ macro_rules! roles {
             pub name: String,
             $($(#[$doc])* pub $role: Color,)*
             /// No colour is set at all (NO_COLOR). What colour showed is then
-            /// shown by attributes: a hint's cells are drawn reversed.
+            /// shown by attributes: a hint's cells and the filter's are drawn
+            /// reversed.
             pub monochrome: bool,
         }
 

@@ -511,7 +511,10 @@ impl Board<'_> {
         if let Some(bg) = self.background(cell) {
             buf.set_style(rect, Style::new().bg(bg));
         }
-        if self.theme.monochrome && self.rung.as_ref().is_some_and(|r| r.cells.contains(&cell)) {
+        // Without colour, the two highlights whose cells nothing else names
+        // are drawn reversed: a hint's pattern and the filter's cells.
+        let hint_cell = self.rung.as_ref().is_some_and(|r| r.cells.contains(&cell));
+        if self.theme.monochrome && (hint_cell || self.filtered(cell)) {
             buf.set_style(rect, Style::new().add_modifier(Modifier::REVERSED));
         }
         if cell == self.game.cursor() && self.density == Density::Full {
@@ -568,6 +571,16 @@ impl Board<'_> {
             None => {}
         }
         self.render_hint_marks(cell, rect, buf);
+    }
+
+    /// Whether the candidate filter lights `cell`.
+    fn filtered(&self, cell: Cell) -> bool {
+        let candidates = self.game.working_candidates(cell);
+        match self.view.filter {
+            Some(Filter::Digit(d)) => candidates.contains(d),
+            Some(Filter::TwoCandidates) => candidates.len() == 2,
+            None => false,
+        }
     }
 
     /// Where a cell's contents go, inside the lines around it.
@@ -694,11 +707,7 @@ impl Board<'_> {
     fn background(&self, cell: Cell) -> Option<Color> {
         let game = self.game;
         let cursor = game.cursor();
-        let filtered = match self.view.filter {
-            Some(Filter::Digit(d)) => game.working_candidates(cell).contains(d),
-            Some(Filter::TwoCandidates) => game.working_candidates(cell).len() == 2,
-            None => false,
-        };
+        let filtered = self.filtered(cell);
         let digit = game.board().get(cell);
         let rung = self.rung.as_ref();
         if rung.is_some_and(|r| r.cells.contains(&cell)) {
@@ -843,6 +852,30 @@ mod tests {
     }
 
     /// Without colour the cells of a hint's pattern are drawn reversed.
+    /// Without colour the filter's cells are drawn reversed: with notes
+    /// hidden nothing else says which cells it lights.
+    #[test]
+    fn the_monochrome_theme_reverses_the_filters_cells() {
+        let game = game();
+        let view = View {
+            filter: Some(Filter::Digit(5)),
+            notes_hidden: true,
+            ..View::default()
+        };
+        let lit = |cell| game.working_candidates(cell).contains(5);
+        let empty: Vec<Cell> = (0..81).filter(|&c| game.board().get(c).is_none()).collect();
+        let on = *empty.iter().find(|&&c| lit(c)).unwrap();
+        let off = *empty.iter().find(|&&c| !lit(c)).unwrap();
+        let backend = render_in(&game, &view, &Theme::monochrome());
+        let reversed = |cell| {
+            backend.buffer()[middle(cell)]
+                .modifier
+                .contains(Modifier::REVERSED)
+        };
+        assert!(reversed(on), "r{}c{}", row(on) + 1, col(on) + 1);
+        assert!(!reversed(off));
+    }
+
     #[test]
     fn the_monochrome_theme_reverses_a_hints_cells() {
         let game = game();
