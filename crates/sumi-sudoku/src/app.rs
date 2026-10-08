@@ -8,22 +8,23 @@ use std::time::{Duration, Instant};
 use rand::rngs::Xoshiro256PlusPlus;
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{
-    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyEventKind,
-    KeyModifiers,
+    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use ratatui::crossterm::execute;
+use ratatui::layout::Rect;
 use sumi_core::bank;
 use sumi_core::generate::{LevelGenerator, generate_solvable};
 use sumi_core::hint::Hint;
 use sumi_core::technique::Level;
 
 use crate::config::{Config, MarksToCandidates};
-use crate::game::{CandidatesFromMarks, Game};
+use crate::game::{CandidatesFromMarks, Game, Mode};
 use crate::input::{Action, FilterKey, action, filter_key};
 use crate::menu::{Choice, Item, Kind, Menu};
 use crate::settings::{Choice as SettingsChoice, Page, Setting};
 use crate::theme::Theme;
-use crate::ui::{self, Filter, OpenHint, View};
+use crate::ui::{self, Filter, OpenHint, Target, View};
 
 /// Plays puzzles of `level`, or opens the main menu without one. Fails
 /// without changing the terminal when there is none to draw on.
@@ -37,7 +38,7 @@ pub fn run(level: Option<Level>) -> io::Result<()> {
     // ignores, instead of as keys that could place digits or quit.
     let result =
         execute!(io::stdout(), EnableBracketedPaste).and_then(|()| play(&mut terminal, &mut app));
-    let _ = execute!(io::stdout(), DisableBracketedPaste);
+    let _ = execute!(io::stdout(), DisableBracketedPaste, DisableMouseCapture);
     ratatui::restore();
     // The screen hid them while the game ran.
     for line in &app.warnings {
@@ -71,12 +72,25 @@ fn start() -> (Config, Setup, Vec<String>) {
 }
 
 fn play(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
+    let mut capturing = false;
     loop {
+        // Mouse reporting follows the setting. With it on, the scroll wheel
+        // arrives as mouse events, which do nothing, rather than as the
+        // arrow keys terminals send for it in a full-screen program.
+        if app.config.mouse != capturing {
+            capturing = app.config.mouse;
+            if capturing {
+                execute!(io::stdout(), EnableMouseCapture)?;
+            } else {
+                execute!(io::stdout(), DisableMouseCapture)?;
+            }
+        }
         if let Some(session) = &mut app.session {
             session.view.time = session.time();
         }
         let mut shown = true;
         terminal.draw(|frame| {
+            app.area = frame.area();
             shown = app.fits(frame.area());
             let theme = &app.theme;
             match (&app.screen, &app.session) {
@@ -153,6 +167,9 @@ struct App {
     theme: Theme,
     /// Where the time comes from; tests set their own.
     clock: fn() -> Instant,
+    /// The window's size when it was last drawn, which clicks are read
+    /// against.
+    area: Rect,
     /// Lines for stderr once the screen is back, and the last setting that
     /// couldn't be saved.
     warnings: Vec<String>,
@@ -183,6 +200,7 @@ impl App {
             setup,
             theme,
             clock,
+            area: Rect::default(),
             warnings: Vec::new(),
             save_error: None,
         };
@@ -193,7 +211,7 @@ impl App {
     }
 
     /// Whether the screen showing can be drawn in a window of this size.
-    fn fits(&self, area: ratatui::layout::Rect) -> bool {
+    fn fits(&self, area: Rect) -> bool {
         match self.screen {
             Screen::Game => ui::fits(area),
             Screen::Menu(_) => ui::menu_fits(area),
@@ -255,30 +273,17 @@ impl App {
         self.screen = Screen::Game;
     }
 
+    /// `shown` is false while the window is too small for the screen;
+    /// then only quitting acts.
     fn handle(&mut self, event: Event, shown: bool) -> Flow {
-        if let Screen::Settings(page) = &mut self.screen {
-            let Some(key) = press(event) else {
-                return Flow::Continue;
+        if let Event::Mouse(mouse) = event {
+            return if shown {
+                self.click(mouse)
+            } else {
+                Flow::Continue
             };
-            let action = action(key);
-            if is_ctrl_c(key) || action == Some(Action::Quit) {
-                return Flow::Quit;
-            }
-            let (Some(action), true) = (action, shown) else {
-                return Flow::Continue;
-            };
-            let from_pause = page.from_pause;
-            match page.handle(action) {
-                None => {}
-                Some(SettingsChoice::Change(setting, forward)) => self.change(setting, forward),
-                Some(SettingsChoice::Back) => {
-                    let kind = if from_pause { Kind::Pause } else { Kind::Main };
-                    self.screen = Screen::Menu(Menu::new(kind));
-                }
-            }
-            return Flow::Continue;
         }
-        let Screen::Menu(menu) = &mut self.screen else {
+        if self.screen == Screen::Game {
             let session = self.session.as_mut().expect("the game screen shows a game");
             return match session.handle(event, shown) {
                 Flow::NewGame => {
@@ -292,7 +297,7 @@ impl App {
                 }
                 flow => flow,
             };
-        };
+        }
         let Some(key) = press(event) else {
             return Flow::Continue;
         };
@@ -303,34 +308,91 @@ impl App {
         let (Some(action), true) = (action, shown) else {
             return Flow::Continue;
         };
-        let kind = menu.kind;
-        match menu.handle(action, self.session.is_some()) {
-            None => {}
-            Some(Choice::Back) => match kind {
-                Kind::Levels { from_pause: true } => {
-                    self.screen = Screen::Menu(Menu::new(Kind::Pause))
+        self.menu_action(action)
+    }
+
+    /// A key on a menu or the settings page.
+    fn menu_action(&mut self, action: Action) -> Flow {
+        match &mut self.screen {
+            Screen::Game => {}
+            Screen::Settings(page) => {
+                let from_pause = page.from_pause;
+                match page.handle(action) {
+                    None => {}
+                    Some(SettingsChoice::Change(setting, forward)) => self.change(setting, forward),
+                    Some(SettingsChoice::Back) => {
+                        let kind = if from_pause { Kind::Pause } else { Kind::Main };
+                        self.screen = Screen::Menu(Menu::new(kind));
+                    }
                 }
-                Kind::Levels { from_pause: false } => {
-                    self.screen = Screen::Menu(Menu::new(Kind::Main))
+            }
+            Screen::Menu(menu) => {
+                let kind = menu.kind;
+                match menu.handle(action, self.session.is_some()) {
+                    None => {}
+                    Some(Choice::Back) => match kind {
+                        Kind::Levels { from_pause: true } => {
+                            self.screen = Screen::Menu(Menu::new(Kind::Pause))
+                        }
+                        Kind::Levels { from_pause: false } => {
+                            self.screen = Screen::Menu(Menu::new(Kind::Main))
+                        }
+                        Kind::Pause => self.resume(),
+                        Kind::Main => {}
+                    },
+                    Some(Choice::Chosen(item)) => match item {
+                        Item::Continue | Item::Resume => self.resume(),
+                        Item::NewGame => {
+                            let from_pause = kind == Kind::Pause;
+                            self.screen = Screen::Menu(Menu::new(Kind::Levels { from_pause }));
+                        }
+                        Item::Level(level) => self.start(Some(level)),
+                        Item::MainMenu => self.screen = Screen::Menu(Menu::new(Kind::Main)),
+                        Item::Settings => {
+                            self.screen = Screen::Settings(Page::new(kind == Kind::Pause));
+                        }
+                        Item::Quit => return Flow::Quit,
+                    },
                 }
-                Kind::Pause => self.resume(),
-                Kind::Main => {}
-            },
-            Some(Choice::Chosen(item)) => match item {
-                Item::Continue | Item::Resume => self.resume(),
-                Item::NewGame => {
-                    let from_pause = kind == Kind::Pause;
-                    self.screen = Screen::Menu(Menu::new(Kind::Levels { from_pause }));
-                }
-                Item::Level(level) => self.start(Some(level)),
-                Item::MainMenu => self.screen = Screen::Menu(Menu::new(Kind::Main)),
-                Item::Settings => {
-                    self.screen = Screen::Settings(Page::new(kind == Kind::Pause));
-                }
-                Item::Quit => return Flow::Quit,
-            },
+            }
         }
         Flow::Continue
+    }
+
+    /// A left click or tap acts on what is drawn under it: on a menu or the
+    /// settings page it chooses, as Enter does. Scrolling and other buttons
+    /// do nothing, so a swipe on a phone never moves the cursor.
+    fn click(&mut self, mouse: MouseEvent) -> Flow {
+        if mouse.kind != MouseEventKind::Down(MouseButton::Left) {
+            return Flow::Continue;
+        }
+        let (x, y) = (mouse.column, mouse.row);
+        match &mut self.screen {
+            Screen::Game => {
+                let session = self.session.as_mut().expect("the game screen shows a game");
+                if let Some(target) = ui::hit(self.area, &session.view, x, y) {
+                    session.click(target);
+                }
+                Flow::Continue
+            }
+            Screen::Menu(menu) => {
+                let items = menu.items(self.session.is_some());
+                match ui::menu_hit(self.area, menu, &items, x, y) {
+                    Some(i) => {
+                        menu.selected = i;
+                        self.menu_action(Action::Confirm)
+                    }
+                    None => Flow::Continue,
+                }
+            }
+            Screen::Settings(page) => match ui::settings_hit(self.area, x, y) {
+                Some(i) => {
+                    page.selected = i;
+                    self.menu_action(Action::Confirm)
+                }
+                None => Flow::Continue,
+            },
+        }
     }
 }
 
@@ -408,6 +470,36 @@ impl Session {
             };
         }
         let flow = self.dispatch(key);
+        self.settle();
+        flow
+    }
+
+    /// A click on `target`. It acts as the keys would: a cell moves the
+    /// cursor there, a note's spot toggles that note in the note modes, and
+    /// a pad digit is pressed, or picks the filter after `f`.
+    fn click(&mut self, target: Target) {
+        self.view.notice = None;
+        let filtering = std::mem::take(&mut self.view.awaiting_filter);
+        match target {
+            Target::CloseHint => self.view.hint = None,
+            _ if self.game.is_won() => {}
+            Target::Pad(digit) if filtering => self.view.filter = Some(Filter::Digit(digit)),
+            Target::Pad(digit) => self.game.press(digit),
+            Target::Cell(cell) => self.game.move_to(cell),
+            Target::Note(cell, digit) => {
+                self.game.move_to(cell);
+                if self.game.mode() != Mode::Digit {
+                    self.game.press(digit);
+                }
+            }
+        }
+        self.settle();
+    }
+
+    /// What follows any key or click: the clock stops at a win, a hint
+    /// closes when the game has changed, and check marks go with their
+    /// digits.
+    fn settle(&mut self) {
         if self.game.is_won() {
             self.game.stop_clock((self.clock)());
         }
@@ -428,7 +520,6 @@ impl Session {
         self.view
             .checked
             .retain(|&(cell, digit)| board.get(cell) == Some(digit));
-        flow
     }
 
     fn dispatch(&mut self, key: KeyEvent) -> Flow {
@@ -1201,6 +1292,8 @@ mod tests {
         press_keys(&mut app, &[KeyCode::Enter]); // the timer
         assert!(app.config.timer);
         assert!(game_of(&mut app).timer);
+        press_keys(&mut app, &[KeyCode::Char('j'), KeyCode::Char('l')]); // the mouse
+        assert!(!app.config.mouse);
         press_keys(&mut app, &[KeyCode::Char('j'), KeyCode::Char('l')]); // hints
         assert_eq!(game_of(&mut app).game.hint_start(), 2);
         press_keys(&mut app, &[KeyCode::Char('j'), KeyCode::Char('l')]); // t
@@ -1209,7 +1302,12 @@ mod tests {
         assert!(!game_of(&mut app).view.highlights.same_digit);
         press_keys(
             &mut app,
-            &[KeyCode::Char('k'), KeyCode::Char('k'), KeyCode::Char('k')],
+            &[
+                KeyCode::Char('k'),
+                KeyCode::Char('k'),
+                KeyCode::Char('k'),
+                KeyCode::Char('k'),
+            ],
         );
         press_keys(&mut app, &[KeyCode::Char('k'), KeyCode::Char('h')]); // the key bar
         assert!(game_of(&mut app).view.key_bar_hidden);
@@ -1248,6 +1346,157 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
         assert!(Config::parse(&saved).unwrap().timer);
         assert_eq!(app.save_error, None);
+    }
+
+    fn click(column: u16, row: u16) -> Event {
+        Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        })
+    }
+
+    /// An app playing the fixture in a window with room for the full
+    /// layout, and that layout's areas.
+    fn clickable() -> (App, ui::Areas) {
+        let mut app = app_with(fixtures::game());
+        app.area = Rect::new(0, 0, 80, 50);
+        let areas = ui::Areas::of(app.area).unwrap();
+        (app, areas)
+    }
+
+    fn middle_of(rect: Rect) -> (u16, u16) {
+        (rect.x + rect.width / 2, rect.y + rect.height / 2)
+    }
+
+    #[test]
+    fn a_click_on_a_cell_moves_the_cursor_there() {
+        let (mut app, areas) = clickable();
+        let (x, y) = middle_of(areas.cell(40));
+        app.handle(click(x, y), true);
+        assert_eq!(game_of(&mut app).game.cursor(), 40);
+    }
+
+    /// A pad digit is pressed at the cursor: placed in digit mode, toggled
+    /// as a note in the others.
+    #[test]
+    fn a_click_on_the_pad_presses_its_digit() {
+        let (mut app, areas) = clickable();
+        type_keys(game_of(&mut app), "ll"); // r1c3, empty
+        let (x, y) = middle_of(areas.pad_button(4));
+        app.handle(click(x, y), true);
+        assert_eq!(game_of(&mut app).game.board().get(2), Some(4));
+        type_keys(game_of(&mut app), "0nl"); // r1c4, candidate mode
+        app.handle(click(x, y), true);
+        assert!(game_of(&mut app).game.candidates(3).contains(4));
+    }
+
+    /// After f, a pad digit picks the filter; a click anywhere else cancels
+    /// the prompt as another key would.
+    #[test]
+    fn after_f_a_pad_digit_picks_the_filter() {
+        let (mut app, areas) = clickable();
+        type_keys(game_of(&mut app), "f");
+        let (x, y) = middle_of(areas.pad_button(6));
+        app.handle(click(x, y), true);
+        let s = game_of(&mut app);
+        assert_eq!(s.view.filter, Some(Filter::Digit(6)));
+        assert!(!s.view.awaiting_filter);
+        assert_eq!(s.game.board().get(0), Some(5), "nothing placed");
+        type_keys(s, "f");
+        let (x, y) = middle_of(areas.cell(40));
+        app.handle(click(x, y), true);
+        assert!(!game_of(&mut app).view.awaiting_filter);
+        assert_eq!(game_of(&mut app).view.filter, Some(Filter::Digit(6)));
+    }
+
+    /// In a note mode a click on a note's spot toggles that note; in digit
+    /// mode it only moves the cursor.
+    #[test]
+    fn a_click_on_a_notes_spot_toggles_it_in_a_note_mode() {
+        let (mut app, areas) = clickable();
+        let cell = areas.cell(2);
+        // The 7's spot: bottom row, left column of the 3×3 grid.
+        let (x, y) = (cell.x + 1, cell.y + 2);
+        app.handle(click(x, y), true);
+        assert_eq!(game_of(&mut app).game.cursor(), 2);
+        assert!(game_of(&mut app).game.candidates(2).is_empty());
+        type_keys(game_of(&mut app), "n");
+        app.handle(click(x, y), true);
+        assert!(game_of(&mut app).game.candidates(2).contains(7));
+    }
+
+    /// A click that changes the board closes a hint worked out before it,
+    /// as a key would.
+    #[test]
+    fn a_click_that_changes_the_board_closes_the_hint() {
+        let (mut app, areas) = clickable();
+        type_keys(game_of(&mut app), "ll??");
+        let (x, y) = middle_of(areas.pad_button(4));
+        app.handle(click(x, y), true);
+        assert_eq!(rung(game_of(&mut app)), None);
+    }
+
+    #[test]
+    fn a_click_on_the_close_button_closes_the_hint() {
+        let (mut app, areas) = clickable();
+        type_keys(game_of(&mut app), "??");
+        let (x, y) = middle_of(areas.close_hint());
+        app.handle(click(x, y), true);
+        assert_eq!(rung(game_of(&mut app)), None);
+    }
+
+    /// Scrolling and other buttons do nothing, so a swipe never moves the
+    /// cursor; neither does a click while the window is too small.
+    #[test]
+    fn only_a_left_click_on_a_drawn_screen_acts() {
+        let (mut app, areas) = clickable();
+        let (x, y) = middle_of(areas.cell(40));
+        for kind in [
+            MouseEventKind::ScrollDown,
+            MouseEventKind::ScrollUp,
+            MouseEventKind::Down(MouseButton::Right),
+            MouseEventKind::Up(MouseButton::Left),
+            MouseEventKind::Drag(MouseButton::Left),
+        ] {
+            let event = Event::Mouse(MouseEvent {
+                kind,
+                column: x,
+                row: y,
+                modifiers: KeyModifiers::NONE,
+            });
+            app.handle(event, true);
+        }
+        app.handle(click(x, y), false);
+        assert_eq!(game_of(&mut app).game.cursor(), 0);
+    }
+
+    /// The first spot in the window a click chooses the menu item at `index`.
+    fn spot_of_item(app: &App, index: usize) -> (u16, u16) {
+        let Screen::Menu(menu) = &app.screen else {
+            panic!("no menu")
+        };
+        let items = menu.items(app.session.is_some());
+        (0..app.area.height)
+            .flat_map(|y| (0..app.area.width).map(move |x| (x, y)))
+            .find(|&(x, y)| ui::menu_hit(app.area, menu, &items, x, y) == Some(index))
+            .unwrap()
+    }
+
+    #[test]
+    fn a_click_on_a_menu_item_chooses_it() {
+        let (mut app, _) = clickable();
+        press_keys(&mut app, &[KeyCode::Esc]);
+        let (x, y) = spot_of_item(&app, 2); // Settings
+        app.handle(click(x, y), true);
+        assert_eq!(app.screen, Screen::Settings(Page::new(true)));
+        let (x, y) = (0..app.area.height)
+            .flat_map(|y| (0..app.area.width).map(move |x| (x, y)))
+            .find(|&(x, y)| ui::settings_hit(app.area, x, y) == Some(0))
+            .unwrap();
+        app.handle(click(x, y), true);
+        assert!(app.config.timer, "a click on a setting changes it");
     }
 
     #[test]

@@ -18,7 +18,7 @@ use crate::config::Highlights;
 use crate::game::{CandidatesFromMarks, Game, Mode};
 use crate::input::{Action, key_label, left_right_label, up_down_label};
 use crate::menu::{Item, Menu};
-use crate::settings::{GROUPS, Page};
+use crate::settings::{GROUPS, Page, Setting};
 use crate::theme::Theme;
 
 /// A cell is 3 rows tall in both layouts, with a one-character line between
@@ -36,6 +36,10 @@ const PANEL_HEIGHT: u16 = 5;
 /// The dense layout's hint area has no border: the rung's number and four
 /// lines of text, which every rung fits in at 30 columns.
 const DENSE_PANEL_HEIGHT: u16 = 5;
+
+/// The pad under the board: each digit, and under it how many are left to
+/// place.
+const PAD_HEIGHT: u16 = 2;
 
 /// The dense key bar wraps to this many rows.
 const DENSE_KEY_ROWS: u16 = 2;
@@ -83,11 +87,11 @@ impl Density {
     /// The smallest window the layout fits in.
     const fn needed(self) -> (u16, u16) {
         match self {
-            Density::Full => (FRAME_WIDTH, BOARD_HEIGHT + 2 + PANEL_HEIGHT),
-            // The status line, the board, the hint and the key bar.
+            Density::Full => (FRAME_WIDTH, BOARD_HEIGHT + 2 + PAD_HEIGHT + PANEL_HEIGHT),
+            // The status line, the board, the pad, the hint and the key bar.
             Density::Dense => (
                 Density::Dense.gutter() + Density::Dense.board_width(),
-                1 + BOARD_HEIGHT + DENSE_PANEL_HEIGHT + DENSE_KEY_ROWS,
+                1 + BOARD_HEIGHT + PAD_HEIGHT + DENSE_PANEL_HEIGHT + DENSE_KEY_ROWS,
             ),
         }
     }
@@ -140,6 +144,7 @@ pub enum Filter {
 const FRAME_WIDTH: u16 = BOARD_WIDTH + 2;
 
 /// The full layout's board inside its frame and the panel under it.
+#[cfg(test)]
 const NEEDED: (u16, u16) = Density::Full.needed();
 
 /// The layout a window of this size gets, the full one if it fits, or none
@@ -157,10 +162,166 @@ pub fn fits(area: Rect) -> bool {
     density(area).is_some()
 }
 
+/// Where each part of the game screen goes. Drawing and clicks both work
+/// from this, so a click lands on what is drawn under it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Areas {
+    pub density: Density,
+    /// The frame, in the full layout; the dense one has none.
+    frame: Option<Rect>,
+    /// The dense layout's title and status line.
+    status: Rect,
+    /// What the key list or the pause screen covers: the board with its
+    /// row numbers.
+    cover: Rect,
+    /// The board's lines and cells.
+    board: Rect,
+    pad: Rect,
+    /// The hint panel, border included in the full layout.
+    hint: Rect,
+    /// The dense layout's key bar.
+    keys: Rect,
+}
+
+impl Areas {
+    /// The areas in a window of this size, or none if it is too small.
+    pub fn of(area: Rect) -> Option<Areas> {
+        let density = density(area)?;
+        let needed = density.needed();
+        let whole = area.centered(Constraint::Length(needed.0), Constraint::Length(needed.1));
+        let (frame, status, cover, pad, hint, keys) = match density {
+            Density::Full => {
+                let [frame, pad, hint] = Layout::vertical([
+                    Constraint::Length(BOARD_HEIGHT + 2),
+                    Constraint::Length(PAD_HEIGHT),
+                    Constraint::Length(PANEL_HEIGHT),
+                ])
+                .areas(whole);
+                let cover = frame.inner(ratatui::layout::Margin::new(1, 1));
+                (
+                    Some(frame),
+                    Rect::default(),
+                    cover,
+                    pad,
+                    hint,
+                    Rect::default(),
+                )
+            }
+            Density::Dense => {
+                let [status, cover, pad, hint, keys] = Layout::vertical([
+                    Constraint::Length(1),
+                    Constraint::Length(BOARD_HEIGHT),
+                    Constraint::Length(PAD_HEIGHT),
+                    Constraint::Length(DENSE_PANEL_HEIGHT),
+                    Constraint::Length(DENSE_KEY_ROWS),
+                ])
+                .areas(whole);
+                (None, status, cover, pad, hint, keys)
+            }
+        };
+        let gutter = density.gutter();
+        let numbered = cover.centered(
+            Constraint::Length(gutter + density.board_width()),
+            Constraint::Length(BOARD_HEIGHT),
+        );
+        let board = Rect {
+            x: numbered.x + gutter,
+            width: numbered.width - gutter,
+            ..numbered
+        };
+        Some(Areas {
+            density,
+            frame,
+            status,
+            cover,
+            board,
+            pad,
+            hint,
+            keys,
+        })
+    }
+
+    /// Where a cell's contents go, inside the lines around it.
+    pub fn cell(&self, cell: Cell) -> Rect {
+        let width = self.density.cell_width();
+        let x = self.board.x + 1 + col(cell) as u16 * (width + 1);
+        let y = self.board.y + 1 + row(cell) as u16 * (CELL_HEIGHT + 1);
+        Rect::new(x, y, width, CELL_HEIGHT)
+    }
+
+    /// Where a note for `digit` goes in `cell`: a fixed spot in a 3×3 grid,
+    /// 1 top left and 9 bottom right, spaced out in the full layout and
+    /// packed in the dense one.
+    fn note(&self, cell: Cell, digit: u8) -> (u16, u16) {
+        let Rect { x, y, .. } = self.cell(cell);
+        let spot = u16::from(digit - 1);
+        match self.density {
+            Density::Full => (x + 1 + 2 * (spot % 3), y + spot / 3),
+            Density::Dense => (x + spot % 3, y + spot / 3),
+        }
+    }
+
+    /// The pad's button for `digit`: the column of the board's cells above
+    /// it, both rows.
+    pub fn pad_button(&self, digit: u8) -> Rect {
+        let width = self.density.cell_width();
+        let x = self.board.x + 1 + u16::from(digit - 1) * (width + 1);
+        Rect::new(x, self.pad.y, width, PAD_HEIGHT)
+    }
+
+    /// The button that closes the hint: on the panel's top edge in the full
+    /// layout, at the end of the rung's line in the dense one.
+    pub fn close_hint(&self) -> Rect {
+        match self.density {
+            Density::Full => Rect::new(self.hint.right() - 4, self.hint.y, 3, 1),
+            Density::Dense => Rect::new(self.hint.right() - 1, self.hint.y, 1, 1),
+        }
+    }
+}
+
+/// What a click at a spot of the game screen lands on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Target {
+    Cell(Cell),
+    /// A note's spot in a cell, in the full layout.
+    Note(Cell, u8),
+    Pad(u8),
+    CloseHint,
+}
+
+/// What the click at `(x, y)` lands on, in a window of `area`. The board
+/// and the pad take no clicks while the key list or the pause screen covers
+/// them, and the close button is there only with a hint open.
+pub fn hit(area: Rect, view: &View, x: u16, y: u16) -> Option<Target> {
+    let areas = Areas::of(area)?;
+    let at = ratatui::layout::Position::new(x, y);
+    if view.hint.is_some() && areas.close_hint().contains(at) {
+        return Some(Target::CloseHint);
+    }
+    if view.help || view.paused {
+        return None;
+    }
+    for cell in 0..81 {
+        if areas.cell(cell).contains(at) {
+            if areas.density == Density::Full {
+                for digit in 1..=9 {
+                    if areas.note(cell, digit) == (x, y) {
+                        return Some(Target::Note(cell, digit));
+                    }
+                }
+            }
+            return Some(Target::Cell(cell));
+        }
+    }
+    (1..=9)
+        .find(|&d| areas.pad_button(d).contains(at))
+        .map(Target::Pad)
+}
+
 pub fn draw(frame: &mut Frame, game: &Game, view: &View, theme: &Theme) {
     let area = frame.area();
     frame.render_widget(Block::new().style(Style::new().bg(theme.background)), area);
-    let Some(density) = density(area) else {
+    let Some(areas) = Areas::of(area) else {
         too_small(frame, theme, Density::Dense.needed());
         return;
     };
@@ -170,85 +331,96 @@ pub fn draw(frame: &mut Frame, game: &Game, view: &View, theme: &Theme) {
         view,
         theme,
         rung,
-        density,
+        areas,
     };
-    if density == Density::Dense {
-        draw_dense(frame, board);
-        return;
+    let keys = shown_keys(game, view);
+    match areas.frame {
+        Some(outer) => {
+            let block = frame_block(theme)
+                .title_top(title(theme))
+                .title_top(status(game, view, theme, STATUS_WIDTH).right_aligned())
+                .title_bottom(key_bar(&keys, theme).centered());
+            frame.render_widget(block, outer);
+        }
+        None => {
+            let width = areas.status.width as usize - TITLE.len() - 2;
+            let [title_area, status_area] =
+                Layout::horizontal([Constraint::Length(TITLE.len() as u16), Constraint::Fill(1)])
+                    .areas(areas.status);
+            frame.render_widget(title(theme), title_area);
+            frame.render_widget(
+                status(game, view, theme, width).right_aligned(),
+                status_area,
+            );
+            let lines = key_bar_lines(&keys, theme, usize::from(areas.keys.width));
+            frame.render_widget(Paragraph::new(lines).centered(), areas.keys);
+        }
     }
-
-    let whole = area.centered(Constraint::Length(NEEDED.0), Constraint::Length(NEEDED.1));
-    let [outer, side] = Layout::vertical([
-        Constraint::Length(BOARD_HEIGHT + 2),
-        Constraint::Length(PANEL_HEIGHT),
-    ])
-    .areas(whole);
-    let block = frame_block(theme)
-        .title_top(title(theme))
-        .title_top(status(game, view, theme, STATUS_WIDTH).right_aligned())
-        .title_bottom(key_bar(&shown_keys(game, view), theme).centered());
-    let inner = block.inner(outer);
-    frame.render_widget(block, outer);
     if view.help {
-        let [list] = Layout::horizontal([Constraint::Fill(1)])
-            .horizontal_margin(2)
-            .vertical_margin(1)
-            .areas(inner);
-        frame.render_widget(key_list(theme), list);
+        let margin = match areas.density {
+            Density::Full => ratatui::layout::Margin::new(2, 1),
+            Density::Dense => ratatui::layout::Margin::new(1, 0),
+        };
+        frame.render_widget(key_list(theme), areas.cover.inner(margin));
     } else if view.paused {
         frame.render_widget(
             paused(theme),
-            inner.centered_vertically(Constraint::Length(1)),
+            areas.cover.centered_vertically(Constraint::Length(1)),
         );
     } else {
-        frame.render_widget(board, inner);
+        frame.render_widget(board, areas.board);
+        draw_pad(frame, game, view, theme, &areas);
     }
-    let block = panel_block(theme, if game.is_won() { "Solved" } else { "Hint" });
-    let inner = block.inner(side);
-    frame.render_widget(block, side);
-    frame.render_widget(hint_text(game, view, theme), inner);
+    let text = hint_text(game, view, theme);
+    let close = Span::styled(
+        "×",
+        Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
+    );
+    match areas.density {
+        Density::Full => {
+            let mut block = panel_block(theme, if game.is_won() { "Solved" } else { "Hint" });
+            if view.hint.is_some() {
+                block = block
+                    .title_top(Line::from(vec![" ".into(), close, " ".into()]).right_aligned());
+            }
+            let inner = block.inner(areas.hint);
+            frame.render_widget(block, areas.hint);
+            frame.render_widget(text, inner);
+        }
+        Density::Dense => {
+            frame.render_widget(text, areas.hint);
+            if view.hint.is_some() {
+                frame.render_widget(close, areas.close_hint());
+            }
+        }
+    }
 }
 
-/// The dense layout, top to bottom: the title and status line, the board,
-/// the hint and the key bar.
-fn draw_dense(frame: &mut Frame, board: Board) {
-    let (game, view, theme) = (board.game, board.view, board.theme);
-    let needed = Density::Dense.needed();
-    let whole = frame
-        .area()
-        .centered(Constraint::Length(needed.0), Constraint::Length(needed.1));
-    let [top, middle, hint, keys_area] = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(BOARD_HEIGHT),
-        Constraint::Length(DENSE_PANEL_HEIGHT),
-        Constraint::Length(DENSE_KEY_ROWS),
-    ])
-    .areas(whole);
-    let width = usize::from(needed.0) - TITLE.len() - 2;
-    let [title_area, status_area] =
-        Layout::horizontal([Constraint::Length(TITLE.len() as u16), Constraint::Fill(1)])
-            .areas(top);
-    frame.render_widget(title(theme), title_area);
-    frame.render_widget(
-        status(game, view, theme, width).right_aligned(),
-        status_area,
-    );
-    if view.help {
-        let [list] = Layout::horizontal([Constraint::Fill(1)])
-            .horizontal_margin(1)
-            .areas(middle);
-        frame.render_widget(key_list(theme), list);
-    } else if view.paused {
-        frame.render_widget(
-            paused(theme),
-            middle.centered_vertically(Constraint::Length(1)),
+/// Each digit under its column of the board, and how many of it are left
+/// to place. A finished digit is dimmed, as on the board.
+fn draw_pad(frame: &mut Frame, game: &Game, view: &View, theme: &Theme, areas: &Areas) {
+    let buf = frame.buffer_mut();
+    for digit in 1..=9u8 {
+        let button = areas.pad_button(digit);
+        let placed = (0..81)
+            .filter(|&c| game.board().get(c) == Some(digit))
+            .count();
+        let left = 9usize.saturating_sub(placed);
+        let finished = view.highlights.complete_digits && game.is_complete(digit);
+        let style = if finished {
+            Style::new().fg(theme.dimmed)
+        } else {
+            Style::new().fg(theme.text).add_modifier(Modifier::BOLD)
+        };
+        let middle = button.x + button.width / 2;
+        buf.set_string(middle, button.y, digit.to_string(), style);
+        buf.set_string(
+            middle,
+            button.y + 1,
+            left.to_string(),
+            Style::new().fg(theme.dimmed),
         );
-    } else {
-        frame.render_widget(board, middle);
     }
-    frame.render_widget(hint_text(game, view, theme), hint);
-    let lines = key_bar_lines(&shown_keys(game, view), theme, usize::from(needed.0));
-    frame.render_widget(Paragraph::new(lines).centered(), keys_area);
 }
 
 /// What shows in the board's place while the game is paused.
@@ -528,16 +700,34 @@ pub fn key_bar(keys: &[(&str, &str)], theme: &Theme) -> Line<'static> {
 /// `keys` in as many rows as it takes to keep each at most `width` columns
 /// wide, no key split from its words.
 pub fn key_bar_lines(keys: &[(&str, &str)], theme: &Theme, width: usize) -> Vec<Line<'static>> {
+    key_rows(keys, width)
+        .iter()
+        .map(|row| key_bar(row, theme))
+        .collect()
+}
+
+/// `keys` split into rows of at most `width` columns, as `key_bar` draws
+/// them.
+fn key_rows<'a>(keys: &[(&'a str, &'a str)], width: usize) -> Vec<Vec<(&'a str, &'a str)>> {
+    // A space each side, two between keys, and one between a key and its
+    // words.
+    let width_of = |row: &[(&str, &str)]| {
+        let text: usize = row
+            .iter()
+            .map(|(k, w)| k.chars().count() + 1 + w.chars().count())
+            .sum();
+        text + 2 + 2 * row.len().saturating_sub(1)
+    };
     let mut rows: Vec<Vec<(&str, &str)>> = vec![Vec::new()];
     for &entry in keys {
         let row = rows.last_mut().unwrap();
         row.push(entry);
-        if row.len() > 1 && key_bar(row, theme).width() > width {
+        if row.len() > 1 && width_of(row) > width {
             row.pop();
             rows.push(vec![entry]);
         }
     }
-    rows.iter().map(|row| key_bar(row, theme)).collect()
+    rows
 }
 
 /// What the key list says an action does, in at most 28 characters so a
@@ -640,28 +830,19 @@ struct Board<'a> {
     theme: &'a Theme,
     /// What the open hint shows at its rung.
     rung: Option<Rung>,
-    density: Density,
+    areas: Areas,
 }
 
 impl Widget for Board<'_> {
+    /// `area` is `Areas::board`, where the board's lines go.
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let gutter = self.density.gutter();
-        let whole = area.centered(
-            Constraint::Length(gutter + self.density.board_width()),
-            Constraint::Length(BOARD_HEIGHT),
-        );
-        let area = Rect {
-            x: whole.x + gutter,
-            width: whole.width - gutter,
-            ..whole
-        };
         self.render_lines(area, buf);
         let conflicts = self.game.board().conflicts();
         for (cell, &conflict) in conflicts.iter().enumerate() {
-            self.render_cell(cell, conflict, area, buf);
+            self.render_cell(cell, conflict, buf);
         }
-        if self.density == Density::Dense {
-            self.render_cursor_frame(area, buf);
+        if self.areas.density == Density::Dense {
+            self.render_cursor_frame(buf);
         }
         self.render_numbers(area, buf);
     }
@@ -669,9 +850,9 @@ impl Widget for Board<'_> {
 
 impl Board<'_> {
     fn render_lines(&self, area: Rect, buf: &mut Buffer) {
-        let cell_width = self.density.cell_width();
+        let cell_width = self.areas.density.cell_width();
         for dy in 0..BOARD_HEIGHT {
-            for dx in 0..self.density.board_width() {
+            for dx in 0..self.areas.density.board_width() {
                 let on_vertical = dx % (cell_width + 1) == 0;
                 let on_horizontal = dy % (CELL_HEIGHT + 1) == 0;
                 let kx = dx / (cell_width + 1);
@@ -711,7 +892,7 @@ impl Board<'_> {
                 Style::new().fg(self.theme.dimmed)
             }
         };
-        let cell_width = self.density.cell_width();
+        let cell_width = self.areas.density.cell_width();
         for i in 0..9 {
             let number = (i + 1).to_string();
             let offset = 1 + i as u16 * (cell_width + 1);
@@ -723,7 +904,7 @@ impl Board<'_> {
             );
             let offset = 1 + i as u16 * (CELL_HEIGHT + 1);
             buf.set_string(
-                area.x - self.density.gutter(),
+                area.x - self.areas.density.gutter(),
                 area.y + offset + CELL_HEIGHT / 2,
                 &number,
                 style(row(cursor) == i),
@@ -731,8 +912,8 @@ impl Board<'_> {
         }
     }
 
-    fn render_cell(&self, cell: Cell, conflict: bool, area: Rect, buf: &mut Buffer) {
-        let rect = self.cell_rect(cell, area);
+    fn render_cell(&self, cell: Cell, conflict: bool, buf: &mut Buffer) {
+        let rect = self.areas.cell(cell);
         let (x, y) = (rect.x, rect.y);
         if let Some(bg) = self.background(cell) {
             buf.set_style(rect, Style::new().bg(bg));
@@ -743,7 +924,7 @@ impl Board<'_> {
         if self.theme.monochrome && (hint_cell || self.filtered(cell)) {
             buf.set_style(rect, Style::new().add_modifier(Modifier::REVERSED));
         }
-        if cell == self.game.cursor() && self.density == Density::Full {
+        if cell == self.game.cursor() && self.areas.density == Density::Full {
             // Corner marks show the cursor without relying on colour. Notes
             // never use a cell's first or last column, so they don't collide.
             let mark = Style::new().fg(self.theme.accent);
@@ -796,7 +977,7 @@ impl Board<'_> {
                     style,
                 );
             }
-            None if !self.view.notes_hidden => self.render_notes(cell, x, y, buf),
+            None if !self.view.notes_hidden => self.render_notes(cell, buf),
             None => {}
         }
         self.render_hint_marks(cell, rect, buf);
@@ -812,30 +993,11 @@ impl Board<'_> {
         }
     }
 
-    /// Where a cell's contents go, inside the lines around it.
-    fn cell_rect(&self, cell: Cell, board: Rect) -> Rect {
-        let width = self.density.cell_width();
-        let x = board.x + 1 + col(cell) as u16 * (width + 1);
-        let y = board.y + 1 + row(cell) as u16 * (CELL_HEIGHT + 1);
-        Rect::new(x, y, width, CELL_HEIGHT)
-    }
-
-    /// Where a note for `digit` goes in a cell whose contents start at
-    /// `(x, y)`: a fixed spot in a 3×3 grid, 1 top left and 9 bottom right,
-    /// spaced out in the full layout and packed in the dense one.
-    fn note_spot(&self, digit: u8, x: u16, y: u16) -> (u16, u16) {
-        let spot = u16::from(digit - 1);
-        match self.density {
-            Density::Full => (x + 1 + 2 * (spot % 3), y + spot / 3),
-            Density::Dense => (x + spot % 3, y + spot / 3),
-        }
-    }
-
     /// The dense layout's cells have no room for corner marks, so the lines
     /// around the cursor are drawn double instead: a shape no other line on
     /// the board has.
-    fn render_cursor_frame(&self, board: Rect, buf: &mut Buffer) {
-        let cell = self.cell_rect(self.game.cursor(), board);
+    fn render_cursor_frame(&self, buf: &mut Buffer) {
+        let cell = self.areas.cell(self.game.cursor());
         let style = Style::new().fg(self.theme.accent);
         let (left, right) = (cell.x - 1, cell.x + cell.width);
         let (top, bottom) = (cell.y - 1, cell.y + cell.height);
@@ -865,7 +1027,7 @@ impl Board<'_> {
         let (x, y) = (rect.x, rect.y);
         for &(_, digits) in rung.removals.iter().filter(|&&(c, _)| c == cell) {
             for digit in digits.iter() {
-                let (nx, ny) = self.note_spot(digit, x, y);
+                let (nx, ny) = self.areas.note(cell, digit);
                 buf.set_string(
                     nx,
                     ny,
@@ -881,7 +1043,7 @@ impl Board<'_> {
         {
             // The full layout's notes never use a cell's first and last
             // columns, where the cursor's corner marks go.
-            let blank = match self.density {
+            let blank = match self.areas.density {
                 Density::Full => Rect::new(x + 1, y, rect.width - 2, CELL_HEIGHT),
                 Density::Dense => rect,
             };
@@ -904,13 +1066,13 @@ impl Board<'_> {
         }
     }
 
-    /// Each note goes in its digit's spot (`note_spot`). A box mark takes
+    /// Each note goes in its digit's spot (`Areas::note`). A box mark takes
     /// the spot over from a candidate.
-    fn render_notes(&self, cell: Cell, x: u16, y: u16, buf: &mut Buffer) {
+    fn render_notes(&self, cell: Cell, buf: &mut Buffer) {
         let candidates = self.game.candidates(cell);
         let marks = self.game.marks(cell);
         for digit in candidates.union(marks).iter() {
-            let (nx, ny) = self.note_spot(digit, x, y);
+            let (nx, ny) = self.areas.note(cell, digit);
             let mut style = if marks.contains(digit) {
                 Style::new()
                     .fg(self.theme.box_mark)
@@ -1055,6 +1217,77 @@ fn menu_keys(menu: &Menu) -> Vec<(&'static str, &'static str)> {
 
 /// A menu in its frame, with the biggest logo that fits above the items
 /// and the key bar under it.
+/// Where a menu's parts go: the box, the logo that fits, the column the
+/// logo and items are drawn in, and the key bar's rows.
+struct MenuAreas {
+    boxed: Rect,
+    logo: Vec<String>,
+    column: Rect,
+    keys: Rect,
+}
+
+impl MenuAreas {
+    fn of(area: Rect, menu: &Menu, items: &[Item]) -> MenuAreas {
+        let key_rows = key_rows(&menu_keys(menu), usize::from(area.width)).len() as u16;
+        let rows = items.len() as u16;
+        // The frame and a row of space inside it, top and bottom.
+        let around = 4 + key_rows;
+        let fits = |logo: &[String]| {
+            let width = logo.iter().map(|l| l.chars().count()).max().unwrap_or(0) as u16;
+            area.width >= width + 6 && area.height >= logo.len() as u16 + 1 + rows + around
+        };
+        let logo = [logo(2), logo(1)]
+            .into_iter()
+            .find(|logo| fits(logo))
+            .unwrap_or_else(|| vec!["sumi".to_string()]);
+        let column = logo
+            .iter()
+            .map(|l| l.chars().count())
+            .chain(items.iter().map(|item| item.label().len() + 2))
+            .max()
+            .unwrap_or(0) as u16;
+        let height = logo.len() as u16 + 1 + rows + 4;
+        let [boxed, keys] =
+            Layout::vertical([Constraint::Length(height), Constraint::Length(key_rows)]).areas(
+                area.centered(
+                    Constraint::Length((column + 6).min(area.width)),
+                    Constraint::Length(height + key_rows),
+                ),
+            );
+        let inner = boxed.inner(ratatui::layout::Margin::new(2, 2));
+        let column = inner.centered_horizontally(Constraint::Length(column.min(inner.width)));
+        let keys = Rect {
+            x: area.x,
+            width: area.width,
+            ..keys
+        };
+        MenuAreas {
+            boxed,
+            logo,
+            column,
+            keys,
+        }
+    }
+
+    /// The row of the item at `index`.
+    fn item(&self, index: usize) -> Rect {
+        let y = self.column.y + self.logo.len() as u16 + 1 + index as u16;
+        Rect::new(self.column.x, y, self.column.width, 1)
+    }
+}
+
+/// The item a click at `(x, y)` lands on.
+pub fn menu_hit(area: Rect, menu: &Menu, items: &[Item], x: u16, y: u16) -> Option<usize> {
+    if !menu_fits(area) {
+        return None;
+    }
+    let areas = MenuAreas::of(area, menu, items);
+    let at = ratatui::layout::Position::new(x, y);
+    (0..items.len()).find(|&i| areas.item(i).contains(at))
+}
+
+/// A menu in its frame, with the biggest logo that fits above the items
+/// and the key bar under it.
 pub fn draw_menu(frame: &mut Frame, menu: &Menu, items: &[Item], theme: &Theme) {
     let area = frame.area();
     frame.render_widget(Block::new().style(Style::new().bg(theme.background)), area);
@@ -1062,43 +1295,15 @@ pub fn draw_menu(frame: &mut Frame, menu: &Menu, items: &[Item], theme: &Theme) 
         too_small(frame, theme, MENU_NEEDED);
         return;
     }
-    let keys = key_bar_lines(&menu_keys(menu), theme, usize::from(area.width));
-    let rows = items.len() as u16;
-    // The frame and a row of space inside it, top and bottom.
-    let around = 4 + keys.len() as u16;
-    let fits = |logo: &[String]| {
-        let width = logo.iter().map(|l| l.chars().count()).max().unwrap_or(0) as u16;
-        area.width >= width + 6 && area.height >= logo.len() as u16 + 1 + rows + around
-    };
-    let logo = [logo(2), logo(1)]
-        .into_iter()
-        .find(|logo| fits(logo))
-        .unwrap_or_else(|| vec!["sumi".to_string()]);
-    let width = logo
-        .iter()
-        .map(|l| l.chars().count())
-        .chain(items.iter().map(|item| item.label().len() + 2))
-        .max()
-        .unwrap_or(0) as u16
-        + 6;
-    let height = logo.len() as u16 + 1 + rows + 4;
-    let [boxed, key_rows] = Layout::vertical([
-        Constraint::Length(height),
-        Constraint::Length(keys.len() as u16),
-    ])
-    .areas(area.centered(
-        Constraint::Length(width.min(area.width)),
-        Constraint::Length(height + keys.len() as u16),
-    ));
-    let block = frame_block(theme);
-    let inner = block.inner(boxed).inner(ratatui::layout::Margin::new(1, 1));
-    frame.render_widget(block, boxed);
+    let areas = MenuAreas::of(area, menu, items);
+    frame.render_widget(frame_block(theme), areas.boxed);
     let accent = Style::new().fg(theme.accent).add_modifier(Modifier::BOLD);
-    let mut lines: Vec<Line> = logo
-        .into_iter()
-        .map(|l| Line::from(Span::styled(l, accent)))
+    let logo: Vec<Line> = areas
+        .logo
+        .iter()
+        .map(|l| Line::from(Span::styled(l.clone(), accent)))
         .collect();
-    lines.push(Line::default());
+    frame.render_widget(Paragraph::new(logo), areas.column);
     for (i, item) in items.iter().enumerate() {
         // The marker shows the selection without relying on colour.
         let line = if i == menu.selected {
@@ -1106,18 +1311,10 @@ pub fn draw_menu(frame: &mut Frame, menu: &Menu, items: &[Item], theme: &Theme) 
         } else {
             Span::styled(format!("  {}", item.label()), Style::new().fg(theme.text))
         };
-        lines.push(Line::from(line));
+        frame.render_widget(line, areas.item(i));
     }
-    let width_of = |line: &Line| line.width();
-    let column = lines.iter().map(width_of).max().unwrap_or(0) as u16;
-    let column_area = inner.centered_horizontally(Constraint::Length(column.min(inner.width)));
-    frame.render_widget(Paragraph::new(lines), column_area);
-    let keys_area = Rect {
-        x: area.x,
-        width: area.width,
-        ..key_rows
-    };
-    frame.render_widget(Paragraph::new(keys).centered(), keys_area);
+    let keys = key_bar_lines(&menu_keys(menu), theme, usize::from(area.width));
+    frame.render_widget(Paragraph::new(keys).centered(), areas.keys);
 }
 
 /// What the settings page draws.
@@ -1132,17 +1329,62 @@ pub struct SettingsPage<'a> {
 
 /// The settings page's rows: a heading for each group, its settings, and
 /// a line where a group has none.
+/// A row of the settings page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SettingsRow {
+    Blank,
+    Heading(&'static str),
+    /// A setting, and its place in `Setting::all`.
+    Setting(usize, Setting),
+    /// Where a group has no settings: the Keys group.
+    NoSettings,
+}
+
+/// The settings page's rows, in order. Drawing and clicks both use it.
+fn settings_rows() -> Vec<SettingsRow> {
+    let mut rows = Vec::new();
+    let mut index = 0;
+    for (name, settings) in GROUPS {
+        if !rows.is_empty() {
+            rows.push(SettingsRow::Blank);
+        }
+        rows.push(SettingsRow::Heading(name));
+        for &setting in settings {
+            rows.push(SettingsRow::Setting(index, setting));
+            index += 1;
+        }
+        if settings.is_empty() {
+            rows.push(SettingsRow::NoSettings);
+        }
+    }
+    rows
+}
+
 fn settings_lines(page: &SettingsPage, theme: &Theme) -> Vec<Line<'static>> {
     let heading = Style::new().fg(theme.text).add_modifier(Modifier::BOLD);
     let accent = Style::new().fg(theme.accent).add_modifier(Modifier::BOLD);
     let selected = page.page.setting();
     let mut lines = Vec::new();
-    for (name, settings) in GROUPS {
-        if !lines.is_empty() {
-            lines.push(Line::default());
-        }
-        lines.push(Line::from(Span::styled(name, heading)));
-        for &setting in settings {
+    for row in settings_rows() {
+        let setting = match row {
+            SettingsRow::Blank => {
+                lines.push(Line::default());
+                continue;
+            }
+            SettingsRow::Heading(name) => {
+                lines.push(Line::from(Span::styled(name, heading)));
+                continue;
+            }
+            SettingsRow::NoSettings => {
+                lines.push(Line::from(Span::styled(
+                    format!("  {} in a game lists them", key_label(Action::Help)),
+                    Style::new().fg(theme.dimmed),
+                )));
+                continue;
+            }
+            SettingsRow::Setting(_, setting) => setting,
+        };
+        {
             let value = setting.shown(page.config, page.theme_name);
             let line = if setting == selected {
                 Line::from(vec![
@@ -1160,26 +1402,23 @@ fn settings_lines(page: &SettingsPage, theme: &Theme) -> Vec<Line<'static>> {
             };
             lines.push(line);
         }
-        if settings.is_empty() {
-            lines.push(Line::from(Span::styled(
-                format!("  {} in a game lists them", key_label(Action::Help)),
-                Style::new().fg(theme.dimmed),
-            )));
-        }
     }
-    if let Some(error) = page.error {
-        lines.push(Line::default());
-        lines.push(Line::from(Span::styled(
+    // Two rows are kept for a save error, so the page doesn't move when
+    // one shows.
+    lines.push(Line::default());
+    lines.push(match page.error {
+        Some(error) => Line::from(Span::styled(
             format!("Not saved: {error}"),
             Style::new().fg(theme.conflict),
-        )));
-    }
+        )),
+        None => Line::default(),
+    });
     lines
 }
 
 /// The smallest window the settings page fits in: its widest row (a label
 /// and the longest theme name), its rows, the frame, and the keys.
-const SETTINGS_NEEDED: (u16, u16) = (52, 26);
+const SETTINGS_NEEDED: (u16, u16) = (52, 28);
 
 pub fn settings_fit(area: Rect) -> bool {
     area.width >= SETTINGS_NEEDED.0 && area.height >= SETTINGS_NEEDED.1
@@ -1194,6 +1433,45 @@ fn settings_keys() -> Vec<(&'static str, &'static str)> {
     ]
 }
 
+/// Where the settings page's box, its rows and its key bar go. The rows
+/// are `settings_rows` and the two kept for a save error.
+fn settings_areas(area: Rect) -> (Rect, Rect, Rect) {
+    let rows = settings_rows().len() as u16 + 2;
+    let key_rows = key_rows(&settings_keys(), usize::from(area.width)).len() as u16;
+    let width = SETTINGS_NEEDED.0 - 2;
+    let height = rows + 4;
+    let [boxed, keys] =
+        Layout::vertical([Constraint::Length(height), Constraint::Length(key_rows)]).areas(
+            area.centered(
+                Constraint::Length(width.min(area.width)),
+                Constraint::Length((height + key_rows).min(area.height)),
+            ),
+        );
+    let inner = boxed.inner(ratatui::layout::Margin::new(3, 2));
+    let keys = Rect {
+        x: area.x,
+        width: area.width,
+        ..keys
+    };
+    (boxed, inner, keys)
+}
+
+/// The setting a click at `(x, y)` lands on, by its place in `Setting::all`.
+pub fn settings_hit(area: Rect, x: u16, y: u16) -> Option<usize> {
+    if !settings_fit(area) {
+        return None;
+    }
+    let rows = settings_rows();
+    let (_, inner, _) = settings_areas(area);
+    if !inner.contains(ratatui::layout::Position::new(x, y)) {
+        return None;
+    }
+    match rows.get(usize::from(y - inner.y))? {
+        SettingsRow::Setting(index, _) => Some(*index),
+        _ => None,
+    }
+}
+
 pub fn draw_settings(frame: &mut Frame, page: &SettingsPage, theme: &Theme) {
     let area = frame.area();
     frame.render_widget(Block::new().style(Style::new().bg(theme.background)), area);
@@ -1202,29 +1480,14 @@ pub fn draw_settings(frame: &mut Frame, page: &SettingsPage, theme: &Theme) {
         return;
     }
     let lines = settings_lines(page, theme);
-    let keys = key_bar_lines(&settings_keys(), theme, usize::from(area.width));
-    let width = SETTINGS_NEEDED.0 - 2;
-    let height = lines.len() as u16 + 4;
-    let [boxed, key_rows] = Layout::vertical([
-        Constraint::Length(height),
-        Constraint::Length(keys.len() as u16),
-    ])
-    .areas(area.centered(
-        Constraint::Length(width.min(area.width)),
-        Constraint::Length((height + keys.len() as u16).min(area.height)),
-    ));
+    let (boxed, inner, keys_area) = settings_areas(area);
     let block = frame_block(theme).title_top(Line::from(Span::styled(
         " Settings ",
         Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
     )));
-    let inner = block.inner(boxed).inner(ratatui::layout::Margin::new(2, 1));
     frame.render_widget(block, boxed);
     frame.render_widget(Paragraph::new(lines), inner);
-    let keys_area = Rect {
-        x: area.x,
-        width: area.width,
-        ..key_rows
-    };
+    let keys = key_bar_lines(&settings_keys(), theme, usize::from(area.width));
     frame.render_widget(Paragraph::new(keys).centered(), keys_area);
 }
 
@@ -1853,7 +2116,7 @@ mod tests {
     /// The panel's rows as text, with the trailing spaces gone.
     fn panel_rows(backend: &TestBackend) -> Vec<String> {
         let buffer = backend.buffer();
-        let top = BOARD_HEIGHT + 2;
+        let top = BOARD_HEIGHT + 2 + PAD_HEIGHT;
         (top + 1..top + PANEL_HEIGHT - 1)
             .map(|y| {
                 (2..FRAME_WIDTH - 2)
@@ -2022,13 +2285,14 @@ mod tests {
     #[test]
     fn the_window_picks_the_layout() {
         let at = |width, height| density(Rect::new(0, 0, width, height));
-        assert_eq!(at(75, 44), Some(Density::Full));
-        assert_eq!(at(74, 45), Some(Density::Dense));
-        assert_eq!(at(38, 45), Some(Density::Dense));
-        assert_eq!(at(37, 45), None);
-        assert_eq!(at(38, 44), None);
-        assert_eq!(at(200, 43), None);
-        assert_eq!(DENSE, (38, 45));
+        assert_eq!(at(75, 47), Some(Density::Full));
+        assert_eq!(at(75, 46), Some(Density::Full));
+        assert_eq!(at(74, 47), Some(Density::Dense));
+        assert_eq!(at(38, 47), Some(Density::Dense));
+        assert_eq!(at(37, 47), None);
+        assert_eq!(at(38, 46), None);
+        assert_eq!(at(200, 45), None);
+        assert_eq!((NEEDED, DENSE), ((75, 46), (38, 47)));
     }
 
     #[test]
@@ -2135,9 +2399,10 @@ mod tests {
         let top: String = (0..DENSE.0).map(|x| b[(x, 0)].symbol()).collect();
         assert!(top.starts_with(" sumi "), "{top}");
         assert!(top.trim_end().ends_with("● DIGIT"), "{top}");
-        let first = 1 + BOARD_HEIGHT;
+        let first = 1 + BOARD_HEIGHT + PAD_HEIGHT;
         let rung: String = (0..DENSE.0).map(|x| b[(x, first)].symbol()).collect();
-        assert_eq!(rung.trim_end(), "Rung 2 of 5");
+        assert!(rung.starts_with("Rung 2 of 5 "), "{rung}");
+        assert!(rung.ends_with('×'), "the hint's close button: {rung}");
     }
 
     fn won_game() -> Game {
@@ -2391,7 +2656,7 @@ mod tests {
     /// The panel's text rows, trimmed.
     fn panel_lines(backend: &TestBackend) -> Vec<String> {
         let buffer = backend.buffer();
-        let top = BOARD_HEIGHT + 2;
+        let top = BOARD_HEIGHT + 2 + PAD_HEIGHT;
         (top + 1..top + PANEL_HEIGHT - 1)
             .map(|y| {
                 (2..FRAME_WIDTH - 2)
@@ -2625,5 +2890,181 @@ mod tests {
             })
             .collect();
         assert!(!bottom.contains("quit"), "{bottom}");
+    }
+
+    /// Every spot on screen where the buffer holds `symbol`.
+    fn find(backend: &TestBackend, symbol: &str) -> Vec<(u16, u16)> {
+        let area = backend.buffer().area;
+        (0..area.height)
+            .flat_map(|y| (0..area.width).map(move |x| (x, y)))
+            .filter(|&pos| backend.buffer()[pos].symbol() == symbol)
+            .collect()
+    }
+
+    fn full_area() -> Rect {
+        Rect::new(0, 0, NEEDED.0, NEEDED.1)
+    }
+
+    fn dense_area() -> Rect {
+        Rect::new(0, 0, DENSE.0, DENSE.1)
+    }
+
+    /// A click on any cell lands on that cell. In the full layout a click on
+    /// a note's spot lands on that note, and the middle is the 5's spot.
+    #[test]
+    fn a_click_lands_on_the_cell_or_note_drawn_under_it() {
+        let view = View::default();
+        for cell in 0..81 {
+            let (x, y) = middle(cell);
+            assert_eq!(
+                hit(full_area(), &view, x - 3, y - 1),
+                Some(Target::Cell(cell))
+            );
+            assert_eq!(hit(full_area(), &view, x, y), Some(Target::Note(cell, 5)));
+            for digit in 1..=9 {
+                let (nx, ny) = note_at(cell, digit);
+                assert_eq!(
+                    hit(full_area(), &view, nx, ny),
+                    Some(Target::Note(cell, digit))
+                );
+            }
+            let (dx, dy) = dense_cell(cell);
+            for (ox, oy) in [(0, 0), (1, 1), (2, 2)] {
+                assert_eq!(
+                    hit(dense_area(), &view, dx + ox, dy + oy),
+                    Some(Target::Cell(cell))
+                );
+            }
+        }
+        // The lines between cells take no click.
+        let (x, y) = middle(40);
+        assert_eq!(hit(full_area(), &view, x - 4, y), None);
+    }
+
+    /// A click on a digit of the pad, or the count under it, lands on that
+    /// digit, in both layouts.
+    #[test]
+    fn a_click_on_the_pad_lands_on_its_digit() {
+        let game = game();
+        let view = View::default();
+        for (backend, area) in [
+            (render(&game, &view), full_area()),
+            (render_dense(&game, &view), dense_area()),
+        ] {
+            // The pad's row: the only one whose text is the nine digits.
+            let buffer = backend.buffer();
+            let y = (0..buffer.area.height)
+                .find(|&y| {
+                    let text: String = (0..buffer.area.width)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>()
+                        .split_whitespace()
+                        .collect();
+                    text == "123456789"
+                })
+                .unwrap();
+            for digit in 1..=9u8 {
+                let (x, _) = *find(&backend, &digit.to_string())
+                    .iter()
+                    .find(|&&(_, at)| at == y)
+                    .unwrap();
+                assert_eq!(hit(area, &view, x, y), Some(Target::Pad(digit)), "{digit}");
+                assert_eq!(
+                    hit(area, &view, x, y + 1),
+                    Some(Target::Pad(digit)),
+                    "{digit}"
+                );
+            }
+        }
+    }
+
+    /// The hint's close button is where × is drawn, and only with a hint open.
+    #[test]
+    fn a_click_on_the_close_button_closes_the_hint() {
+        let game = game();
+        let open = open(&game, 2);
+        for (backend, area) in [
+            (render(&game, &open), full_area()),
+            (render_dense(&game, &open), dense_area()),
+        ] {
+            let spots = find(&backend, "×");
+            assert_eq!(spots.len(), 1);
+            let (x, y) = spots[0];
+            assert_eq!(hit(area, &open, x, y), Some(Target::CloseHint));
+            assert_eq!(hit(area, &View::default(), x, y), None);
+        }
+    }
+
+    /// The key list and the pause screen cover the board and the pad: a
+    /// click there lands on nothing.
+    #[test]
+    fn covered_cells_take_no_clicks() {
+        for view in [
+            View {
+                help: true,
+                ..View::default()
+            },
+            View {
+                paused: true,
+                ..View::default()
+            },
+        ] {
+            let (x, y) = middle(40);
+            assert_eq!(hit(full_area(), &view, x, y), None);
+            let (dx, dy) = dense_cell(40);
+            assert_eq!(hit(dense_area(), &view, dx, dy), None);
+        }
+    }
+
+    /// A click on a menu item's label lands on that item, at every logo
+    /// size.
+    #[test]
+    fn a_click_on_a_menu_item_lands_on_it() {
+        let menu = Menu::new(crate::menu::Kind::Pause);
+        let items = menu.items(true);
+        for size in [(80, 30), (38, 18), MENU_NEEDED] {
+            let backend = render_menu(&menu, true, size);
+            let area = Rect::new(0, 0, size.0, size.1);
+            for (i, item) in items.iter().enumerate() {
+                let first = &item.label()[..1];
+                let spot = find(&backend, first)
+                    .into_iter()
+                    .find(|&(x, y)| {
+                        let rest: String = (x..x + item.label().len() as u16)
+                            .map(|x| backend.buffer()[(x, y)].symbol())
+                            .collect();
+                        rest == item.label()
+                    })
+                    .unwrap();
+                assert_eq!(
+                    menu_hit(area, &menu, &items, spot.0, spot.1),
+                    Some(i),
+                    "{size:?}"
+                );
+            }
+        }
+    }
+
+    /// A click on a setting's label lands on that setting.
+    #[test]
+    fn a_click_on_a_setting_lands_on_it() {
+        let page = Page::new(false);
+        let backend = render_settings(&page, &Config::default(), SETTINGS_NEEDED);
+        let area = Rect::new(0, 0, SETTINGS_NEEDED.0, SETTINGS_NEEDED.1);
+        for (i, setting) in Setting::all().into_iter().enumerate() {
+            let label = setting.label();
+            let spot = find(&backend, &label[..1])
+                .into_iter()
+                .find(|&(x, y)| {
+                    let rest: String = (x..x + label.len() as u16)
+                        .map(|x| backend.buffer()[(x, y)].symbol())
+                        .collect();
+                    rest == label
+                })
+                .unwrap();
+            assert_eq!(settings_hit(area, spot.0, spot.1), Some(i), "{label}");
+        }
+        let heading = find(&backend, "G")[0];
+        assert_eq!(settings_hit(area, heading.0, heading.1), None, "Gameplay");
     }
 }

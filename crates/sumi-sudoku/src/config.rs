@@ -16,6 +16,8 @@ pub struct Config {
     pub hint_start: usize,
     pub marks_to_candidates: MarksToCandidates,
     pub key_bar: bool,
+    /// Clicks and taps act on the board, the pad and the menus.
+    pub mouse: bool,
     pub highlights: Highlights,
 }
 
@@ -27,6 +29,7 @@ impl Default for Config {
             hint_start: 1,
             marks_to_candidates: MarksToCandidates::Fill,
             key_bar: true,
+            mouse: true,
             highlights: Highlights::default(),
         }
     }
