@@ -1,15 +1,15 @@
 //! The interactive game: one loop that draws, waits for an event and hands it
 //! to the session.
 
-use std::io;
+use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use rand::rngs::Xoshiro256PlusPlus;
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{
-    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyEventKind,
+    KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use ratatui::crossterm::execute;
 use ratatui::layout::Rect;
@@ -31,22 +31,52 @@ use crate::ui::{self, Filter, OpenHint, Target, View};
 /// Plays puzzles of `level`, or opens the main menu without one. Fails
 /// without changing the terminal when there is none to draw on.
 pub fn run(level: Option<Level>) -> io::Result<()> {
+    // Drawing into a file would leave the terminal raw and blank.
+    if !io::stdout().is_terminal() {
+        return Err(io::Error::other(
+            "can't draw: standard output isn't a terminal",
+        ));
+    }
     let (config, setup, warnings) = start();
     let mut terminal = ratatui::try_init()
         .map_err(|err| io::Error::new(err.kind(), format!("can't open the terminal: {err}")))?;
+    // ratatui's own hook leaves raw mode and the alternate screen; this one
+    // first turns off what sumi turned on.
+    let restore = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = execute!(io::stdout(), DisableBracketedPaste);
+        let _ = mouse(false);
+        restore(info);
+    }));
     let mut app = App::new(rand::make_rng(), level, config, setup, Instant::now);
     app.warnings = warnings;
     // With bracketed paste on, pasted text arrives as one event that the game
     // ignores, instead of as keys that could place digits or quit.
     let result =
         execute!(io::stdout(), EnableBracketedPaste).and_then(|()| play(&mut terminal, &mut app));
-    let _ = execute!(io::stdout(), DisableBracketedPaste, DisableMouseCapture);
+    let _ = execute!(io::stdout(), DisableBracketedPaste);
+    let _ = mouse(false);
     ratatui::restore();
     // The screen hid them while the game ran.
     for line in &app.warnings {
         eprintln!("sumi: {line}");
     }
     result
+}
+
+/// Turns the terminal's mouse reporting on or off: presses and releases
+/// only (1000), in SGR form (1006). Unlike crossterm's EnableMouseCapture it
+/// leaves motion unreported, which sumi doesn't use and which would wake
+/// the loop on every move. Off turns every mode off, whatever turned it on.
+fn mouse(on: bool) -> io::Result<()> {
+    let codes = if on {
+        "\x1b[?1000h\x1b[?1006h"
+    } else {
+        "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1015l\x1b[?1006l"
+    };
+    let mut out = io::stdout();
+    out.write_all(codes.as_bytes())?;
+    out.flush()
 }
 
 /// What the app needs from outside it: where the config lives, the themes
@@ -89,11 +119,7 @@ fn play(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
         // arrow keys terminals send for it in a full-screen program.
         if app.config.mouse != capturing {
             capturing = app.config.mouse;
-            if capturing {
-                execute!(io::stdout(), EnableMouseCapture)?;
-            } else {
-                execute!(io::stdout(), DisableMouseCapture)?;
-            }
+            mouse(capturing)?;
         }
         if let Some(session) = &mut app.session {
             session.view.time = session.time();
