@@ -5,6 +5,90 @@ its mechanism, what was fixed and where, what was closed by decision and why,
 and where deferred items went. The class register at the end names the
 defect shapes this codebase repeats; hunt them by name in later reviews.
 
+## 2026-10-08: milestone 6 (9ae2633..2cc6503)
+
+Four read-only lanes on the milestone's own commits (the milestone-5
+refactors in the same range were left out): the live terminal, driven in
+tmux; what is read from and written to disk; the logic in app and ui and
+its call sites; and the record and the comments. They reported 98
+findings, about 70 distinct once overlaps were merged (the paused hint and
+the settings page's width were each found by three lanes). No lane came
+back clean. The theme generator reproduced the shipped themes byte for
+byte, every theme test failed under a mutation of its theme, and the
+terminal was left clean after q and Ctrl+C.
+
+**Prediction against result.** Predicted 25 to 40 findings; about 70
+came. Predicted, and found: values shown in two places disagreeing (the
+settings page's sizes and its hint_start, the plan's sizes), the hint's
+close button acting behind the pause screen, mouse reporting left on
+after a panic, CLAUDE.md's module list, comments a later phase made
+false, tests that could not fail. Predicted, and wrong: the key bar's
+width formula disagreeing with its drawing, stale click areas after a
+resize, snapshots accepted without reading. Not predicted, and the most
+serious: one wrongly typed value in config.toml threw away every setting
+while later saves looked successful; Esc doing nothing after a win; the
+status line dropping hidden notes first; the faint half of a pulse
+matching the shading already there.
+
+### Fixed
+
+| Class | Finding and mechanism | Fix |
+| --- | --- | --- |
+| Two meanings, one value | Defaults stood for both "nothing chosen" and "the file didn't load": one bad value gave the defaults, and a setting saved afterwards was lost again at the next load | config.toml is read key by key: a bad value keeps its default and an unknown key is skipped, each named on stderr; hint_start is held to 1 to 5 (structural, acae2fa) |
+| Process edges | Saving truncated then wrote the file, so a crash could leave half a file; a symlinked config.toml was not followed; an inline highlights table could not be saved | The file is written beside the original and renamed over the file a symlink points to; inline tables save (acae2fa) |
+| No instrument | A misspelt `[colours]` in a theme file, or an unknown config key, was silently ignored | Theme files deny unknown fields; unknown config keys are named (7736153, acae2fa) |
+| Small | A theme could only extend one whose file sorted before it; `#+1+2+3` was a colour; an unreadable themes folder and a missing theme were silent | Themes load in rounds until none is left; six hex digits; both warn (7736153, acae2fa) |
+| Input from where the player isn't looking | Pausing blanked a hint's words but left its × drawn and clickable and its rung in the status line | `View::shown_hint` is the one test of whether a hint shows, used by drawing, the status line and clicks (structural, a5c4572) |
+| Input from where the player isn't looking | A click on nothing left the prompt after f open, though any key ends it | Every click reaches the session; one on nothing ends the prompt and the notice (a5c4572) |
+| Two things must agree | After a win Esc did nothing, though the key list says it opens the menu; Resume would then have restarted a won game's clock | Esc after a win opens the pause menu, and Resume starts the clock only if the game should be running (a5c4572) |
+| Two things must agree | The clock ran while the window was too small to show the board, and the loop decided whether to redraw each second from a restatement of the rule rather than the clock | The clock stops while the board can't be seen; the loop asks the game's clock (a5c4572) |
+| Two things must agree | The status line dropped hidden notes and the filter first, and "candidates and box marks hidden" never fitted the dense line | What the player turned on outranks the level and time, and hidden notes shorten to "notes hidden" before anything is dropped (eb74007) |
+| Two things must agree | The settings page's selected Theme row needed 46 columns where 44 fitted; its test allowed 46 | The page is 54 wide, longer names are shortened with …, and the test measures the width the layout gives (eb74007) |
+| Two things must agree | The faint half of a house pulse used the peer shading, which the cursor's house already had, so the pulse looked half as long | The faint light uses the hint area's colour (eb74007) |
+| Small | A save error was cut to its path; stderr repeated it per press; a hidden key bar left a gap in the frame; a menu row took clicks only on its label; the settings page didn't say when the terminal overrides the theme | The page shows the reason, stderr names it once, the gap is gone, the whole row takes the click, and the page says why the theme isn't drawn (eb74007) |
+| Process edges | A panic left mouse reporting and bracketed paste on; mouse reporting asked for every movement, waking the loop; with stdout redirected sumi drew into the file | A panic hook turns both off first; only presses are reported; sumi refuses a non-terminal stdout (786989d) |
+| No instrument | The plan and 4ca5ce3 said tests keep the cursor apart from the same-digit highlight; nothing did. The contrast floors were written twice, in the tests and the generator, and a test comment claimed highlights stay under 3:1 | The floors live once in `colour`, which both use; an APART pair holds the cursor and same-digit apart; highlights under 3:1 is asserted (structural, eed95bc) |
+| A test that cannot fail | `after_a_win_only_enter_and_quit_act…` passed with h and v acting after a win; `q_quits_from_any_menu` tried one menu; the main menu's Medium default and the paused key bar were untested | Each checks what its name says, watched failing under the lane's mutation (eed95bc) |
+| Two things must agree | The filter prompt's key text was typed by hand beside `filter_key` | `input::filter_label`, tested against `filter_key` (structural, eed95bc) |
+| Two meanings, one value | `App`'s level was an Option whose None meant "open the menu" in one place and "any level" in another, leaving the any-level path unreached | The level is always a level, Medium until one is picked (structural, eed95bc) |
+| Small | With no theme set, the settings page cycled from whichever theme was listed first, matching the default by coincidence | It starts from the default (197f4dc) |
+| Record | Four doc comments stacked on the wrong item; comments a later phase made false (the reversed cues, the colour roles' uses, the background order, Esc after a win, settle, the game module, Action::Close, frame_block, NEEDED); `sumi --help` said bare sumi plays; CLAUDE.md's module list | Corrected (61dce50) |
+| Record | The plan's architecture tables, main libraries, colour roles ("panel"), layouts table ("to the right"), side panel, key bar sketch, sizes in older notes (75×39, 75×44, 52×28), "tested in Termux", and the risk "check early" | Corrected in the plan the same day |
+
+### Closed by decision
+
+- **toml_edit turns CRLF into LF and drops a BOM when it saves.** The
+  content is kept; a config written on Windows is rare in a terminal game.
+- **The 16-colour theme has no peer shading, and the same colour for the
+  same-digit highlight and a hint's area.** Sixteen named colours on a
+  black background leave no third subtle shade; the plan calls that theme
+  best effort, and the settings page now says when it is in use.
+- **Undo then redo of the move that completed a house pulses it again.**
+  Completing it again is completing it.
+- **The clock runs while the key list is open.** It is a list over the
+  game, like the hint; pausing is one key away.
+- **A 74×46 window gets the too-small screen.** The dense layout needs 47
+  rows and the full one 75 columns; the message names the smaller.
+- **With mouse = false, a terminal may send the scroll wheel as arrow
+  keys again.** That is what turning the mouse off means.
+- **The key list's prose names other keys ("arrows too", "Space",
+  "b pairs, 0 off"), and the menus use `up_down_label` and
+  `left_right_label` beside `key_label`.** The list is prose, not a key
+  bar, and both labels are tested against the bindings.
+- **382b1f4 changed two theme colours by one step, and bd0c51f's body
+  credits it with NO_COLOR.** Unpublished, but interleaved with another
+  session's commits; rewriting would cost more than it tells, so this
+  record says it instead.
+
+### Deferred
+
+| Item | Goes to |
+| --- | --- |
+| On macOS the directories crate puts config in ~/Library/Application Support/sumi, and the future saves in the same folder | Milestone 8, with the macOS build |
+| The dense hint's × is a one-character tap target at the window's edge | Daniel's Termux check of the phase 10 build |
+| `MENU_NEEDED` assumes at most four items; Bookmarks, Learn and Stats will add more | Milestone 7, with those items |
+| The plan's principle that every helper has a switch: the pad and the hint panel have none | Question to Daniel, in the plan's milestone 6 notes |
+
 ## 2026-10-08: milestone 5, second read (a7cab37..0168f9b)
 
 The milestone was built and first reviewed on Sonnet 5.5, so the same
@@ -233,8 +317,9 @@ test, and the shared-screen helpers. None described the pre-rewrite API.
 
 | Class | Seen | Hunt for |
 | --- | --- | --- |
-| Two things must agree, nothing makes them agree | 12 (a list of keys vs what changes the board, status line vs title, effect line vs removals, count vs containment, fill vs hint removal; before: key bar, board shown vs input, plan vs code, placement records vs notes, one step per house, stale candidates, comments vs measurements) | Text, sizes or rules stated in two files; a record of a change that later changes don't update |
-| Two meanings, one value | 4 (empty notes, complete digit, a grade for an invalid grid, Beyond's step count) | An empty set, zero or `None` standing for more than one state |
-| Input from where the player isn't looking | 5 (hidden board, paste, modifiers, view changing under a hidden board, marks across games) | Any path from an event to a game change that skips what is on screen |
-| A test that cannot fail | 20 | Tests whose fixture can't tell the order or the branch apart; a loop that stops checking early; mutate the line the name claims |
-| No instrument | 3 (contrast, outside grader, panel fit) | A rule in the plan or CLAUDE.md that no test checks |
+| Two things must agree, nothing makes them agree | 20 (settings page width vs its rows, hint_start shown vs used, status drop order vs the plan, a won game's keys vs the key list, a clock rule stated twice, the faint pulse vs the shading under it, hand-typed filter labels, the plan's sizes; before: a list of keys vs what changes the board, status line vs title, effect line vs removals, count vs containment, fill vs hint removal; before: key bar, board shown vs input, plan vs code, placement records vs notes, one step per house, stale candidates, comments vs measurements) | Text, sizes or rules stated in two files; a record of a change that later changes don't update |
+| Two meanings, one value | 6 (config defaults as "unset" and "failed to load", `Option<Level>` as "menu" and "any level"; before: empty notes, complete digit, a grade for an invalid grid, Beyond's step count) | An empty set, zero or `None` standing for more than one state |
+| Input from where the player isn't looking | 7 (a paused hint's ×, a click on nothing leaving a prompt open; before: hidden board, paste, modifiers, view changing under a hidden board, marks across games) | Any path from an event to a game change that skips what is on screen |
+| A test that cannot fail | 25 | Tests whose fixture can't tell the order or the branch apart; a loop that stops checking early; mutate the line the name claims |
+| No instrument | 6 (unknown config and theme keys, a separation claimed and unchecked, floors written twice; before: contrast, outside grader, panel fit) | A rule in the plan or CLAUDE.md that no test checks |
+| Process edges | 3 (a panic leaving terminal modes on, a half-written config file, drawing into a redirected stdout; before: closed pipes and no terminal) | What the terminal, the disk or the pipe is left holding when sumi stops early or isn't where it expects |
