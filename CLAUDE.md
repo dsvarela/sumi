@@ -34,7 +34,7 @@ and resolve a thread before deleting the text it is anchored to.
 ## Layout
 
 - `crates/sumi-core`: library with no terminal code (grid, digits, solver,
-  generate, position, step, technique, grade and bank so far; hint and
+  generate, position, step, technique, hint, grade and bank so far;
   transform to come). `data/bank.txt` is the built-in puzzle bank, built by `examples/build_bank.rs`.
 - `crates/sumi-sudoku`: the `sumi` program (app, game, ui, theme, input, cli so
   far; store and learn to come).
