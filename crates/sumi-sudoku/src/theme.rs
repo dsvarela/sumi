@@ -28,6 +28,17 @@ pub struct Theme {
     /// Background of cells the candidate filter lights up.
     pub filter: Color,
     pub conflict: Color,
+    /// Digits `c` found different from the solution.
+    pub wrong_digit: Color,
+    /// Background of the rows, columns and boxes a hint points at, and of the
+    /// second group of a colouring.
+    pub hint_area: Color,
+    /// Background of the cells that make a hint's pattern.
+    pub hint_cell: Color,
+    /// Candidates a hint removes.
+    pub hint_removal: Color,
+    /// The digit a hint places.
+    pub hint_placement: Color,
 }
 
 impl Theme {
@@ -50,6 +61,11 @@ impl Theme {
             peer: Color::Rgb(0x0f, 0x11, 0x19),
             filter: Color::Rgb(0x2e, 0x26, 0x10),
             conflict: Color::Rgb(0xf7, 0x76, 0x8e),
+            wrong_digit: Color::Rgb(0xff, 0x8a, 0x80),
+            hint_area: Color::Rgb(0x0e, 0x1f, 0x2b),
+            hint_cell: Color::Rgb(0x12, 0x35, 0x3a),
+            hint_removal: Color::Rgb(0xff, 0x6b, 0x6b),
+            hint_placement: Color::Rgb(0x9e, 0xce, 0x6a),
         }
     }
 }
@@ -92,6 +108,8 @@ mod tests {
             ("same_digit", t.same_digit),
             ("peer", t.peer),
             ("filter", t.filter),
+            ("hint_area", t.hint_area),
+            ("hint_cell", t.hint_cell),
         ];
         let text = [
             ("text", t.text),
@@ -102,6 +120,9 @@ mod tests {
             ("candidate", t.candidate),
             ("box_mark", t.box_mark),
             ("conflict", t.conflict),
+            ("wrong_digit", t.wrong_digit),
+            ("hint_removal", t.hint_removal),
+            ("hint_placement", t.hint_placement),
         ];
         for (bg_name, bg) in backgrounds {
             for (fg_name, fg) in text {

@@ -10,7 +10,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Padding, Paragraph, Widget, Wrap};
 
 use sumi_core::grid::{Cell, col, row, sees};
-use sumi_core::hint::Hint;
+use sumi_core::hint::{Hint, Rung};
 
 use crate::game::{Game, Mode};
 use crate::input::{Action, key_label};
@@ -89,7 +89,16 @@ pub fn draw(frame: &mut Frame, game: &Game, view: &View, theme: &Theme) {
         .title_bottom(key_bar(&keys(game, view), theme).centered());
     let inner = block.inner(outer);
     frame.render_widget(block, outer);
-    frame.render_widget(Board { game, view, theme }, inner);
+    let rung = view.hint.as_ref().map(|open| open.hint.rung(open.rung));
+    frame.render_widget(
+        Board {
+            game,
+            view,
+            theme,
+            rung,
+        },
+        inner,
+    );
     panel(frame, side, view, theme);
 }
 
@@ -274,6 +283,8 @@ struct Board<'a> {
     game: &'a Game,
     view: &'a View,
     theme: &'a Theme,
+    /// What the open hint shows at its rung.
+    rung: Option<Rung>,
 }
 
 impl Widget for Board<'_> {
@@ -379,7 +390,10 @@ impl Board<'_> {
             Some(digit) => {
                 // On a solved board every digit is complete, and dimming them
                 // all would grey out the finished puzzle.
-                let colour = if conflict {
+                let checked = self.view.checked.contains(&(cell, digit));
+                let colour = if checked {
+                    self.theme.wrong_digit
+                } else if conflict {
                     self.theme.conflict
                 } else if self.game.is_complete(digit) && !self.game.is_won() {
                     self.theme.dimmed
@@ -388,15 +402,61 @@ impl Board<'_> {
                 } else {
                     self.theme.digit
                 };
+                let mut style = Style::new().fg(colour).add_modifier(Modifier::BOLD);
+                if checked {
+                    style = style.add_modifier(Modifier::UNDERLINED);
+                }
                 buf.set_string(
                     x + CELL_WIDTH / 2,
                     y + CELL_HEIGHT / 2,
                     digit.to_string(),
-                    Style::new().fg(colour).add_modifier(Modifier::BOLD),
+                    style,
                 );
             }
             None if !self.view.notes_hidden => self.render_notes(cell, x, y, buf),
             None => {}
+        }
+        self.render_hint_marks(cell, x, y, buf);
+    }
+
+    /// What the open hint writes in a cell: the candidates it removes,
+    /// crossed out, or the digit it places, which takes the cell's notes'
+    /// place.
+    fn render_hint_marks(&self, cell: Cell, x: u16, y: u16, buf: &mut Buffer) {
+        let Some(rung) = &self.rung else { return };
+        for &(c, digits) in rung.removals.iter().filter(|&&(c, _)| c == cell) {
+            debug_assert_eq!(c, cell);
+            for digit in digits.iter() {
+                let spot = u16::from(digit - 1);
+                buf.set_string(
+                    x + 1 + 2 * (spot % 3),
+                    y + spot / 3,
+                    digit.to_string(),
+                    Style::new()
+                        .fg(self.theme.hint_removal)
+                        .add_modifier(Modifier::CROSSED_OUT),
+                );
+            }
+        }
+        if let Some((c, digit)) = rung.placement
+            && c == cell
+        {
+            for dy in 0..CELL_HEIGHT {
+                buf.set_string(
+                    x + 1,
+                    y + dy,
+                    " ".repeat(usize::from(CELL_WIDTH) - 2),
+                    Style::new(),
+                );
+            }
+            buf.set_string(
+                x + CELL_WIDTH / 2,
+                y + CELL_HEIGHT / 2,
+                digit.to_string(),
+                Style::new()
+                    .fg(self.theme.hint_placement)
+                    .add_modifier(Modifier::BOLD),
+            );
         }
     }
 
@@ -427,8 +487,10 @@ impl Board<'_> {
         }
     }
 
-    /// The cursor wins over the filter and the same-digit highlight, and
-    /// those win over the shading of the cursor's row, column and box. The
+    /// A hint's cells win over everything, the cursor's corner marks being
+    /// enough to find the cursor. The cursor wins over the filter and the
+    /// same-digit highlight, and those win over a hint's area, which wins
+    /// over the shading of the cursor's row, column and box. The
     /// filter lights only empty cells and the same-digit highlight only
     /// filled ones, so those two never compete.
     fn background(&self, cell: Cell) -> Option<Color> {
@@ -440,12 +502,19 @@ impl Board<'_> {
             None => false,
         };
         let digit = game.board().get(cell);
-        if cell == cursor {
+        let rung = self.rung.as_ref();
+        if rung.is_some_and(|r| r.cells.contains(&cell)) {
+            Some(self.theme.hint_cell)
+        } else if cell == cursor {
             Some(self.theme.cursor)
         } else if filtered {
             Some(self.theme.filter)
         } else if digit.is_some() && digit == game.board().get(cursor) {
             Some(self.theme.same_digit)
+        } else if rung.is_some_and(|r| {
+            r.second_group.contains(&cell) || r.areas.iter().any(|h| h.contains(cell))
+        }) {
+            Some(self.theme.hint_area)
         } else if sees(cell, cursor) {
             Some(self.theme.peer)
         } else {
@@ -572,6 +641,225 @@ mod tests {
         // The line between the numbers is still there.
         assert_eq!(b[(6, 1)].symbol(), "━");
         assert_eq!(b[(1, 5)].symbol(), "┠");
+    }
+
+    /// A pointing pair in box 9 along row 9: r9c8 and r9c9 hold the digit 3
+    /// in the box, so r9c2 loses its 3.
+    fn pointing_hint() -> Hint {
+        use sumi_core::grid::House;
+        use sumi_core::hint::StepHint;
+        let three: sumi_core::digits::Digits = [3].into_iter().collect();
+        Hint::Step(Box::new(StepHint {
+            step: sumi_core::step::Step {
+                technique: &sumi_core::technique::Pointing,
+                digits: three,
+                houses: vec![House::Box(8), House::Row(8)],
+                cells: vec![79, 80],
+                removals: vec![(73, three)],
+                placement: None,
+                key_cells: vec![],
+            },
+            level: sumi_core::technique::Level::Medium,
+            count: 2,
+        }))
+    }
+
+    fn open_hint(hint: Hint, rung: usize) -> View {
+        View {
+            hint: Some(OpenHint { hint, rung }),
+            ..View::default()
+        }
+    }
+
+    fn background_at(game: &Game, view: &View, cell: Cell) -> Color {
+        render(game, view).buffer()[middle(cell)].bg
+    }
+
+    #[test]
+    fn a_hint_shades_its_area_then_marks_its_cells() {
+        let theme = Theme::tokyo_night_amoled();
+        let game = game();
+        let at = |rung, cell| background_at(&game, &open_hint(pointing_hint(), rung), cell);
+        // r8c8 is in box 9 only: not the pattern, and not a peer of the cursor.
+        assert_ne!(at(2, 70), theme.hint_area);
+        assert_eq!(at(3, 70), theme.hint_area);
+        assert_eq!(at(3, 79), theme.hint_area);
+        assert_eq!(at(4, 79), theme.hint_cell);
+        assert_eq!(at(4, 70), theme.hint_area);
+        // r9c1 is in row 9 and a peer of the cursor: the hint wins.
+        assert_eq!(at(3, 72), theme.hint_area);
+    }
+
+    #[test]
+    fn a_hint_cell_beats_the_cursor() {
+        let theme = Theme::tokyo_night_amoled();
+        let mut game = game();
+        go(&mut game, 79);
+        let view = open_hint(pointing_hint(), 4);
+        assert_eq!(background_at(&game, &view, 79), theme.hint_cell);
+        // The corner marks still show where the cursor is.
+        let (x, y) = middle(79);
+        assert_eq!(render(&game, &view).buffer()[(x - 3, y - 1)].symbol(), "┌");
+    }
+
+    #[test]
+    fn the_last_rung_crosses_out_the_candidates_it_removes() {
+        let theme = Theme::tokyo_night_amoled();
+        let game = game();
+        let (x, y) = middle(73);
+        let spot = |backend: &TestBackend| backend.buffer()[(x + 2, y - 1)].clone();
+        let before = spot(&render(&game, &open_hint(pointing_hint(), 4)));
+        assert_eq!(before.symbol(), " ", "3 is not drawn before the last rung");
+        let after = spot(&render(&game, &open_hint(pointing_hint(), 5)));
+        assert_eq!(after.symbol(), "3");
+        assert_eq!(after.fg, theme.hint_removal);
+        assert!(after.modifier.contains(Modifier::CROSSED_OUT));
+    }
+
+    #[test]
+    fn the_last_rung_writes_the_digit_it_places() {
+        let theme = Theme::tokyo_night_amoled();
+        let game = game();
+        let hint = game.hint();
+        let (cell, digit) = hint.step().unwrap().placement.unwrap();
+        let centre =
+            |rung| render(&game, &open_hint(hint.clone(), rung)).buffer()[middle(cell)].clone();
+        assert_eq!(centre(4).symbol(), " ");
+        let placed = centre(5);
+        assert_eq!(placed.symbol(), digit.to_string());
+        assert_eq!(placed.fg, theme.hint_placement);
+        assert!(placed.modifier.contains(Modifier::BOLD));
+    }
+
+    /// The placed digit takes the cell over: the other candidates written in
+    /// it do not show around the digit.
+    #[test]
+    fn a_placed_digit_replaces_the_cells_candidates() {
+        let mut game = game();
+        game.fill_candidates();
+        let hint = game.hint();
+        let (cell, digit) = hint.step().unwrap().placement.unwrap();
+        let other = (1..=9).find(|&d| d != digit && d != 5 && game.candidates(cell).contains(d));
+        let other = other.expect("the cell lists a second candidate");
+        let (x, y) = middle(cell);
+        let spot = |backend: &TestBackend| {
+            let n = u16::from(other - 1);
+            backend.buffer()[(x - 2 + 2 * (n % 3), y - 1 + n / 3)]
+                .symbol()
+                .to_string()
+        };
+        assert_eq!(
+            spot(&render(&game, &open_hint(hint.clone(), 4))),
+            other.to_string()
+        );
+        assert_eq!(spot(&render(&game, &open_hint(hint, 5))), " ");
+    }
+
+    #[test]
+    fn a_mistake_shades_its_box_then_marks_its_cell() {
+        let theme = Theme::tokyo_night_amoled();
+        let game = game();
+        let at = |rung, cell| background_at(&game, &open_hint(Hint::Mistake(20), rung), cell);
+        assert_ne!(at(1, 19), theme.hint_area);
+        assert_eq!(at(2, 19), theme.hint_area);
+        assert_eq!(at(2, 20), theme.hint_area);
+        assert_eq!(at(3, 20), theme.hint_cell);
+    }
+
+    #[test]
+    fn checked_digits_are_marked_while_they_stay_wrong() {
+        let theme = Theme::tokyo_night_amoled();
+        let mut game = game();
+        go(&mut game, 2);
+        game.press(1); // the answer is 4
+        let view = View {
+            checked: game.wrong_digits(),
+            ..View::default()
+        };
+        let marked = render(&game, &view).buffer()[middle(2)].clone();
+        assert_eq!(marked.fg, theme.wrong_digit);
+        assert!(marked.modifier.contains(Modifier::UNDERLINED));
+
+        game.press(2); // another wrong digit: not what was checked
+        let again = render(&game, &view).buffer()[middle(2)].clone();
+        assert_eq!(again.fg, theme.digit);
+        game.press(4);
+        assert_eq!(render(&game, &view).buffer()[middle(2)].fg, theme.digit);
+    }
+
+    /// The screen as text, then what the colours say about each board cell:
+    /// `!` a placed digit, `x` a removed candidate, `w` a wrong digit, `#` a
+    /// hint's cell, `+` its area, `.` nothing. Snapshots of text alone would
+    /// not show any of that.
+    fn described(backend: &TestBackend) -> String {
+        let theme = Theme::tokyo_night_amoled();
+        let buffer = backend.buffer();
+        let mut map = String::new();
+        for r in 0..9 {
+            for c in 0..9 {
+                let cell = r * 9 + c;
+                let (x, y) = middle(cell);
+                let fg = |dx: i16, dy: i16, colour| {
+                    buffer[((x as i16 + dx) as u16, (y as i16 + dy) as u16)].fg == colour
+                };
+                let any = |colour| (-2..=2).any(|dx| (-1..=1).any(|dy| fg(dx, dy, colour)));
+                map.push(if any(theme.hint_placement) {
+                    '!'
+                } else if any(theme.hint_removal) {
+                    'x'
+                } else if any(theme.wrong_digit) {
+                    'w'
+                } else if buffer[(x, y)].bg == theme.hint_cell {
+                    '#'
+                } else if buffer[(x, y)].bg == theme.hint_area {
+                    '+'
+                } else {
+                    '.'
+                });
+            }
+            map.push('\n');
+        }
+        format!("{backend}\n{map}")
+    }
+
+    #[test]
+    fn each_rung_of_a_placing_hint() {
+        let game = game();
+        let hint = game.hint();
+        for rung in 1..=5 {
+            insta::assert_snapshot!(
+                format!("placing_rung_{rung}"),
+                described(&render(&game, &open_hint(hint.clone(), rung)))
+            );
+        }
+    }
+
+    #[test]
+    fn the_last_rung_of_a_removing_hint() {
+        let game = game();
+        insta::assert_snapshot!(described(&render(&game, &open_hint(pointing_hint(), 5))));
+    }
+
+    #[test]
+    fn the_cell_rung_of_a_mistake() {
+        let mut game = game();
+        go(&mut game, 2);
+        game.press(1);
+        let hint = game.hint();
+        assert_eq!(hint, Hint::Mistake(2));
+        insta::assert_snapshot!(described(&render(&game, &open_hint(hint, 3))));
+    }
+
+    #[test]
+    fn the_board_after_a_check() {
+        let mut game = game();
+        go(&mut game, 2);
+        game.press(1);
+        let view = View {
+            checked: game.wrong_digits(),
+            ..View::default()
+        };
+        insta::assert_snapshot!(described(&render(&game, &view)));
     }
 
     #[test]
