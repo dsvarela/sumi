@@ -19,10 +19,11 @@ use sumi_core::technique::Level;
 use crate::config::Config;
 use crate::game::Game;
 use crate::input::{Action, FilterKey, action, filter_key};
+use crate::menu::{Choice, Item, Kind, Menu};
 use crate::theme::Theme;
 use crate::ui::{self, Filter, OpenHint, View};
 
-/// Plays puzzles of `level`, or any generated puzzle without one. Fails
+/// Plays puzzles of `level`, or opens the main menu without one. Fails
 /// without changing the terminal when there is none to draw on.
 pub fn run(level: Option<Level>) -> io::Result<()> {
     let (config, theme, warnings) = start();
@@ -60,18 +61,33 @@ fn play(
     config: &Config,
     theme: &Theme,
 ) -> io::Result<()> {
-    let mut session = Session::new(rand::make_rng(), level, config);
+    let mut app = App::new(rand::make_rng(), level, config.clone(), Instant::now);
     loop {
-        session.view.time = session.time();
-        let mut board_shown = true;
+        if let Some(session) = &mut app.session {
+            session.view.time = session.time();
+        }
+        let mut shown = true;
         terminal.draw(|frame| {
-            board_shown = ui::fits(frame.area());
-            ui::draw(frame, &session.game, &session.view, theme);
+            shown = app.fits(frame.area());
+            match (&app.screen, &app.session) {
+                (Screen::Menu(menu), session) => {
+                    ui::draw_menu(frame, menu, &menu.items(session.is_some()), theme);
+                }
+                (Screen::Game, Some(session)) => {
+                    ui::draw(frame, &session.game, &session.view, theme);
+                }
+                (Screen::Game, None) => unreachable!("the game screen shows a game"),
+            }
         })?;
         // A running timer is redrawn as its seconds change; otherwise the
         // loop sleeps until a key arrives.
-        let event = match session.view.time {
-            Some(time) if session.clock_running() => {
+        let ticking = app.screen == Screen::Game
+            && app
+                .session
+                .as_ref()
+                .is_some_and(|s| s.view.time.is_some() && s.clock_running());
+        let event = match app.session.as_ref().and_then(|s| s.view.time) {
+            Some(time) if ticking => {
                 let to_next_second = Duration::from_millis(1000 - u64::from(time.subsec_millis()));
                 if !event::poll(to_next_second)? {
                     continue;
@@ -80,24 +96,158 @@ fn play(
             }
             _ => event::read()?,
         };
-        if session.handle(event, board_shown) == Flow::Quit {
+        if app.handle(event, shown) == Flow::Quit {
             return Ok(());
         }
     }
 }
 
+/// What a key in the game asks of the app around it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Flow {
     Continue,
     Quit,
+    /// Esc with nothing to close: the pause menu.
+    Menu,
+    /// Enter after a win: another puzzle of the same level.
+    NewGame,
 }
 
-/// The game being played, how it is shown, and where new puzzles come from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Screen {
+    Game,
+    Menu(Menu),
+}
+
+/// The screen showing, the game in progress if there is one, and where new
+/// puzzles come from.
+struct App {
+    screen: Screen,
+    session: Option<Session>,
+    rng: Xoshiro256PlusPlus,
+    /// The level new games are of; `None` is any level sumi can finish.
+    level: Option<Level>,
+    config: Config,
+    /// Where the time comes from; tests set their own.
+    clock: fn() -> Instant,
+}
+
+impl App {
+    /// A game of `level` straight away, or the main menu without one.
+    fn new(
+        rng: Xoshiro256PlusPlus,
+        level: Option<Level>,
+        config: Config,
+        clock: fn() -> Instant,
+    ) -> App {
+        let mut app = App {
+            screen: Screen::Menu(Menu::new(Kind::Main)),
+            session: None,
+            rng,
+            level,
+            config,
+            clock,
+        };
+        if level.is_some() {
+            app.start(level);
+        }
+        app
+    }
+
+    /// Whether the screen showing can be drawn in a window of this size.
+    fn fits(&self, area: ratatui::layout::Rect) -> bool {
+        match self.screen {
+            Screen::Game => ui::fits(area),
+            Screen::Menu(_) => ui::menu_fits(area),
+        }
+    }
+
+    /// Starts a game of `level`. Hidden candidates carry over from the last
+    /// game; the rest of its view doesn't.
+    fn start(&mut self, level: Option<Level>) {
+        self.level = level;
+        let notes_hidden = self.session.as_ref().is_some_and(|s| s.view.notes_hidden);
+        let game = new_game(&mut self.rng, level);
+        let mut session = Session::new(game, &self.config, self.clock);
+        session.view.notes_hidden = notes_hidden;
+        self.session = Some(session);
+        self.screen = Screen::Game;
+    }
+
+    fn resume(&mut self) {
+        if let Some(session) = &mut self.session {
+            session.game.start_clock((self.clock)());
+        }
+        self.screen = Screen::Game;
+    }
+
+    fn handle(&mut self, event: Event, shown: bool) -> Flow {
+        let Screen::Menu(menu) = &mut self.screen else {
+            let session = self.session.as_mut().expect("the game screen shows a game");
+            return match session.handle(event, shown) {
+                Flow::NewGame => {
+                    self.start(self.level);
+                    Flow::Continue
+                }
+                Flow::Menu => {
+                    session.game.stop_clock((self.clock)());
+                    self.screen = Screen::Menu(Menu::new(Kind::Pause));
+                    Flow::Continue
+                }
+                flow => flow,
+            };
+        };
+        let Some(key) = press(event) else {
+            return Flow::Continue;
+        };
+        let action = action(key);
+        if is_ctrl_c(key) || action == Some(Action::Quit) {
+            return Flow::Quit;
+        }
+        let (Some(action), true) = (action, shown) else {
+            return Flow::Continue;
+        };
+        let kind = menu.kind;
+        match menu.handle(action, self.session.is_some()) {
+            None => {}
+            Some(Choice::Back) => match kind {
+                Kind::Levels { from_pause: true } => {
+                    self.screen = Screen::Menu(Menu::new(Kind::Pause))
+                }
+                Kind::Levels { from_pause: false } => {
+                    self.screen = Screen::Menu(Menu::new(Kind::Main))
+                }
+                Kind::Pause => self.resume(),
+                Kind::Main => {}
+            },
+            Some(Choice::Chosen(item)) => match item {
+                Item::Continue | Item::Resume => self.resume(),
+                Item::NewGame => {
+                    let from_pause = kind == Kind::Pause;
+                    self.screen = Screen::Menu(Menu::new(Kind::Levels { from_pause }));
+                }
+                Item::Level(level) => self.start(Some(level)),
+                Item::MainMenu => self.screen = Screen::Menu(Menu::new(Kind::Main)),
+                Item::Quit => return Flow::Quit,
+            },
+        }
+        Flow::Continue
+    }
+}
+
+/// The key a press event carries. Terminals that report releases and
+/// repeats as separate events would otherwise apply every key twice.
+fn press(event: Event) -> Option<KeyEvent> {
+    match event {
+        Event::Key(key) if key.kind == KeyEventKind::Press => Some(key),
+        _ => None,
+    }
+}
+
+/// One game: the puzzle and the player's work, and how it is shown.
 struct Session {
     game: Game,
     view: View,
-    rng: Xoshiro256PlusPlus,
-    level: Option<Level>,
     /// Show the time played.
     timer: bool,
     /// Where the time comes from; tests set their own.
@@ -105,27 +255,18 @@ struct Session {
 }
 
 impl Session {
-    fn new(mut rng: Xoshiro256PlusPlus, level: Option<Level>, config: &Config) -> Session {
-        let game = new_game(&mut rng, level);
-        let mut session = Session {
+    /// Starts `game`, with its clock running.
+    fn new(mut game: Game, config: &Config, clock: fn() -> Instant) -> Session {
+        game.start_clock(clock());
+        Session {
             game,
             view: View {
                 highlights: config.highlights,
                 ..View::default()
             },
-            rng,
-            level,
             timer: config.timer,
-            clock: Instant::now,
-        };
-        session.game.start_clock((session.clock)());
-        session
-    }
-
-    /// Starts `game`, with its clock running.
-    fn begin(&mut self, game: Game) {
-        self.game = game;
-        self.game.start_clock((self.clock)());
+            clock,
+        }
     }
 
     /// The time to show, if the timer is on.
@@ -142,14 +283,9 @@ impl Session {
     /// board; keys then do nothing but quit, so nothing changes unseen, the
     /// view included.
     fn handle(&mut self, event: Event, board_shown: bool) -> Flow {
-        // Only presses act. Terminals that report releases and repeats as
-        // separate events would otherwise apply every key twice.
-        let Event::Key(key) = event else {
+        let Some(key) = press(event) else {
             return Flow::Continue;
         };
-        if key.kind != KeyEventKind::Press {
-            return Flow::Continue;
-        }
         if is_ctrl_c(key) {
             return Flow::Quit;
         }
@@ -226,17 +362,7 @@ impl Session {
         match action {
             Action::Quit => return Flow::Quit,
             Action::Help => self.view.help = true,
-            Action::Confirm if game.is_won() => {
-                let game = new_game(&mut self.rng, self.level);
-                self.begin(game);
-                // Hidden candidates and the highlight switches carry over;
-                // nothing else of the last game's view does.
-                self.view = View {
-                    notes_hidden: self.view.notes_hidden,
-                    highlights: self.view.highlights,
-                    ..View::default()
-                };
-            }
+            Action::Confirm if game.is_won() => return Flow::NewGame,
             // Once solved, the board and the view stay as they are until the
             // next game: Enter and quitting are the only keys that act.
             _ if game.is_won() => {}
@@ -259,8 +385,13 @@ impl Session {
             Action::Undo => game.undo(),
             Action::Redo => game.redo(),
             Action::Hint => self.climb_hint(),
+            // Esc closes what is open, then clears check marks, then opens
+            // the pause menu.
             Action::Close => {
                 if self.view.hint.take().is_none() {
+                    if self.view.checked.is_empty() {
+                        return Flow::Menu;
+                    }
                     self.view.checked.clear();
                 }
             }
@@ -347,14 +478,7 @@ mod tests {
     use sumi_core::grade::grade;
 
     fn session() -> Session {
-        let mut s = Session::new(
-            Xoshiro256PlusPlus::seed_from_u64(1),
-            None,
-            &Config::default(),
-        );
-        s.clock = now;
-        s.begin(fixtures::game());
-        s
+        Session::new(fixtures::game(), &Config::default(), now)
     }
 
     thread_local! {
@@ -397,14 +521,14 @@ mod tests {
 
     #[test]
     fn the_clock_stops_at_the_win_and_a_new_game_starts_it_again() {
-        let mut s = session();
+        let mut app = app_with(fixtures::game());
         advance(7);
-        win(&mut s);
+        win(game_of(&mut app));
         advance(100);
-        assert_eq!(s.game.elapsed(now()), secs(7));
-        s.handle(key(KeyCode::Enter), true);
+        assert_eq!(game_of(&mut app).game.elapsed(now()), secs(7));
+        app.handle(key(KeyCode::Enter), true);
         advance(3);
-        assert_eq!(s.game.elapsed(now()), secs(3));
+        assert_eq!(game_of(&mut app).game.elapsed(now()), secs(3));
     }
 
     /// The time is there to show only with the timer on.
@@ -703,16 +827,25 @@ mod tests {
 
     #[test]
     fn a_new_game_starts_with_a_clean_view_but_keeps_hidden_candidates_and_switches() {
-        let mut s = session();
-        s.view.highlights.peer = false;
-        type_keys(&mut s, "v");
-        type_keys(&mut s, "ll1c");
-        type_keys(&mut s, "f3");
-        type_keys(&mut s, "?");
-        win(&mut s);
-        s.handle(key(KeyCode::Enter), true);
+        let config = Config {
+            highlights: crate::config::Highlights {
+                peer: false,
+                ..Default::default()
+            },
+            ..Config::default()
+        };
+        let mut app = App::new(Xoshiro256PlusPlus::seed_from_u64(1), None, config, now);
+        app.session = Some(Session::new(fixtures::game(), &app.config, now));
+        app.screen = Screen::Game;
+        let s = game_of(&mut app);
+        type_keys(s, "v");
+        type_keys(s, "ll1c");
+        type_keys(s, "f3");
+        type_keys(s, "?");
+        win(s);
+        app.handle(key(KeyCode::Enter), true);
         assert_eq!(
-            s.view,
+            game_of(&mut app).view,
             View {
                 notes_hidden: true,
                 highlights: crate::config::Highlights {
@@ -785,25 +918,141 @@ mod tests {
         assert!(s.game.is_won());
         assert_eq!(s.view.filter, None);
 
-        s.handle(key(KeyCode::Enter), true);
-        assert!(!s.game.is_won());
-        assert!(s.view.notes_hidden);
+        assert_eq!(s.handle(key(KeyCode::Enter), true), Flow::NewGame);
     }
 
     #[test]
     fn every_game_is_of_the_level_asked_for() {
         for level in [Level::Medium, Level::Hard] {
-            let mut s = Session::new(
+            let mut app = App::new(
                 Xoshiro256PlusPlus::seed_from_u64(2),
                 Some(level),
-                &Config::default(),
+                Config::default(),
+                now,
             );
+            let s = game_of(&mut app);
             assert_eq!(s.game.level(), Some(level));
             assert_eq!(grade(s.game.board()).unwrap().level, level);
             s.game = fixtures::game();
-            win(&mut s);
-            s.handle(key(KeyCode::Enter), true);
+            win(s);
+            app.handle(key(KeyCode::Enter), true);
+            let s = game_of(&mut app);
+            assert_eq!(s.game.level(), Some(level));
             assert_eq!(grade(s.game.board()).unwrap().level, level);
         }
+    }
+
+    /// An app playing `game`.
+    fn app_with(game: Game) -> App {
+        let mut app = App::new(
+            Xoshiro256PlusPlus::seed_from_u64(1),
+            None,
+            Config::default(),
+            now,
+        );
+        app.session = Some(Session::new(game, &app.config, now));
+        app.screen = Screen::Game;
+        app
+    }
+
+    fn game_of(app: &mut App) -> &mut Session {
+        app.session.as_mut().unwrap()
+    }
+
+    fn press_keys(app: &mut App, keys: &[KeyCode]) -> Flow {
+        for &code in keys {
+            if app.handle(key(code), true) == Flow::Quit {
+                return Flow::Quit;
+            }
+        }
+        Flow::Continue
+    }
+
+    fn menu_kind(app: &App) -> Option<Kind> {
+        match &app.screen {
+            Screen::Menu(menu) => Some(menu.kind),
+            Screen::Game => None,
+        }
+    }
+
+    /// Bare sumi opens the main menu with no game; New game and a level
+    /// start one, Medium unless another is picked.
+    #[test]
+    fn the_main_menu_starts_a_game_of_the_level_picked() {
+        let mut app = App::new(
+            Xoshiro256PlusPlus::seed_from_u64(3),
+            None,
+            Config::default(),
+            now,
+        );
+        assert_eq!(menu_kind(&app), Some(Kind::Main));
+        assert!(app.session.is_none());
+        press_keys(&mut app, &[KeyCode::Enter]);
+        assert_eq!(menu_kind(&app), Some(Kind::Levels { from_pause: false }));
+        press_keys(&mut app, &[KeyCode::Esc]);
+        assert_eq!(menu_kind(&app), Some(Kind::Main));
+        press_keys(
+            &mut app,
+            &[KeyCode::Enter, KeyCode::Char('k'), KeyCode::Enter],
+        );
+        assert_eq!(app.screen, Screen::Game);
+        assert_eq!(game_of(&mut app).game.level(), Some(Level::Easy));
+    }
+
+    /// Esc with nothing open opens the pause menu and stops the clock; Esc
+    /// or Resume goes back to the game and starts it again.
+    #[test]
+    fn esc_opens_the_pause_menu_which_stops_the_clock() {
+        let mut app = app_with(fixtures::game());
+        advance(5);
+        press_keys(&mut app, &[KeyCode::Esc]);
+        assert_eq!(menu_kind(&app), Some(Kind::Pause));
+        advance(60);
+        press_keys(&mut app, &[KeyCode::Esc]);
+        assert_eq!(app.screen, Screen::Game);
+        advance(1);
+        press_keys(&mut app, &[KeyCode::Esc, KeyCode::Enter]);
+        assert_eq!(app.screen, Screen::Game, "Resume is first");
+        assert_eq!(game_of(&mut app).game.elapsed(now()), secs(6));
+    }
+
+    /// From the pause menu, the main menu offers Continue, which goes back
+    /// to the same game.
+    #[test]
+    fn the_main_menu_continues_the_game_in_progress() {
+        let mut app = app_with(fixtures::game());
+        type_keys(game_of(&mut app), "ll4");
+        let revision = game_of(&mut app).game.revision();
+        press_keys(
+            &mut app,
+            &[KeyCode::Esc, KeyCode::Char('k'), KeyCode::Enter],
+        );
+        assert_eq!(menu_kind(&app), Some(Kind::Main));
+        press_keys(&mut app, &[KeyCode::Enter]);
+        assert_eq!(app.screen, Screen::Game);
+        assert_eq!(game_of(&mut app).game.revision(), revision);
+    }
+
+    /// New game from the pause menu lists the levels; Esc goes back to the
+    /// pause menu, not the main one.
+    #[test]
+    fn the_level_list_goes_back_where_it_came_from() {
+        let mut app = app_with(fixtures::game());
+        press_keys(
+            &mut app,
+            &[KeyCode::Esc, KeyCode::Char('j'), KeyCode::Enter],
+        );
+        assert_eq!(menu_kind(&app), Some(Kind::Levels { from_pause: true }));
+        press_keys(&mut app, &[KeyCode::Esc]);
+        assert_eq!(menu_kind(&app), Some(Kind::Pause));
+    }
+
+    #[test]
+    fn q_quits_from_any_menu_and_keys_do_nothing_in_a_window_too_small() {
+        let mut app = app_with(fixtures::game());
+        press_keys(&mut app, &[KeyCode::Esc]);
+        assert_eq!(app.handle(key(KeyCode::Enter), false), Flow::Continue);
+        assert_eq!(menu_kind(&app), Some(Kind::Pause));
+        assert_eq!(press_keys(&mut app, &[KeyCode::Char('q')]), Flow::Quit);
     }
 }

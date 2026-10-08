@@ -1,0 +1,22 @@
+---
+source: crates/sumi-sudoku/src/ui.rs
+expression: "render_menu(&main, true, (38, 18))"
+---
+"                                      "
+"                                      "
+"                                      "
+"        ╭─────────────────────╮       "
+"        │                     │       "
+"        │                  ▀  │       "
+"        │  ▄█▀▀ █  █ █▀█▀▄ █  │       "
+"        │  ▄▄█▀ ▀▄▄█ █ █ █ █  │       "
+"        │                     │       "
+"        │  › Continue         │       "
+"        │    New game         │       "
+"        │    Quit             │       "
+"        │                     │       "
+"        ╰─────────────────────╯       "
+"     jk move  Enter choose  q quit    "
+"                                      "
+"                                      "
+"                                      "

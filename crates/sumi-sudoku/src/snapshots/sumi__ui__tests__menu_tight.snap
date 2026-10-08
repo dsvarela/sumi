@@ -1,0 +1,16 @@
+---
+source: crates/sumi-sudoku/src/ui.rs
+expression: "render_menu(&pause, true, MENU_NEEDED)"
+---
+"                        "
+"    ╭───────────────╮   "
+"    │               │   "
+"    │  sumi         │   "
+"    │               │   "
+"    │  › Resume     │   "
+"    │    New game   │   "
+"    │    Main menu  │   "
+"    │               │   "
+"    ╰───────────────╯   "
+"  jk move  Enter choose "
+"    Esc back  q quit    "

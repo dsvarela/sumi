@@ -194,6 +194,11 @@ pub fn key_label(action: Action) -> &'static str {
     }
 }
 
+/// The keys that move up and down a list, for a menu's key bar.
+pub fn up_down_label() -> &'static str {
+    "jk"
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -288,6 +293,19 @@ mod tests {
         assert_eq!(action(alt_h), None);
         let ctrl_h = KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL);
         assert_eq!(action(ctrl_h), Some(Action::Clear));
+    }
+
+    #[test]
+    fn the_up_and_down_label_names_keys_that_move_up_and_down() {
+        let label: Vec<char> = up_down_label().chars().collect();
+        assert_eq!(
+            action(key(KeyCode::Char(label[0]))),
+            Some(Action::Step(Direction::Down))
+        );
+        assert_eq!(
+            action(key(KeyCode::Char(label[1]))),
+            Some(Action::Step(Direction::Up))
+        );
     }
 
     #[test]

@@ -15,7 +15,8 @@ use sumi_core::technique::Level;
 
 use crate::config::Highlights;
 use crate::game::{Game, Mode};
-use crate::input::{Action, key_label};
+use crate::input::{Action, key_label, up_down_label};
+use crate::menu::{Item, Menu};
 use crate::theme::Theme;
 
 /// A cell is 3 rows tall in both layouts, with a one-character line between
@@ -156,7 +157,7 @@ pub fn draw(frame: &mut Frame, game: &Game, view: &View, theme: &Theme) {
     let area = frame.area();
     frame.render_widget(Block::new().style(Style::new().bg(theme.background)), area);
     let Some(density) = density(area) else {
-        too_small(frame, theme);
+        too_small(frame, theme, Density::Dense.needed());
         return;
     };
     let rung = view.hint.as_ref().map(|open| open.hint.rung(open.rung));
@@ -179,6 +180,7 @@ pub fn draw(frame: &mut Frame, game: &Game, view: &View, theme: &Theme) {
     ])
     .areas(whole);
     let block = frame_block(theme)
+        .title_top(title(theme))
         .title_top(status(game, view, theme, STATUS_WIDTH).right_aligned())
         .title_bottom(key_bar(&keys(game, view), theme).centered());
     let inner = block.inner(outer);
@@ -473,12 +475,12 @@ fn keys(game: &Game, view: &View) -> Vec<(&'static str, &'static str)> {
         .collect()
 }
 
-/// The rounded frame every screen sits in, titled with the program's name.
+/// The rounded frame every screen sits in. A game titles it with the
+/// program's name; a menu has the logo inside.
 pub fn frame_block(theme: &Theme) -> Block<'static> {
     Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(theme.frame))
-        .title_top(title(theme))
 }
 
 fn title(theme: &Theme) -> Line<'static> {
@@ -539,7 +541,7 @@ fn help_words(action: Action) -> &'static str {
         Action::Confirm => "apply hint, go to mistake",
         Action::Check => "check for mistakes",
         Action::Reveal => "reveal this cell",
-        Action::Close => "close, or clear marks",
+        Action::Close => "close, clear marks, menu",
         Action::Undo => "undo",
         Action::Redo => "redo",
         Action::Help => "this list",
@@ -598,9 +600,8 @@ fn key_list(theme: &Theme) -> Paragraph<'static> {
 }
 
 /// The message wraps, so a narrow window still shows as much of it as fits.
-fn too_small(frame: &mut Frame, theme: &Theme) {
+fn too_small(frame: &mut Frame, theme: &Theme, smallest: (u16, u16)) {
     let area = frame.area();
-    let smallest = Density::Dense.needed();
     let message = format!(
         "Make the window at least {}×{}. It is {}×{} now.",
         smallest.0, smallest.1, area.width, area.height
@@ -969,6 +970,135 @@ fn junction(kx: u16, ky: u16) -> (&'static str, bool) {
         },
     };
     (symbol, heavy_v || heavy_h)
+}
+
+/// The logo as pixels: lowercase "sumi", 17 wide and 6 tall, the dot of
+/// the i on the top row.
+const LOGO: [&str; 6] = [
+    "................#",
+    ".................",
+    ".###.#..#.####..#",
+    "##...#..#.#.#.#.#",
+    "..##.#..#.#.#.#.#",
+    "###...###.#.#.#.#",
+];
+
+/// The logo drawn with half blocks, each pixel `scale` characters wide and
+/// `scale` half rows tall: 3 rows at scale 1, 6 at scale 2.
+fn logo(scale: usize) -> Vec<String> {
+    let pixels: Vec<Vec<bool>> = LOGO
+        .iter()
+        .flat_map(|row| {
+            let wide: Vec<bool> = row
+                .chars()
+                .flat_map(|c| std::iter::repeat_n(c == '#', scale))
+                .collect();
+            std::iter::repeat_n(wide, scale)
+        })
+        .collect();
+    pixels
+        .chunks(2)
+        .map(|pair| {
+            (0..pair[0].len())
+                .map(|x| match (pair[0][x], pair[1][x]) {
+                    (true, true) => '█',
+                    (true, false) => '▀',
+                    (false, true) => '▄',
+                    (false, false) => ' ',
+                })
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect()
+}
+
+/// The smallest window a menu can be drawn in: the name in plain text, four
+/// items, the frame, and a key bar of two rows.
+const MENU_NEEDED: (u16, u16) = (24, 12);
+
+pub fn menu_fits(area: Rect) -> bool {
+    area.width >= MENU_NEEDED.0 && area.height >= MENU_NEEDED.1
+}
+
+/// The keys a menu offers.
+fn menu_keys(menu: &Menu) -> Vec<(&'static str, &'static str)> {
+    let mut keys = vec![
+        (up_down_label(), "move"),
+        (key_label(Action::Confirm), "choose"),
+    ];
+    if menu.has_back() {
+        keys.push((key_label(Action::Close), "back"));
+    }
+    keys.push((key_label(Action::Quit), "quit"));
+    keys
+}
+
+/// A menu in its frame, with the biggest logo that fits above the items
+/// and the key bar under it.
+pub fn draw_menu(frame: &mut Frame, menu: &Menu, items: &[Item], theme: &Theme) {
+    let area = frame.area();
+    frame.render_widget(Block::new().style(Style::new().bg(theme.background)), area);
+    if !menu_fits(area) {
+        too_small(frame, theme, MENU_NEEDED);
+        return;
+    }
+    let keys = key_bar_lines(&menu_keys(menu), theme, usize::from(area.width));
+    let rows = items.len() as u16;
+    // The frame and a row of space inside it, top and bottom.
+    let around = 4 + keys.len() as u16;
+    let fits = |logo: &[String]| {
+        let width = logo.iter().map(|l| l.chars().count()).max().unwrap_or(0) as u16;
+        area.width >= width + 6 && area.height >= logo.len() as u16 + 1 + rows + around
+    };
+    let logo = [logo(2), logo(1)]
+        .into_iter()
+        .find(|logo| fits(logo))
+        .unwrap_or_else(|| vec!["sumi".to_string()]);
+    let width = logo
+        .iter()
+        .map(|l| l.chars().count())
+        .chain(items.iter().map(|item| item.label().len() + 2))
+        .max()
+        .unwrap_or(0) as u16
+        + 6;
+    let height = logo.len() as u16 + 1 + rows + 4;
+    let [boxed, key_rows] = Layout::vertical([
+        Constraint::Length(height),
+        Constraint::Length(keys.len() as u16),
+    ])
+    .areas(area.centered(
+        Constraint::Length(width.min(area.width)),
+        Constraint::Length(height + keys.len() as u16),
+    ));
+    let block = frame_block(theme);
+    let inner = block.inner(boxed).inner(ratatui::layout::Margin::new(1, 1));
+    frame.render_widget(block, boxed);
+    let accent = Style::new().fg(theme.accent).add_modifier(Modifier::BOLD);
+    let mut lines: Vec<Line> = logo
+        .into_iter()
+        .map(|l| Line::from(Span::styled(l, accent)))
+        .collect();
+    lines.push(Line::default());
+    for (i, item) in items.iter().enumerate() {
+        // The marker shows the selection without relying on colour.
+        let line = if i == menu.selected {
+            Span::styled(format!("› {}", item.label()), accent)
+        } else {
+            Span::styled(format!("  {}", item.label()), Style::new().fg(theme.text))
+        };
+        lines.push(Line::from(line));
+    }
+    let width_of = |line: &Line| line.width();
+    let column = lines.iter().map(width_of).max().unwrap_or(0) as u16;
+    let column_area = inner.centered_horizontally(Constraint::Length(column.min(inner.width)));
+    frame.render_widget(Paragraph::new(lines), column_area);
+    let keys_area = Rect {
+        x: area.x,
+        width: area.width,
+        ..key_rows
+    };
+    frame.render_widget(Paragraph::new(keys).centered(), keys_area);
 }
 
 #[cfg(test)]
@@ -2230,5 +2360,48 @@ mod tests {
         let five = |view: &View| render(&complete, view).buffer()[middle(0)].fg;
         assert_eq!(five(&View::default()), theme.dimmed);
         assert_eq!(five(&off(|h| h.complete_digits = false)), theme.clue);
+    }
+
+    fn render_menu(menu: &Menu, in_progress: bool, size: (u16, u16)) -> TestBackend {
+        let mut terminal = Terminal::new(TestBackend::new(size.0, size.1)).unwrap();
+        let theme = Theme::tokyo_night_amoled();
+        let items = menu.items(in_progress);
+        terminal
+            .draw(|frame| draw_menu(frame, menu, &items, &theme))
+            .unwrap();
+        terminal.backend().clone()
+    }
+
+    /// The menu takes the biggest logo that fits: 6 rows, 3 rows, or the
+    /// name in plain text.
+    #[test]
+    fn menus_in_three_window_sizes() {
+        use crate::menu::Kind;
+        let main = Menu::new(Kind::Main);
+        insta::assert_snapshot!("menu_wide", render_menu(&main, true, (80, 30)));
+        insta::assert_snapshot!("menu_phone", render_menu(&main, true, (38, 18)));
+        let pause = Menu::new(Kind::Pause);
+        insta::assert_snapshot!("menu_tight", render_menu(&pause, true, MENU_NEEDED));
+    }
+
+    #[test]
+    fn a_menu_in_a_window_too_small_says_how_big_to_make_it() {
+        let menu = Menu::new(crate::menu::Kind::Main);
+        let backend = render_menu(&menu, false, (MENU_NEEDED.0 - 1, MENU_NEEDED.1));
+        let text: String = backend
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(text.contains("24×12"), "{text}");
+    }
+
+    #[test]
+    fn the_logo_is_the_same_picture_at_both_scales() {
+        let (small, big) = (logo(1), logo(2));
+        assert_eq!((small.len(), big.len()), (3, 6));
+        let width = |rows: &[String]| rows.iter().map(|r| r.chars().count()).max().unwrap();
+        assert_eq!((width(&small), width(&big)), (17, 34));
     }
 }

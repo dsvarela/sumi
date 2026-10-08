@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
-#[derive(Debug, Default, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Config {
     /// The id of the theme to start with: a file name in `themes/`, without

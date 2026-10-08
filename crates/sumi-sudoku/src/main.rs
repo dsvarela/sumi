@@ -7,6 +7,7 @@ mod config;
 mod fixtures;
 mod game;
 mod input;
+mod menu;
 mod theme;
 mod ui;
 
