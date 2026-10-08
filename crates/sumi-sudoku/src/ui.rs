@@ -115,6 +115,11 @@ fn panel(frame: &mut Frame, area: Rect, view: &View, theme: &Theme) {
     let block = panel_block(theme, "Hint");
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    frame.render_widget(panel_text(view, theme), inner);
+}
+
+/// The panel's words, wrapped as they are drawn.
+fn panel_text(view: &View, theme: &Theme) -> Paragraph<'static> {
     let text = match &view.hint {
         Some(open) => {
             let rung = open.hint.rung(open.rung);
@@ -131,7 +136,7 @@ fn panel(frame: &mut Frame, area: Rect, view: &View, theme: &Theme) {
             Style::new().fg(theme.dimmed),
         ))],
     };
-    frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: true }), inner);
+    Paragraph::new(text).wrap(Wrap { trim: true })
 }
 
 /// The block that holds a panel's text, with a title.
@@ -1181,7 +1186,7 @@ mod tests {
     }
 
     /// The panel's rows as text, with the trailing spaces gone.
-    fn panel_text(backend: &TestBackend) -> Vec<String> {
+    fn panel_rows(backend: &TestBackend) -> Vec<String> {
         let buffer = backend.buffer();
         let top = BOARD_HEIGHT + 2;
         (top + 1..top + PANEL_HEIGHT - 1)
@@ -1198,12 +1203,55 @@ mod tests {
     #[test]
     fn the_panel_says_how_to_ask_and_then_shows_the_rung() {
         let game = game();
-        let closed = panel_text(&render(&game, &View::default()));
+        let closed = panel_rows(&render(&game, &View::default()));
         assert_eq!(closed[0], "? for a hint");
 
-        let lines = panel_text(&render(&game, &open(&game, 2)));
+        let lines = panel_rows(&render(&game, &open(&game, 2)));
         assert_eq!(lines[0], "Rung 2 of 5");
         assert!(lines[1].starts_with("Look for"), "{lines:?}");
+    }
+
+    /// Every rung of every hint met while following hints through Hard and
+    /// Expert bank puzzles, and the mistake ladders, wrap within the panel
+    /// as ratatui wraps them. `PANEL_HEIGHT` holds two lines of text.
+    #[test]
+    fn every_rung_fits_the_panel() {
+        use rand::SeedableRng;
+        use sumi_core::technique::Level;
+        let theme = Theme::tokyo_night_amoled();
+        let area = Rect::new(0, 0, FRAME_WIDTH - 4, 10);
+        let rows_used = |hint: &Hint, rung: usize| {
+            let view = open_hint(hint.clone(), rung);
+            let mut buffer = Buffer::empty(area);
+            panel_text(&view, &theme).render(area, &mut buffer);
+            (0..area.height)
+                .filter(|&y| (0..area.width).any(|x| buffer[(x, y)].symbol() != " "))
+                .count()
+        };
+        let mut hints = vec![Hint::Mistake(80), Hint::StruckOut(80), Hint::Stuck];
+        let mut rng = rand::rngs::Xoshiro256PlusPlus::seed_from_u64(5);
+        for level in [Level::Hard, Level::Expert] {
+            for _ in 0..8 {
+                let mut game = Game::new(sumi_core::bank::pick(&mut rng, level).unwrap());
+                while let Some(step) = game.hint().step().cloned() {
+                    hints.push(game.hint());
+                    game.apply_hint(&step);
+                }
+            }
+        }
+        let mut longest = 0;
+        for hint in &hints {
+            for rung in 1..=hint.rungs() {
+                let used = rows_used(hint, rung);
+                longest = longest.max(used);
+                assert!(
+                    used <= usize::from(PANEL_HEIGHT - 2),
+                    "{}",
+                    hint.rung(rung).text
+                );
+            }
+        }
+        assert_eq!(longest, 3, "some rung uses both lines of text");
     }
 
     #[test]
