@@ -109,23 +109,17 @@ pub fn digits(digits: Digits) -> String {
 /// together ("Remove 4 candidates from r1c1 and r1c2."). The board shows
 /// which, and the effect and its reason stay within four lines of the panel.
 pub fn removing(removals: &[(Cell, Digits)]) -> String {
-    let mut groups: Vec<(Digits, Vec<Cell>)> = Vec::new();
-    for &(c, d) in removals {
-        match groups.iter_mut().find(|(set, _)| *set == d) {
-            Some((_, cells)) => cells.push(c),
-            None => groups.push((d, vec![c])),
+    let cells: Vec<Cell> = removals.iter().map(|&(c, _)| c).collect();
+    let place = cells_up_to(&cells, 2);
+    match removals.first() {
+        Some(&(_, first)) if removals.iter().all(|&(_, d)| d == first) => {
+            format!("Remove {} from {place}.", digits(first))
+        }
+        _ => {
+            let count: usize = removals.iter().map(|(_, d)| d.len()).sum();
+            format!("Remove {count} candidates from {place}.")
         }
     }
-    if groups.len() > 1 {
-        let cells: Vec<Cell> = removals.iter().map(|&(c, _)| c).collect();
-        let count: usize = removals.iter().map(|(_, d)| d.len()).sum();
-        return format!("Remove {count} candidates from {}.", cells_up_to(&cells, 2));
-    }
-    let parts: Vec<String> = groups
-        .iter()
-        .map(|(d, c)| format!("{} from {}", digits(*d), cells_up_to(c, 2)))
-        .collect();
-    format!("Remove {}.", parts.join(" and "))
 }
 
 /// "r2c2 sees both", "these cells see both".
