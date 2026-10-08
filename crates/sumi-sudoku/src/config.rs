@@ -1,10 +1,10 @@
 //! `config.toml` in the config directory. A missing file is the defaults.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Config {
     /// The id of the theme to start with: a file name in `themes/`, without
@@ -12,7 +12,35 @@ pub struct Config {
     pub theme: Option<String>,
     /// Show the time played. Off by default: sumi doesn't race a clock.
     pub timer: bool,
+    /// The rung a hint opens at, 1 to 5.
+    pub hint_start: usize,
+    pub marks_to_candidates: MarksToCandidates,
+    pub key_bar: bool,
     pub highlights: Highlights,
+}
+
+impl Default for Config {
+    fn default() -> Config {
+        Config {
+            theme: None,
+            timer: false,
+            hint_start: 1,
+            marks_to_candidates: MarksToCandidates::Fill,
+            key_bar: true,
+            highlights: Highlights::default(),
+        }
+    }
+}
+
+/// What `t` does with box marks.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum MarksToCandidates {
+    /// Fill full candidates and clear the box marks.
+    #[default]
+    Fill,
+    /// Add each cell's box marks to its candidates.
+    Merge,
 }
 
 /// The highlights that can be switched off, all on by default. The filter
@@ -49,6 +77,42 @@ impl Config {
     /// Where sumi keeps its files, if the system has a home directory.
     pub fn dir() -> Option<PathBuf> {
         directories::ProjectDirs::from("", "", "sumi").map(|dirs| dirs.config_dir().to_path_buf())
+    }
+
+    /// Writes one setting into `config.toml` in `dir`, at `key` (a table's
+    /// name, then the key in it, for a key in a table). The rest of the file,
+    /// comments included, stays as it was; a missing file or directory is
+    /// created.
+    pub fn save(dir: &Path, key: &[&str], value: toml_edit::Value) -> Result<(), String> {
+        let path = dir.join("config.toml");
+        let src = match std::fs::read_to_string(&path) {
+            Ok(src) => src,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(err) => return Err(format!("{}: {err}", path.display())),
+        };
+        let mut doc: toml_edit::DocumentMut = src
+            .parse()
+            .map_err(|err| format!("{}: {err}", path.display()))?;
+        let (last, tables) = key.split_last().expect("a key has a name");
+        let mut table = doc.as_table_mut();
+        for name in tables {
+            table = table
+                .entry(name)
+                .or_insert(toml_edit::table())
+                .as_table_mut()
+                .ok_or_else(|| format!("{}: {name} isn't a table", path.display()))?;
+        }
+        // A value already there keeps the spaces and comment around it.
+        match table.get_mut(last).and_then(toml_edit::Item::as_value_mut) {
+            Some(old) => {
+                let decor = old.decor().clone();
+                *old = value;
+                *old.decor_mut() = decor;
+            }
+            None => table[*last] = toml_edit::value(value),
+        }
+        std::fs::create_dir_all(dir).map_err(|err| format!("{}: {err}", dir.display()))?;
+        std::fs::write(&path, doc.to_string()).map_err(|err| format!("{}: {err}", path.display()))
     }
 
     /// Reads `config.toml` from `dir`. A file that can't be read or parsed
@@ -89,6 +153,46 @@ mod tests {
         assert!(config.timer);
         assert!(!config.highlights.peer);
         assert!(config.highlights.same_digit);
+    }
+
+    #[test]
+    fn the_rest_of_the_defaults() {
+        let config = Config::parse("").unwrap();
+        assert_eq!(config.hint_start, 1);
+        assert_eq!(config.marks_to_candidates, MarksToCandidates::Fill);
+        assert!(config.key_bar);
+        let config = Config::parse("marks_to_candidates = \"merge\"").unwrap();
+        assert_eq!(config.marks_to_candidates, MarksToCandidates::Merge);
+    }
+
+    /// Saving one setting keeps the rest of the file, comments included,
+    /// and makes the file when there is none.
+    #[test]
+    fn saving_a_setting_keeps_the_rest_of_the_file() {
+        let dir = std::env::temp_dir().join(format!("sumi-save-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        Config::save(&dir, &["timer"], true.into()).unwrap();
+        let path = dir.join("config.toml");
+        assert!(
+            Config::parse(&std::fs::read_to_string(&path).unwrap())
+                .unwrap()
+                .timer
+        );
+
+        std::fs::write(&path, "# mine\ntheme = \"nord\" # dark\n").unwrap();
+        Config::save(&dir, &["highlights", "peer"], false.into()).unwrap();
+        Config::save(&dir, &["hint_start"], 3i64.into()).unwrap();
+        Config::save(&dir, &["theme"], "gruvbox".into()).unwrap();
+        let src = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(
+            src.starts_with("# mine\ntheme = \"gruvbox\" # dark\n"),
+            "{src}"
+        );
+        let config = Config::parse(&src).unwrap();
+        assert_eq!(config.theme.as_deref(), Some("gruvbox"));
+        assert!(!config.highlights.peer);
+        assert_eq!(config.hint_start, 3);
     }
 
     #[test]

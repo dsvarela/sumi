@@ -13,10 +13,12 @@ use sumi_core::grid::{Cell, col, row, sees};
 use sumi_core::hint::{Hint, Rung};
 use sumi_core::technique::Level;
 
+use crate::config::Config;
 use crate::config::Highlights;
-use crate::game::{Game, Mode};
-use crate::input::{Action, key_label, up_down_label};
+use crate::game::{CandidatesFromMarks, Game, Mode};
+use crate::input::{Action, key_label, left_right_label, up_down_label};
 use crate::menu::{Item, Menu};
+use crate::settings::{GROUPS, Page};
 use crate::theme::Theme;
 
 /// A cell is 3 rows tall in both layouts, with a one-character line between
@@ -111,6 +113,8 @@ pub struct View {
     /// The time played, when the timer is on.
     pub time: Option<std::time::Duration>,
     pub highlights: Highlights,
+    /// The settings hide the key bar.
+    pub key_bar_hidden: bool,
 }
 
 /// A hint on its way up the ladder.
@@ -182,7 +186,7 @@ pub fn draw(frame: &mut Frame, game: &Game, view: &View, theme: &Theme) {
     let block = frame_block(theme)
         .title_top(title(theme))
         .title_top(status(game, view, theme, STATUS_WIDTH).right_aligned())
-        .title_bottom(key_bar(&keys(game, view), theme).centered());
+        .title_bottom(key_bar(&shown_keys(game, view), theme).centered());
     let inner = block.inner(outer);
     frame.render_widget(block, outer);
     if view.help {
@@ -243,7 +247,7 @@ fn draw_dense(frame: &mut Frame, board: Board) {
         frame.render_widget(board, middle);
     }
     frame.render_widget(hint_text(game, view, theme), hint);
-    let lines = key_bar_lines(&keys(game, view), theme, usize::from(needed.0));
+    let lines = key_bar_lines(&shown_keys(game, view), theme, usize::from(needed.0));
     frame.render_widget(Paragraph::new(lines).centered(), keys_area);
 }
 
@@ -405,6 +409,15 @@ fn status(game: &Game, view: &View, theme: &Theme, width: usize) -> Line<'static
     ))
 }
 
+/// The key bar's keys: none when the settings hide it, except for the
+/// filter's prompt, which can't be read without them.
+fn shown_keys(game: &Game, view: &View) -> Vec<(&'static str, &'static str)> {
+    if view.key_bar_hidden && !view.awaiting_filter {
+        return Vec::new();
+    }
+    keys(game, view)
+}
+
 /// The keys the key bar offers, as key text and what the key does. Key
 /// text comes from `input::key_label`, so it always matches the bindings.
 /// Each list fits one line of the full layout; `i` lists the rest.
@@ -461,7 +474,13 @@ fn keys(game: &Game, view: &View) -> Vec<(&'static str, &'static str)> {
             ],
             Mode::BoxMark => vec![
                 (Action::Digit(1), "toggle"),
-                (Action::MarksToCandidates, "fill, drop marks"),
+                (
+                    Action::MarksToCandidates,
+                    match game.candidates_from_marks() {
+                        CandidatesFromMarks::Fill => "fill, drop marks",
+                        CandidatesFromMarks::Merge => "add to candidates",
+                    },
+                ),
                 (Action::NextMode, "mode"),
             ],
         }
@@ -532,7 +551,7 @@ fn help_words(action: Action) -> &'static str {
         Action::NextMode => "mode: digit, candidate, mark",
         Action::FillCandidates => "fill empty cells' candidates",
         Action::RefillCandidates => "refill every empty cell",
-        Action::MarksToCandidates => "fill, drop box marks",
+        Action::MarksToCandidates => "box marks to candidates",
         Action::ClearLayer => "clear this mode's notes",
         Action::ClearAllNotes => "clear all notes",
         Action::ToggleNotes => "hide or show notes",
@@ -1093,6 +1112,114 @@ pub fn draw_menu(frame: &mut Frame, menu: &Menu, items: &[Item], theme: &Theme) 
     let column = lines.iter().map(width_of).max().unwrap_or(0) as u16;
     let column_area = inner.centered_horizontally(Constraint::Length(column.min(inner.width)));
     frame.render_widget(Paragraph::new(lines), column_area);
+    let keys_area = Rect {
+        x: area.x,
+        width: area.width,
+        ..key_rows
+    };
+    frame.render_widget(Paragraph::new(keys).centered(), keys_area);
+}
+
+/// What the settings page draws.
+pub struct SettingsPage<'a> {
+    pub page: &'a Page,
+    pub config: &'a Config,
+    /// The theme the config asks for, by name.
+    pub theme_name: &'a str,
+    /// Why the last change couldn't be saved.
+    pub error: Option<&'a str>,
+}
+
+/// The settings page's rows: a heading for each group, its settings, and
+/// a line where a group has none.
+fn settings_lines(page: &SettingsPage, theme: &Theme) -> Vec<Line<'static>> {
+    let heading = Style::new().fg(theme.text).add_modifier(Modifier::BOLD);
+    let accent = Style::new().fg(theme.accent).add_modifier(Modifier::BOLD);
+    let selected = page.page.setting();
+    let mut lines = Vec::new();
+    for (name, settings) in GROUPS {
+        if !lines.is_empty() {
+            lines.push(Line::default());
+        }
+        lines.push(Line::from(Span::styled(name, heading)));
+        for &setting in settings {
+            let value = setting.shown(page.config, page.theme_name);
+            let line = if setting == selected {
+                Line::from(vec![
+                    Span::styled(format!("› {:<20}  ", setting.label()), accent),
+                    Span::styled(format!("‹ {value} ›"), accent),
+                ])
+            } else {
+                Line::from(vec![
+                    Span::styled(
+                        format!("  {:<20}  ", setting.label()),
+                        Style::new().fg(theme.text),
+                    ),
+                    Span::styled(format!("  {value}"), Style::new().fg(theme.dimmed)),
+                ])
+            };
+            lines.push(line);
+        }
+        if settings.is_empty() {
+            lines.push(Line::from(Span::styled(
+                format!("  {} in a game lists them", key_label(Action::Help)),
+                Style::new().fg(theme.dimmed),
+            )));
+        }
+    }
+    if let Some(error) = page.error {
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled(
+            format!("Not saved: {error}"),
+            Style::new().fg(theme.conflict),
+        )));
+    }
+    lines
+}
+
+/// The smallest window the settings page fits in: its widest row (a label
+/// and the longest theme name), its rows, the frame, and the keys.
+const SETTINGS_NEEDED: (u16, u16) = (52, 26);
+
+pub fn settings_fit(area: Rect) -> bool {
+    area.width >= SETTINGS_NEEDED.0 && area.height >= SETTINGS_NEEDED.1
+}
+
+fn settings_keys() -> Vec<(&'static str, &'static str)> {
+    vec![
+        (up_down_label(), "move"),
+        (left_right_label(), "change"),
+        (key_label(Action::Close), "back"),
+        (key_label(Action::Quit), "quit"),
+    ]
+}
+
+pub fn draw_settings(frame: &mut Frame, page: &SettingsPage, theme: &Theme) {
+    let area = frame.area();
+    frame.render_widget(Block::new().style(Style::new().bg(theme.background)), area);
+    if !settings_fit(area) {
+        too_small(frame, theme, SETTINGS_NEEDED);
+        return;
+    }
+    let lines = settings_lines(page, theme);
+    let keys = key_bar_lines(&settings_keys(), theme, usize::from(area.width));
+    let width = SETTINGS_NEEDED.0 - 2;
+    let height = lines.len() as u16 + 4;
+    let [boxed, key_rows] = Layout::vertical([
+        Constraint::Length(height),
+        Constraint::Length(keys.len() as u16),
+    ])
+    .areas(area.centered(
+        Constraint::Length(width.min(area.width)),
+        Constraint::Length((height + keys.len() as u16).min(area.height)),
+    ));
+    let block = frame_block(theme).title_top(Line::from(Span::styled(
+        " Settings ",
+        Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
+    )));
+    let inner = block.inner(boxed).inner(ratatui::layout::Margin::new(2, 1));
+    frame.render_widget(block, boxed);
+    frame.render_widget(Paragraph::new(lines), inner);
     let keys_area = Rect {
         x: area.x,
         width: area.width,
@@ -2403,5 +2530,100 @@ mod tests {
         assert_eq!((small.len(), big.len()), (3, 6));
         let width = |rows: &[String]| rows.iter().map(|r| r.chars().count()).max().unwrap();
         assert_eq!((width(&small), width(&big)), (17, 34));
+    }
+
+    fn render_settings(page: &Page, config: &Config, size: (u16, u16)) -> TestBackend {
+        let mut terminal = Terminal::new(TestBackend::new(size.0, size.1)).unwrap();
+        let theme = Theme::tokyo_night_amoled();
+        let shown = SettingsPage {
+            page,
+            config,
+            theme_name: "Tokyo Night AMOLED",
+            error: None,
+        };
+        terminal
+            .draw(|frame| draw_settings(frame, &shown, &theme))
+            .unwrap();
+        terminal.backend().clone()
+    }
+
+    #[test]
+    fn the_settings_page() {
+        let page = Page::new(true);
+        insta::assert_snapshot!(render_settings(&page, &Config::default(), SETTINGS_NEEDED));
+    }
+
+    /// The settings page's widest row fits the width it asks for.
+    #[test]
+    fn every_settings_row_fits_the_page() {
+        let theme = Theme::tokyo_night_amoled();
+        let config = Config {
+            marks_to_candidates: crate::config::MarksToCandidates::Merge,
+            ..Config::default()
+        };
+        for selected in 0..crate::settings::Setting::all().len() {
+            let page = Page {
+                selected,
+                from_pause: false,
+            };
+            let shown = SettingsPage {
+                page: &page,
+                config: &config,
+                theme_name: "Tokyo Night AMOLED",
+                error: None,
+            };
+            for line in settings_lines(&shown, &theme) {
+                assert!(line.width() + 6 <= usize::from(SETTINGS_NEEDED.0), "{line}");
+            }
+        }
+    }
+
+    /// The key bar says what t does under the setting in force.
+    #[test]
+    fn the_key_bar_says_what_t_does() {
+        let mut game = game();
+        game.next_mode();
+        game.next_mode();
+        let t = |game: &Game| {
+            keys(game, &View::default())
+                .into_iter()
+                .find(|(key, _)| *key == "t")
+                .unwrap()
+                .1
+        };
+        assert_eq!(t(&game), "fill, drop marks");
+        game.set_candidates_from_marks(CandidatesFromMarks::Merge);
+        assert_eq!(t(&game), "add to candidates");
+    }
+
+    /// With the key bar hidden, no keys show, except at the filter's prompt.
+    #[test]
+    fn the_key_bar_can_be_hidden() {
+        let game = game();
+        let hidden = View {
+            key_bar_hidden: true,
+            ..View::default()
+        };
+        assert_eq!(shown_keys(&game, &hidden), Vec::new());
+        let prompt = View {
+            awaiting_filter: true,
+            ..hidden
+        };
+        assert!(!shown_keys(&game, &prompt).is_empty());
+        let bottom: String = (0..FRAME_WIDTH)
+            .map(|x| {
+                render(
+                    &game,
+                    &View {
+                        key_bar_hidden: true,
+                        ..View::default()
+                    },
+                )
+                .buffer()[(x, BOARD_HEIGHT + 1)]
+                    .symbol()
+                    .to_string()
+            })
+            .collect();
+        assert!(!bottom.contains("quit"), "{bottom}");
     }
 }

@@ -2,13 +2,13 @@
 source: crates/sumi-sudoku/src/ui.rs
 expression: "render_menu(&pause, true, MENU_NEEDED)"
 ---
-"                        "
 "    ╭───────────────╮   "
 "    │               │   "
 "    │  sumi         │   "
 "    │               │   "
 "    │  › Resume     │   "
 "    │    New game   │   "
+"    │    Settings   │   "
 "    │    Main menu  │   "
 "    │               │   "
 "    ╰───────────────╯   "

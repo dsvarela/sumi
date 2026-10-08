@@ -15,6 +15,7 @@ pub enum Item {
     /// Back to the game, from the pause menu.
     Resume,
     MainMenu,
+    Settings,
     Quit,
 }
 
@@ -30,6 +31,7 @@ impl Item {
             Item::Level(Level::Beyond) => "Beyond",
             Item::Resume => "Resume",
             Item::MainMenu => "Main menu",
+            Item::Settings => "Settings",
             Item::Quit => "Quit",
         }
     }
@@ -79,10 +81,10 @@ impl Menu {
                 if in_progress {
                     items.push(Item::Continue);
                 }
-                items.extend([Item::NewGame, Item::Quit]);
+                items.extend([Item::NewGame, Item::Settings, Item::Quit]);
                 items
             }
-            Kind::Pause => vec![Item::Resume, Item::NewGame, Item::MainMenu],
+            Kind::Pause => vec![Item::Resume, Item::NewGame, Item::Settings, Item::MainMenu],
             Kind::Levels { .. } => LEVELS.map(Item::Level).to_vec(),
         }
     }
@@ -114,10 +116,13 @@ mod tests {
     #[test]
     fn continue_shows_only_with_a_game_in_progress() {
         let menu = Menu::new(Kind::Main);
-        assert_eq!(menu.items(false), [Item::NewGame, Item::Quit]);
+        assert_eq!(
+            menu.items(false),
+            [Item::NewGame, Item::Settings, Item::Quit]
+        );
         assert_eq!(
             menu.items(true),
-            [Item::Continue, Item::NewGame, Item::Quit]
+            [Item::Continue, Item::NewGame, Item::Settings, Item::Quit]
         );
     }
 

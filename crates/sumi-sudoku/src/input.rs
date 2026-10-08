@@ -199,6 +199,11 @@ pub fn up_down_label() -> &'static str {
     "jk"
 }
 
+/// The keys that change a setting back and forward.
+pub fn left_right_label() -> &'static str {
+    "hl"
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -305,6 +310,19 @@ mod tests {
         assert_eq!(
             action(key(KeyCode::Char(label[1]))),
             Some(Action::Step(Direction::Up))
+        );
+    }
+
+    #[test]
+    fn the_left_and_right_label_names_keys_that_move_left_and_right() {
+        let label: Vec<char> = left_right_label().chars().collect();
+        assert_eq!(
+            action(key(KeyCode::Char(label[0]))),
+            Some(Action::Step(Direction::Left))
+        );
+        assert_eq!(
+            action(key(KeyCode::Char(label[1]))),
+            Some(Action::Step(Direction::Right))
         );
     }
 

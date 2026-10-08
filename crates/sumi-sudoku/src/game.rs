@@ -225,10 +225,10 @@ impl Game {
         self.board.is_solved()
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the settings page in milestone 6 calls it")
-    )]
+    pub fn candidates_from_marks(&self) -> CandidatesFromMarks {
+        self.candidates_from_marks
+    }
+
     pub fn set_candidates_from_marks(&mut self, choice: CandidatesFromMarks) {
         self.candidates_from_marks = choice;
     }
@@ -239,10 +239,6 @@ impl Game {
         self.hint_start
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the settings page in milestone 6 calls it")
-    )]
     pub fn set_hint_start(&mut self, rung: usize) {
         self.hint_start = rung.clamp(1, 5);
     }

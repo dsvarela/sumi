@@ -2,6 +2,7 @@
 //! to the session.
 
 use std::io;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use rand::rngs::Xoshiro256PlusPlus;
@@ -16,52 +17,60 @@ use sumi_core::generate::{LevelGenerator, generate_solvable};
 use sumi_core::hint::Hint;
 use sumi_core::technique::Level;
 
-use crate::config::Config;
-use crate::game::Game;
+use crate::config::{Config, MarksToCandidates};
+use crate::game::{CandidatesFromMarks, Game};
 use crate::input::{Action, FilterKey, action, filter_key};
 use crate::menu::{Choice, Item, Kind, Menu};
+use crate::settings::{Choice as SettingsChoice, Page, Setting};
 use crate::theme::Theme;
 use crate::ui::{self, Filter, OpenHint, View};
 
 /// Plays puzzles of `level`, or opens the main menu without one. Fails
 /// without changing the terminal when there is none to draw on.
 pub fn run(level: Option<Level>) -> io::Result<()> {
-    let (config, theme, warnings) = start();
+    let (config, setup, warnings) = start();
     let mut terminal = ratatui::try_init()
         .map_err(|err| io::Error::new(err.kind(), format!("can't open the terminal: {err}")))?;
+    let mut app = App::new(rand::make_rng(), level, config, setup, Instant::now);
+    app.warnings = warnings;
     // With bracketed paste on, pasted text arrives as one event that the game
     // ignores, instead of as keys that could place digits or quit.
-    let result = execute!(io::stdout(), EnableBracketedPaste)
-        .and_then(|()| play(&mut terminal, level, &config, &theme));
+    let result =
+        execute!(io::stdout(), EnableBracketedPaste).and_then(|()| play(&mut terminal, &mut app));
     let _ = execute!(io::stdout(), DisableBracketedPaste);
     ratatui::restore();
     // The screen hid them while the game ran.
-    for line in warnings {
+    for line in &app.warnings {
         eprintln!("sumi: {line}");
     }
     result
 }
 
-/// The config, the theme the player asked for if the environment allows it,
-/// and a line for each file that couldn't be read.
-fn start() -> (Config, Theme, Vec<String>) {
-    let dir = Config::dir();
-    let (config, warning) = Config::load(dir.as_ref());
-    let (themes, warnings) = Theme::load_all(dir.map(|d| d.join("themes")).as_deref());
-    let warnings: Vec<String> = warning.into_iter().chain(warnings).collect();
-    let no_color = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
-    let truecolor = std::env::var("COLORTERM").is_ok_and(|v| v == "truecolor" || v == "24bit");
-    let theme = Theme::choose(&themes, config.theme.as_deref(), no_color, truecolor);
-    (config, theme, warnings)
+/// What the app needs from outside it: where the config lives, the themes
+/// found, and what the terminal allows.
+struct Setup {
+    dir: Option<PathBuf>,
+    themes: Vec<(String, Theme)>,
+    no_color: bool,
+    truecolor: bool,
 }
 
-fn play(
-    terminal: &mut DefaultTerminal,
-    level: Option<Level>,
-    config: &Config,
-    theme: &Theme,
-) -> io::Result<()> {
-    let mut app = App::new(rand::make_rng(), level, config.clone(), Instant::now);
+/// The config, the setup, and a line for each file that couldn't be read.
+fn start() -> (Config, Setup, Vec<String>) {
+    let dir = Config::dir();
+    let (config, warning) = Config::load(dir.as_ref());
+    let (themes, warnings) = Theme::load_all(dir.as_ref().map(|d| d.join("themes")).as_deref());
+    let warnings: Vec<String> = warning.into_iter().chain(warnings).collect();
+    let setup = Setup {
+        dir,
+        themes,
+        no_color: std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty()),
+        truecolor: std::env::var("COLORTERM").is_ok_and(|v| v == "truecolor" || v == "24bit"),
+    };
+    (config, setup, warnings)
+}
+
+fn play(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
     loop {
         if let Some(session) = &mut app.session {
             session.view.time = session.time();
@@ -69,9 +78,19 @@ fn play(
         let mut shown = true;
         terminal.draw(|frame| {
             shown = app.fits(frame.area());
+            let theme = &app.theme;
             match (&app.screen, &app.session) {
                 (Screen::Menu(menu), session) => {
                     ui::draw_menu(frame, menu, &menu.items(session.is_some()), theme);
+                }
+                (Screen::Settings(page), _) => {
+                    let page = ui::SettingsPage {
+                        page,
+                        config: &app.config,
+                        theme_name: &app.theme_name(),
+                        error: app.save_error.as_deref(),
+                    };
+                    ui::draw_settings(frame, &page, theme);
                 }
                 (Screen::Game, Some(session)) => {
                     ui::draw(frame, &session.game, &session.view, theme);
@@ -117,6 +136,7 @@ enum Flow {
 enum Screen {
     Game,
     Menu(Menu),
+    Settings(Page),
 }
 
 /// The screen showing, the game in progress if there is one, and where new
@@ -128,8 +148,15 @@ struct App {
     /// The level new games are of; `None` is any level sumi can finish.
     level: Option<Level>,
     config: Config,
+    setup: Setup,
+    /// The theme drawn with: the config's, unless the terminal overrides it.
+    theme: Theme,
     /// Where the time comes from; tests set their own.
     clock: fn() -> Instant,
+    /// Lines for stderr once the screen is back, and the last setting that
+    /// couldn't be saved.
+    warnings: Vec<String>,
+    save_error: Option<String>,
 }
 
 impl App {
@@ -138,15 +165,26 @@ impl App {
         rng: Xoshiro256PlusPlus,
         level: Option<Level>,
         config: Config,
+        setup: Setup,
         clock: fn() -> Instant,
     ) -> App {
+        let theme = Theme::choose(
+            &setup.themes,
+            config.theme.as_deref(),
+            setup.no_color,
+            setup.truecolor,
+        );
         let mut app = App {
             screen: Screen::Menu(Menu::new(Kind::Main)),
             session: None,
             rng,
             level,
             config,
+            setup,
+            theme,
             clock,
+            warnings: Vec::new(),
+            save_error: None,
         };
         if level.is_some() {
             app.start(level);
@@ -159,6 +197,42 @@ impl App {
         match self.screen {
             Screen::Game => ui::fits(area),
             Screen::Menu(_) => ui::menu_fits(area),
+            Screen::Settings(_) => ui::settings_fit(area),
+        }
+    }
+
+    /// The name of the theme the config asks for, which the terminal may
+    /// override.
+    fn theme_name(&self) -> String {
+        Theme::choose(
+            &self.setup.themes,
+            self.config.theme.as_deref(),
+            false,
+            true,
+        )
+        .name
+    }
+
+    /// Changes `setting`, saves it, and puts it into effect at once.
+    fn change(&mut self, setting: Setting, forward: bool) {
+        let ids: Vec<String> = self.setup.themes.iter().map(|(id, _)| id.clone()).collect();
+        setting.change(&mut self.config, &ids, forward);
+        self.save_error = None;
+        if let Some(dir) = &self.setup.dir
+            && let Err(err) = Config::save(dir, setting.key(), setting.value(&self.config))
+        {
+            self.warnings
+                .push(format!("couldn't save a setting: {err}"));
+            self.save_error = Some(err);
+        }
+        self.theme = Theme::choose(
+            &self.setup.themes,
+            self.config.theme.as_deref(),
+            self.setup.no_color,
+            self.setup.truecolor,
+        );
+        if let Some(session) = &mut self.session {
+            session.configure(&self.config);
         }
     }
 
@@ -182,6 +256,28 @@ impl App {
     }
 
     fn handle(&mut self, event: Event, shown: bool) -> Flow {
+        if let Screen::Settings(page) = &mut self.screen {
+            let Some(key) = press(event) else {
+                return Flow::Continue;
+            };
+            let action = action(key);
+            if is_ctrl_c(key) || action == Some(Action::Quit) {
+                return Flow::Quit;
+            }
+            let (Some(action), true) = (action, shown) else {
+                return Flow::Continue;
+            };
+            let from_pause = page.from_pause;
+            match page.handle(action) {
+                None => {}
+                Some(SettingsChoice::Change(setting, forward)) => self.change(setting, forward),
+                Some(SettingsChoice::Back) => {
+                    let kind = if from_pause { Kind::Pause } else { Kind::Main };
+                    self.screen = Screen::Menu(Menu::new(kind));
+                }
+            }
+            return Flow::Continue;
+        }
         let Screen::Menu(menu) = &mut self.screen else {
             let session = self.session.as_mut().expect("the game screen shows a game");
             return match session.handle(event, shown) {
@@ -228,6 +324,9 @@ impl App {
                 }
                 Item::Level(level) => self.start(Some(level)),
                 Item::MainMenu => self.screen = Screen::Menu(Menu::new(Kind::Main)),
+                Item::Settings => {
+                    self.screen = Screen::Settings(Page::new(kind == Kind::Pause));
+                }
                 Item::Quit => return Flow::Quit,
             },
         }
@@ -258,15 +357,27 @@ impl Session {
     /// Starts `game`, with its clock running.
     fn new(mut game: Game, config: &Config, clock: fn() -> Instant) -> Session {
         game.start_clock(clock());
-        Session {
+        let mut session = Session {
             game,
-            view: View {
-                highlights: config.highlights,
-                ..View::default()
-            },
+            view: View::default(),
             timer: config.timer,
             clock,
-        }
+        };
+        session.configure(config);
+        session
+    }
+
+    /// Puts the settings in `config` into effect.
+    fn configure(&mut self, config: &Config) {
+        self.timer = config.timer;
+        self.view.highlights = config.highlights;
+        self.view.key_bar_hidden = !config.key_bar;
+        self.game.set_hint_start(config.hint_start);
+        self.game
+            .set_candidates_from_marks(match config.marks_to_candidates {
+                MarksToCandidates::Fill => CandidatesFromMarks::Fill,
+                MarksToCandidates::Merge => CandidatesFromMarks::Merge,
+            });
     }
 
     /// The time to show, if the timer is on.
@@ -834,7 +945,13 @@ mod tests {
             },
             ..Config::default()
         };
-        let mut app = App::new(Xoshiro256PlusPlus::seed_from_u64(1), None, config, now);
+        let mut app = App::new(
+            Xoshiro256PlusPlus::seed_from_u64(1),
+            None,
+            config,
+            setup(),
+            now,
+        );
         app.session = Some(Session::new(fixtures::game(), &app.config, now));
         app.screen = Screen::Game;
         let s = game_of(&mut app);
@@ -928,6 +1045,7 @@ mod tests {
                 Xoshiro256PlusPlus::seed_from_u64(2),
                 Some(level),
                 Config::default(),
+                setup(),
                 now,
             );
             let s = game_of(&mut app);
@@ -942,12 +1060,24 @@ mod tests {
         }
     }
 
+    /// The built-in themes, no config directory to save to, and a terminal
+    /// with 24-bit colour.
+    fn setup() -> Setup {
+        Setup {
+            dir: None,
+            themes: Theme::load_all(None).0,
+            no_color: false,
+            truecolor: true,
+        }
+    }
+
     /// An app playing `game`.
     fn app_with(game: Game) -> App {
         let mut app = App::new(
             Xoshiro256PlusPlus::seed_from_u64(1),
             None,
             Config::default(),
+            setup(),
             now,
         );
         app.session = Some(Session::new(game, &app.config, now));
@@ -971,7 +1101,7 @@ mod tests {
     fn menu_kind(app: &App) -> Option<Kind> {
         match &app.screen {
             Screen::Menu(menu) => Some(menu.kind),
-            Screen::Game => None,
+            Screen::Game | Screen::Settings(_) => None,
         }
     }
 
@@ -983,6 +1113,7 @@ mod tests {
             Xoshiro256PlusPlus::seed_from_u64(3),
             None,
             Config::default(),
+            setup(),
             now,
         );
         assert_eq!(menu_kind(&app), Some(Kind::Main));
@@ -1045,6 +1176,78 @@ mod tests {
         assert_eq!(menu_kind(&app), Some(Kind::Levels { from_pause: true }));
         press_keys(&mut app, &[KeyCode::Esc]);
         assert_eq!(menu_kind(&app), Some(Kind::Pause));
+    }
+
+    /// Opens the settings from the pause menu: Esc, down twice, Enter.
+    fn open_settings(app: &mut App) {
+        press_keys(
+            app,
+            &[
+                KeyCode::Esc,
+                KeyCode::Char('j'),
+                KeyCode::Char('j'),
+                KeyCode::Enter,
+            ],
+        );
+        assert_eq!(app.screen, Screen::Settings(Page::new(true)));
+    }
+
+    /// A change on the settings page takes effect in the game at once, and
+    /// Esc goes back to the menu the page was opened from.
+    #[test]
+    fn settings_take_effect_at_once() {
+        let mut app = app_with(fixtures::game());
+        open_settings(&mut app);
+        press_keys(&mut app, &[KeyCode::Enter]); // the timer
+        assert!(app.config.timer);
+        assert!(game_of(&mut app).timer);
+        press_keys(&mut app, &[KeyCode::Char('j'), KeyCode::Char('l')]); // hints
+        assert_eq!(game_of(&mut app).game.hint_start(), 2);
+        press_keys(&mut app, &[KeyCode::Char('j'), KeyCode::Char('l')]); // t
+        assert_eq!(app.config.marks_to_candidates, MarksToCandidates::Merge);
+        press_keys(&mut app, &[KeyCode::Char('j'), KeyCode::Char('l')]); // same digit
+        assert!(!game_of(&mut app).view.highlights.same_digit);
+        press_keys(
+            &mut app,
+            &[KeyCode::Char('k'), KeyCode::Char('k'), KeyCode::Char('k')],
+        );
+        press_keys(&mut app, &[KeyCode::Char('k'), KeyCode::Char('h')]); // the key bar
+        assert!(game_of(&mut app).view.key_bar_hidden);
+        press_keys(&mut app, &[KeyCode::Char('k'), KeyCode::Char('l')]); // the theme
+        assert_eq!(app.theme.name, "Tokyo Night");
+        press_keys(&mut app, &[KeyCode::Esc]);
+        assert_eq!(menu_kind(&app), Some(Kind::Pause));
+    }
+
+    /// Opened from the main menu, the settings go back to the main menu.
+    #[test]
+    fn settings_from_the_main_menu_go_back_there() {
+        let mut app = App::new(
+            Xoshiro256PlusPlus::seed_from_u64(1),
+            None,
+            Config::default(),
+            setup(),
+            now,
+        );
+        press_keys(&mut app, &[KeyCode::Char('j'), KeyCode::Enter]);
+        assert_eq!(app.screen, Screen::Settings(Page::new(false)));
+        press_keys(&mut app, &[KeyCode::Esc]);
+        assert_eq!(menu_kind(&app), Some(Kind::Main));
+    }
+
+    /// Each change is written to config.toml as it is made.
+    #[test]
+    fn a_change_is_saved_to_the_config_file() {
+        let dir = std::env::temp_dir().join(format!("sumi-app-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut app = app_with(fixtures::game());
+        app.setup.dir = Some(dir.clone());
+        open_settings(&mut app);
+        press_keys(&mut app, &[KeyCode::Enter]);
+        let saved = std::fs::read_to_string(dir.join("config.toml")).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(Config::parse(&saved).unwrap().timer);
+        assert_eq!(app.save_error, None);
     }
 
     #[test]
