@@ -692,12 +692,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn no_colour_is_chosen_by_the_environment_variable() {
-        assert!(Theme::for_environment(true).monochrome);
-        assert!(!Theme::for_environment(false).monochrome);
-    }
-
     /// A candidate's spot on the screen, relative to its cell's middle.
     fn note_at(cell: Cell, digit: u8) -> (u16, u16) {
         let (x, y) = middle(cell);

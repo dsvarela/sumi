@@ -1,5 +1,6 @@
 mod app;
 mod cli;
+mod config;
 #[cfg(test)]
 mod fixtures;
 mod game;

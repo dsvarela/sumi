@@ -1,115 +1,259 @@
 //! Colour roles. Every colour on screen comes from one of these, so a theme
-//! changes everything by changing this struct.
+//! changes everything by changing this struct. Themes are TOML files: the
+//! built-in ones in `themes/` and the player's own in the config directory.
+
+use std::collections::BTreeMap;
+use std::path::Path;
 
 use ratatui::style::Color;
+use serde::Deserialize;
 
-pub struct Theme {
-    pub background: Color,
-    /// Text that isn't on the board.
-    pub text: Color,
-    pub dimmed: Color,
-    /// Titles, keys in the key bar, and the marks at the cursor's corners.
-    pub accent: Color,
-    pub frame: Color,
-    /// Lines between cells inside a box.
-    pub line: Color,
-    /// Lines between boxes and around the board.
-    pub box_line: Color,
-    pub clue: Color,
-    pub digit: Color,
-    pub candidate: Color,
-    pub box_mark: Color,
-    /// Background of the selected cell.
-    pub cursor: Color,
-    /// Background of cells holding the digit under the cursor.
-    pub same_digit: Color,
-    /// Background of the cursor's row, column and box.
-    pub peer: Color,
-    /// Background of cells the candidate filter lights up.
-    pub filter: Color,
-    pub conflict: Color,
-    /// Digits `c` found different from the solution.
-    pub wrong_digit: Color,
-    /// Background of the rows, columns and boxes a hint points at, and of the
-    /// second group of a colouring.
-    pub hint_area: Color,
-    /// Background of the cells that make a hint's pattern.
-    pub hint_cell: Color,
-    /// Candidates a hint removes.
-    pub hint_removal: Color,
-    /// The digit a hint places.
-    pub hint_placement: Color,
-    /// No colour is set at all (NO_COLOR). What colour showed is then shown
-    /// by attributes: a hint's cells are drawn reversed.
-    pub monochrome: bool,
+/// Declares `Theme` with one `Color` field per role, and the role list the
+/// loader reads names from, so a role is added in one place.
+macro_rules! roles {
+    ($($(#[$doc:meta])* $role:ident),* $(,)?) => {
+        #[derive(Debug, Clone)]
+        pub struct Theme {
+            pub name: String,
+            $($(#[$doc])* pub $role: Color,)*
+            /// No colour is set at all (NO_COLOR). What colour showed is then
+            /// shown by attributes: a hint's cells are drawn reversed.
+            pub monochrome: bool,
+        }
+
+        impl Theme {
+            fn role_mut(&mut self, role: &str) -> Option<&mut Color> {
+                match role {
+                    $(stringify!($role) => Some(&mut self.$role),)*
+                    _ => None,
+                }
+            }
+
+            const ROLES: &[&str] = &[$(stringify!($role)),*];
+
+            /// Every role set to `colour`.
+            fn all(name: &str, colour: Color, monochrome: bool) -> Theme {
+                Theme {
+                    name: name.to_string(),
+                    $($role: colour,)*
+                    monochrome,
+                }
+            }
+        }
+    };
 }
 
+roles! {
+    background,
+    /// Text that isn't on the board.
+    text,
+    dimmed,
+    /// Titles, keys in the key bar, and the marks at the cursor's corners.
+    accent,
+    frame,
+    /// Lines between cells inside a box.
+    line,
+    /// Lines between boxes and around the board.
+    box_line,
+    clue,
+    digit,
+    candidate,
+    box_mark,
+    /// Background of the selected cell.
+    cursor,
+    /// Background of cells holding the digit under the cursor.
+    same_digit,
+    /// Background of the cursor's row, column and box.
+    peer,
+    /// Background of cells the candidate filter lights up.
+    filter,
+    conflict,
+    /// Digits `c` found different from the solution.
+    wrong_digit,
+    /// Background of the rows, columns and boxes a hint points at, and of the
+    /// second group of a colouring.
+    hint_area,
+    /// Background of the cells that make a hint's pattern.
+    hint_cell,
+    /// Candidates a hint removes.
+    hint_removal,
+    /// The digit a hint places.
+    hint_placement,
+}
+
+/// What a theme file holds. With `extends`, the colours it lists replace the
+/// base theme's and the rest carry over; without it, every role is needed.
+#[derive(Deserialize)]
+struct File {
+    name: String,
+    extends: Option<String>,
+    #[serde(default)]
+    colors: BTreeMap<String, String>,
+}
+
+/// The built-in themes by id (the file name), the default first.
+const BUILTIN: &[(&str, &str)] = &[
+    (
+        "tokyo-night-amoled",
+        include_str!("../themes/tokyo-night-amoled.toml"),
+    ),
+    ("tokyo-night", include_str!("../themes/tokyo-night.toml")),
+    (
+        "catppuccin-mocha",
+        include_str!("../themes/catppuccin-mocha.toml"),
+    ),
+    ("nord", include_str!("../themes/nord.toml")),
+    ("gruvbox", include_str!("../themes/gruvbox.toml")),
+    ("paper", include_str!("../themes/paper.toml")),
+    ("okabe-ito", include_str!("../themes/okabe-ito.toml")),
+];
+
+pub const DEFAULT: &str = "tokyo-night-amoled";
+
 impl Theme {
-    /// Tokyo Night with a pure black background, for AMOLED screens.
-    pub fn tokyo_night_amoled() -> Theme {
-        Theme {
-            background: Color::Rgb(0x00, 0x00, 0x00),
-            text: Color::Rgb(0xc0, 0xca, 0xf5),
-            dimmed: Color::Rgb(0x8f, 0x99, 0xc6),
-            accent: Color::Rgb(0x7a, 0xa2, 0xf7),
-            frame: Color::Rgb(0x5a, 0x63, 0x90),
-            line: Color::Rgb(0x54, 0x5c, 0x7e),
-            box_line: Color::Rgb(0x73, 0x7a, 0xa2),
-            clue: Color::Rgb(0xc0, 0xca, 0xf5),
-            digit: Color::Rgb(0x7d, 0xcf, 0xff),
-            candidate: Color::Rgb(0x9a, 0xa5, 0xce),
-            box_mark: Color::Rgb(0xff, 0x9e, 0x64),
-            cursor: Color::Rgb(0x22, 0x2c, 0x4c),
-            same_digit: Color::Rgb(0x1c, 0x24, 0x40),
-            peer: Color::Rgb(0x0f, 0x11, 0x19),
-            filter: Color::Rgb(0x2e, 0x26, 0x10),
-            conflict: Color::Rgb(0xf7, 0x76, 0x8e),
-            wrong_digit: Color::Rgb(0xff, 0x8a, 0x80),
-            hint_area: Color::Rgb(0x0e, 0x1f, 0x2b),
-            hint_cell: Color::Rgb(0x12, 0x35, 0x3a),
-            hint_removal: Color::Rgb(0xff, 0x6b, 0x6b),
-            hint_placement: Color::Rgb(0x9e, 0xce, 0x6a),
-            monochrome: false,
+    /// Reads one theme file. `known` is every theme loaded before it, which
+    /// `extends` may name by id.
+    pub fn parse(src: &str, known: &[(String, Theme)]) -> Result<Theme, String> {
+        let file: File = toml::from_str(src).map_err(|err| err.message().to_string())?;
+        let mut theme = match &file.extends {
+            Some(base) => known
+                .iter()
+                .find(|(id, _)| id == base)
+                .map(|(_, theme)| theme.clone())
+                .ok_or_else(|| format!("extends \"{base}\", which isn't a theme"))?,
+            None => Theme::all(&file.name, Color::Reset, false),
+        };
+        theme.name = file.name;
+        for (role, value) in &file.colors {
+            let slot = theme
+                .role_mut(role)
+                .ok_or_else(|| format!("\"{role}\" isn't a colour role"))?;
+            *slot = hex(value).ok_or_else(|| format!("{role}: \"{value}\" isn't #rrggbb"))?;
         }
+        if file.extends.is_none()
+            && let Some(role) = Theme::ROLES
+                .iter()
+                .find(|role| !file.colors.contains_key(**role))
+        {
+            return Err(format!("{role} is missing"));
+        }
+        Ok(theme)
+    }
+
+    /// The built-in themes, then the `*.toml` files in `user_dir`, each under
+    /// the id of its file name; a user file with a built-in's id replaces
+    /// it. A file that can't be read is left out and named in the warnings.
+    pub fn load_all(user_dir: Option<&Path>) -> (Vec<(String, Theme)>, Vec<String>) {
+        let mut themes: Vec<(String, Theme)> = Vec::new();
+        let mut warnings = Vec::new();
+        let mut add = |id: String, source: Result<String, String>| {
+            let theme = source.and_then(|src| Theme::parse(&src, &themes));
+            match theme {
+                Ok(theme) => match themes.iter_mut().find(|(known, _)| *known == id) {
+                    Some(slot) => slot.1 = theme,
+                    None => themes.push((id, theme)),
+                },
+                Err(err) => warnings.push(format!("theme {id}: {err}")),
+            }
+        };
+        for (id, src) in BUILTIN {
+            add((*id).to_string(), Ok((*src).to_string()));
+        }
+        let mut files: Vec<_> = user_dir
+            .and_then(|dir| std::fs::read_dir(dir).ok())
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "toml"))
+            .collect();
+        files.sort();
+        for path in files {
+            let id = path.file_stem().unwrap_or_default().to_string_lossy();
+            add(
+                id.to_string(),
+                std::fs::read_to_string(&path).map_err(|err| err.to_string()),
+            );
+        }
+        (themes, warnings)
     }
 
     /// The terminal's own colours and none of ours.
     pub fn monochrome() -> Theme {
-        let c = Color::Reset;
-        Theme {
-            background: c,
-            text: c,
-            dimmed: c,
-            accent: c,
-            frame: c,
-            line: c,
-            box_line: c,
-            clue: c,
-            digit: c,
-            candidate: c,
-            box_mark: c,
-            cursor: c,
-            same_digit: c,
-            peer: c,
-            filter: c,
-            conflict: c,
-            wrong_digit: c,
-            hint_area: c,
-            hint_cell: c,
-            hint_removal: c,
-            hint_placement: c,
-            monochrome: true,
-        }
+        Theme::all("No colour", Color::Reset, true)
     }
 
-    /// The theme to start with. `no_color` is whether NO_COLOR is set to
-    /// something, which no-color.org says turns colour off.
-    pub fn for_environment(no_color: bool) -> Theme {
-        if no_color {
-            Theme::monochrome()
-        } else {
-            Theme::tokyo_night_amoled()
+    /// For terminals without 24-bit colour: the 16 named colours.
+    pub fn sixteen_colour() -> Theme {
+        let mut theme = Theme::all("16 colours", Color::Reset, false);
+        let roles = [
+            ("background", Color::Black),
+            ("text", Color::White),
+            ("dimmed", Color::Gray),
+            ("accent", Color::Cyan),
+            ("frame", Color::Gray),
+            ("line", Color::DarkGray),
+            ("box_line", Color::Gray),
+            ("clue", Color::White),
+            ("digit", Color::Cyan),
+            ("candidate", Color::Gray),
+            ("box_mark", Color::Yellow),
+            ("cursor", Color::DarkGray),
+            ("same_digit", Color::Blue),
+            ("peer", Color::Black),
+            ("filter", Color::Magenta),
+            ("conflict", Color::LightRed),
+            ("wrong_digit", Color::LightRed),
+            ("hint_area", Color::Blue),
+            ("hint_cell", Color::Green),
+            ("hint_removal", Color::LightRed),
+            ("hint_placement", Color::LightGreen),
+        ];
+        for (role, colour) in roles {
+            if let Some(slot) = theme.role_mut(role) {
+                *slot = colour;
+            }
         }
+        theme
+    }
+
+    /// The theme to start with: the player's choice if there is one that
+    /// loaded, else the default. NO_COLOR (`no_color`) and a terminal
+    /// without 24-bit colour (`!truecolor`) override a theme made of colours.
+    pub fn choose(
+        themes: &[(String, Theme)],
+        wanted: Option<&str>,
+        no_color: bool,
+        truecolor: bool,
+    ) -> Theme {
+        if no_color {
+            return Theme::monochrome();
+        }
+        if !truecolor {
+            return Theme::sixteen_colour();
+        }
+        let find = |id: &str| themes.iter().find(|(known, _)| known == id);
+        wanted
+            .and_then(find)
+            .or_else(|| find(DEFAULT))
+            .map_or_else(Theme::monochrome, |(_, theme)| theme.clone())
+    }
+}
+
+fn hex(value: &str) -> Option<Color> {
+    let digits = value.strip_prefix('#')?;
+    if digits.len() != 6 || !digits.is_ascii() {
+        return None;
+    }
+    let channel = |i: usize| u8::from_str_radix(&digits[i..i + 2], 16).ok();
+    Some(Color::Rgb(channel(0)?, channel(2)?, channel(4)?))
+}
+
+#[cfg(test)]
+impl Theme {
+    /// The default theme, for tests that don't care which one.
+    pub fn tokyo_night_amoled() -> Theme {
+        Theme::load_all(None).0.remove(0).1
     }
 }
 
@@ -144,7 +288,15 @@ mod tests {
     /// the cursor is shown by its corner marks as well as its colour.
     #[test]
     fn every_colour_pair_on_screen_is_readable() {
-        let t = Theme::tokyo_night_amoled();
+        let (themes, warnings) = Theme::load_all(None);
+        assert_eq!(warnings, Vec::<String>::new());
+        assert_eq!(themes.len(), BUILTIN.len());
+        for (id, theme) in &themes {
+            check_readable(id, theme);
+        }
+    }
+
+    fn check_readable(id: &str, t: &Theme) {
         let backgrounds = [
             ("background", t.background),
             ("cursor", t.cursor),
@@ -170,7 +322,7 @@ mod tests {
         for (bg_name, bg) in backgrounds {
             for (fg_name, fg) in text {
                 let ratio = contrast(fg, bg);
-                assert!(ratio >= 4.5, "{fg_name} on {bg_name}: {ratio:.2}");
+                assert!(ratio >= 4.5, "{id}: {fg_name} on {bg_name}: {ratio:.2}");
             }
         }
         let graphics = [
@@ -181,7 +333,92 @@ mod tests {
         ];
         for (name, fg, bg) in graphics {
             let ratio = contrast(fg, bg);
-            assert!(ratio >= 3.0, "{name}: {ratio:.2}");
+            assert!(ratio >= 3.0, "{id}: {name}: {ratio:.2}");
         }
+    }
+
+    fn theme(src: &str) -> Result<Theme, String> {
+        Theme::parse(src, &Theme::load_all(None).0)
+    }
+
+    #[test]
+    fn a_theme_extends_another_and_changes_a_few_colours() {
+        let nord =
+            theme("name = \"Mine\"\nextends = \"nord\"\n[colors]\naccent = \"#ff0000\"").unwrap();
+        let (themes, _) = Theme::load_all(None);
+        let base = &themes.iter().find(|(id, _)| id == "nord").unwrap().1;
+        assert_eq!(nord.name, "Mine");
+        assert_eq!(nord.accent, Color::Rgb(255, 0, 0));
+        assert_eq!(nord.background, base.background);
+        assert_ne!(base.accent, nord.accent);
+    }
+
+    #[test]
+    fn a_theme_without_a_base_needs_every_role() {
+        let err = theme("name = \"Bare\"\n[colors]\nbackground = \"#000000\"").unwrap_err();
+        assert_eq!(err, "text is missing");
+    }
+
+    #[test]
+    fn bad_themes_say_what_is_wrong() {
+        let bad = |colors: &str, extends: &str| {
+            theme(&format!("name = \"x\"\n{extends}[colors]\n{colors}")).unwrap_err()
+        };
+        assert_eq!(
+            bad("text = \"red\"", "extends = \"nord\"\n"),
+            "text: \"red\" isn't #rrggbb"
+        );
+        assert_eq!(
+            bad("text = \"#12345\"", "extends = \"nord\"\n"),
+            "text: \"#12345\" isn't #rrggbb"
+        );
+        assert_eq!(
+            bad("glow = \"#000000\"", "extends = \"nord\"\n"),
+            "\"glow\" isn't a colour role"
+        );
+        assert_eq!(
+            bad("", "extends = \"nowhere\"\n"),
+            "extends \"nowhere\", which isn't a theme"
+        );
+    }
+
+    #[test]
+    fn user_themes_load_beside_the_built_in_ones_and_bad_files_are_named() {
+        let dir = std::env::temp_dir().join(format!("sumi-themes-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("mine.toml"),
+            "name = \"Mine\"\nextends = \"gruvbox\"\n[colors]\naccent = \"#010203\"",
+        )
+        .unwrap();
+        std::fs::write(dir.join("broken.toml"), "name = ").unwrap();
+        let nord = "name = \"My Nord\"\nextends = \"nord\"\n";
+        std::fs::write(dir.join("nord.toml"), nord).unwrap();
+        std::fs::write(dir.join("notes.txt"), "not a theme").unwrap();
+        let (themes, warnings) = Theme::load_all(Some(&dir));
+        std::fs::remove_dir_all(&dir).unwrap();
+        let ids: Vec<_> = themes.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(ids.len(), BUILTIN.len() + 1);
+        assert_eq!(ids.last(), Some(&"mine"));
+        let nord = themes.iter().find(|(id, _)| id == "nord").unwrap();
+        assert_eq!(nord.1.name, "My Nord");
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].starts_with("theme broken: "), "{warnings:?}");
+    }
+
+    #[test]
+    fn the_environment_decides_before_the_player_does() {
+        let (themes, _) = Theme::load_all(None);
+        let pick =
+            |wanted, no_color, truecolor| Theme::choose(&themes, wanted, no_color, truecolor);
+        assert_eq!(pick(Some("nord"), false, true).name, "Nord");
+        assert_eq!(
+            pick(Some("nowhere"), false, true).name,
+            "Tokyo Night AMOLED"
+        );
+        assert_eq!(pick(None, false, true).name, "Tokyo Night AMOLED");
+        assert!(pick(Some("nord"), true, true).monochrome);
+        assert!(pick(Some("nord"), true, false).monochrome);
+        assert_eq!(pick(Some("nord"), false, false).name, "16 colours");
     }
 }

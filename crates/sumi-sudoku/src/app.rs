@@ -14,6 +14,7 @@ use sumi_core::bank;
 use sumi_core::generate::{LevelGenerator, Puzzle, generate_solvable};
 use sumi_core::technique::Level;
 
+use crate::config::Config;
 use crate::game::Game;
 use crate::input::{Action, FilterKey, action, filter_key};
 use crate::theme::Theme;
@@ -22,26 +23,42 @@ use crate::ui::{self, Filter, OpenHint, View};
 /// Plays puzzles of `level`, or any generated puzzle without one. Fails
 /// without changing the terminal when there is none to draw on.
 pub fn run(level: Option<Level>) -> io::Result<()> {
+    let (theme, warnings) = start_theme();
     let mut terminal = ratatui::try_init()
         .map_err(|err| io::Error::new(err.kind(), format!("can't open the terminal: {err}")))?;
     // With bracketed paste on, pasted text arrives as one event that the game
     // ignores, instead of as keys that could place digits or quit.
-    let result =
-        execute!(io::stdout(), EnableBracketedPaste).and_then(|()| play(&mut terminal, level));
+    let result = execute!(io::stdout(), EnableBracketedPaste)
+        .and_then(|()| play(&mut terminal, level, &theme));
     let _ = execute!(io::stdout(), DisableBracketedPaste);
     ratatui::restore();
+    // The screen hid them while the game ran.
+    for line in warnings {
+        eprintln!("sumi: {line}");
+    }
     result
 }
 
-fn play(terminal: &mut DefaultTerminal, level: Option<Level>) -> io::Result<()> {
+/// The theme the player asked for, if the environment allows it, and a
+/// line for each file that couldn't be read.
+fn start_theme() -> (Theme, Vec<String>) {
+    let dir = Config::dir();
+    let (config, warning) = Config::load(dir.as_ref());
+    let (themes, warnings) = Theme::load_all(dir.map(|d| d.join("themes")).as_deref());
+    let warnings: Vec<String> = warning.into_iter().chain(warnings).collect();
     let no_color = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
-    let theme = Theme::for_environment(no_color);
+    let truecolor = std::env::var("COLORTERM").is_ok_and(|v| v == "truecolor" || v == "24bit");
+    let theme = Theme::choose(&themes, config.theme.as_deref(), no_color, truecolor);
+    (theme, warnings)
+}
+
+fn play(terminal: &mut DefaultTerminal, level: Option<Level>, theme: &Theme) -> io::Result<()> {
     let mut session = Session::new(rand::make_rng(), level);
     loop {
         let mut board_shown = true;
         terminal.draw(|frame| {
             board_shown = ui::fits(frame.area());
-            ui::draw(frame, &session.game, &session.view, &theme);
+            ui::draw(frame, &session.game, &session.view, theme);
         })?;
         if session.handle(event::read()?, board_shown) == Flow::Quit {
             return Ok(());
