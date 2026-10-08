@@ -504,6 +504,46 @@ mod tests {
         );
     }
 
+    /// The second rung's opening for each technique, articles included.
+    #[test]
+    fn each_technique_is_named_with_the_right_article() {
+        let expected = [
+            ("Full house", "Look for a full house."),
+            ("Hidden single", "Look for a hidden single."),
+            ("Naked single", "Look for a naked single."),
+            ("Pointing pair", "Look for a pointing pair."),
+            ("Claiming", "Look for claiming."),
+            ("Naked pair", "Look for a naked pair."),
+            ("Hidden pair", "Look for a hidden pair."),
+            ("Naked triple", "Look for a naked triple."),
+            ("Hidden triple", "Look for a hidden triple."),
+            ("X-Wing", "Look for an X-Wing."),
+            ("Naked quad", "Look for a naked quad."),
+            ("Swordfish", "Look for a swordfish."),
+            ("Hidden quad", "Look for a hidden quad."),
+            ("Skyscraper", "Look for a skyscraper."),
+            ("2-String Kite", "Look for a 2-String Kite."),
+            ("W-Wing", "Look for a W-Wing."),
+            ("Y-Wing", "Look for a Y-Wing."),
+            ("XYZ-Wing", "Look for an XYZ-Wing."),
+            ("Unique rectangle", "Look for a unique rectangle."),
+            ("Simple colouring", "Look for simple colouring."),
+        ];
+        let mut seen = 0;
+        for (name, sentence) in expected {
+            let technique = ORDER.iter().find(|t| t.name() == name).unwrap();
+            let step = EXAMPLES
+                .iter()
+                .find_map(|(e, _)| technique.find(&e.position().known_unique()))
+                .unwrap_or_else(|| panic!("no example step for {name}"));
+            if step.cells.len() != 3 || name != "Pointing pair" {
+                assert_eq!(technique.look_for(&step), sentence);
+                seen += 1;
+            }
+        }
+        assert_eq!(seen, ORDER.len());
+    }
+
     #[test]
     fn three_spots_in_a_box_make_a_pointing_triple() {
         let mut candidates = [Digits::ALL; CELLS];

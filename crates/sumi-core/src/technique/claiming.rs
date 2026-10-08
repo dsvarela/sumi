@@ -24,6 +24,12 @@ impl Technique for Claiming {
         50
     }
 
+    /// "Claiming" names what a line does, not a thing to count: "look for
+    /// claiming", as "look for simple colouring".
+    fn look_for(&self, _step: &Step) -> String {
+        "Look for claiming.".into()
+    }
+
     fn definition(&self, _step: &Step) -> String {
         "In a row or column, all spots for a digit lie in one box.".into()
     }
