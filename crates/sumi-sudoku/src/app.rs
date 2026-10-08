@@ -15,9 +15,11 @@ use ratatui::crossterm::execute;
 use ratatui::layout::Rect;
 use sumi_core::bank;
 use sumi_core::generate::{LevelGenerator, generate_solvable};
+use sumi_core::grid::House;
 use sumi_core::hint::Hint;
 use sumi_core::technique::Level;
 
+use crate::animation::{Animation, Kind as AnimationKind, complete_houses};
 use crate::config::{Config, MarksToCandidates};
 use crate::game::{CandidatesFromMarks, Game, Mode};
 use crate::input::{Action, FilterKey, action, filter_key};
@@ -87,6 +89,7 @@ fn play(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
         }
         if let Some(session) = &mut app.session {
             session.view.time = session.time();
+            session.tick(Instant::now());
         }
         let mut shown = true;
         terminal.draw(|frame| {
@@ -119,7 +122,19 @@ fn play(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                 .session
                 .as_ref()
                 .is_some_and(|s| s.view.time.is_some() && s.clock_running());
+        let animating = app.screen == Screen::Game
+            && app
+                .session
+                .as_ref()
+                .is_some_and(|s| !s.view.animations.is_empty());
         let event = match app.session.as_ref().and_then(|s| s.view.time) {
+            // About sixty frames a second while something moves.
+            _ if animating => {
+                if !event::poll(Duration::from_millis(16))? {
+                    continue;
+                }
+                event::read()?
+            }
             Some(time) if ticking => {
                 let to_next_second = Duration::from_millis(1000 - u64::from(time.subsec_millis()));
                 if !event::poll(to_next_second)? {
@@ -411,6 +426,12 @@ struct Session {
     view: View,
     /// Show the time played.
     timer: bool,
+    animations: bool,
+    /// The houses complete after the last key or click, so the next can
+    /// tell which it completed.
+    complete: [bool; 27],
+    /// When the animations were last moved on.
+    last_tick: Instant,
     /// Where the time comes from; tests set their own.
     clock: fn() -> Instant,
 }
@@ -419,10 +440,14 @@ impl Session {
     /// Starts `game`, with its clock running.
     fn new(mut game: Game, config: &Config, clock: fn() -> Instant) -> Session {
         game.start_clock(clock());
+        let complete = complete_houses(game.board());
         let mut session = Session {
             game,
             view: View::default(),
             timer: config.timer,
+            animations: config.animations,
+            complete,
+            last_tick: clock(),
             clock,
         };
         session.configure(config);
@@ -432,6 +457,10 @@ impl Session {
     /// Puts the settings in `config` into effect.
     fn configure(&mut self, config: &Config) {
         self.timer = config.timer;
+        self.animations = config.animations;
+        if !config.animations {
+            self.view.animations.clear();
+        }
         self.view.highlights = config.highlights;
         self.view.key_bar_hidden = !config.key_bar;
         self.game.set_hint_start(config.hint_start);
@@ -440,6 +469,23 @@ impl Session {
                 MarksToCandidates::Fill => CandidatesFromMarks::Fill,
                 MarksToCandidates::Merge => CandidatesFromMarks::Merge,
             });
+    }
+
+    fn start_animation(&mut self, kind: AnimationKind) {
+        if self.view.animations.is_empty() {
+            self.last_tick = (self.clock)();
+        }
+        self.view.animations.push(Animation::new(kind));
+    }
+
+    /// Moves the animations on to `now`, dropping those that are over.
+    fn tick(&mut self, now: Instant) {
+        let step = now.saturating_duration_since(self.last_tick);
+        self.last_tick = now;
+        for animation in &mut self.view.animations {
+            animation.elapsed += step;
+        }
+        self.view.animations.retain(|a| !a.done());
     }
 
     /// The time to show, if the timer is on.
@@ -500,6 +546,21 @@ impl Session {
     /// closes when the game has changed, and check marks go with their
     /// digits.
     fn settle(&mut self) {
+        // A win's wave stands in for the pulses of the houses it completed.
+        let complete = complete_houses(self.game.board());
+        if self.animations {
+            if self.game.is_won() && !self.complete.iter().all(|&c| c) {
+                self.view.animations.clear();
+                self.start_animation(AnimationKind::Win);
+            } else {
+                for (i, house) in House::ALL.into_iter().enumerate() {
+                    if complete[i] && !self.complete[i] {
+                        self.start_animation(AnimationKind::House(house));
+                    }
+                }
+            }
+        }
+        self.complete = complete;
         if self.game.is_won() {
             self.game.stop_clock((self.clock)());
         }
@@ -741,6 +802,69 @@ mod tests {
         assert_eq!(s.time(), None);
         s.timer = true;
         assert_eq!(s.time(), Some(secs(4)));
+    }
+
+    /// Fills the empty cells of `house` with their answers, the last one
+    /// last.
+    fn complete(s: &mut Session, house: House) {
+        let solution = fixtures::solution();
+        for cell in house.cells() {
+            if s.game.board().get(cell).is_none() {
+                s.game.move_to(cell);
+                type_keys(s, &solution.get(cell).unwrap().to_string());
+            }
+        }
+    }
+
+    fn animating(s: &Session) -> Vec<AnimationKind> {
+        s.view.animations.iter().map(|a| a.kind).collect()
+    }
+
+    /// Completing a row starts its pulse, and the pulse is gone once its
+    /// time is up.
+    #[test]
+    fn completing_a_house_pulses_it_once() {
+        let mut s = session();
+        complete(&mut s, House::Row(0));
+        assert!(animating(&s).contains(&AnimationKind::House(House::Row(0))));
+        let started = animating(&s).len();
+        type_keys(&mut s, "j");
+        assert_eq!(animating(&s).len(), started, "moving starts nothing");
+        advance(1);
+        s.tick(now());
+        assert_eq!(animating(&s), []);
+    }
+
+    /// Switching animations off stops the ones running.
+    #[test]
+    fn switching_animations_off_stops_them() {
+        let mut s = session();
+        complete(&mut s, House::Row(0));
+        assert!(!animating(&s).is_empty());
+        s.configure(&Config {
+            animations: false,
+            ..Config::default()
+        });
+        assert_eq!(animating(&s), []);
+    }
+
+    #[test]
+    fn a_win_starts_the_wave_and_no_pulses() {
+        let mut s = session();
+        win(&mut s);
+        assert_eq!(animating(&s), [AnimationKind::Win]);
+    }
+
+    #[test]
+    fn nothing_moves_with_animations_off() {
+        let config = Config {
+            animations: false,
+            ..Config::default()
+        };
+        let mut s = Session::new(fixtures::game(), &config, now);
+        complete(&mut s, House::Row(0));
+        win(&mut s);
+        assert_eq!(animating(&s), []);
     }
 
     /// Each hint opened counts once, however many rungs it is climbed.
@@ -1289,30 +1413,33 @@ mod tests {
     fn settings_take_effect_at_once() {
         let mut app = app_with(fixtures::game());
         open_settings(&mut app);
-        press_keys(&mut app, &[KeyCode::Enter]); // the timer
+        let change = |app: &mut App, setting: Setting| {
+            while !matches!(&app.screen, Screen::Settings(page) if page.setting() == setting) {
+                press_keys(app, &[KeyCode::Char('j')]);
+            }
+            press_keys(app, &[KeyCode::Char('l')]);
+        };
+        change(&mut app, Setting::Timer);
         assert!(app.config.timer);
         assert!(game_of(&mut app).timer);
-        press_keys(&mut app, &[KeyCode::Char('j'), KeyCode::Char('l')]); // the mouse
+        change(&mut app, Setting::Mouse);
         assert!(!app.config.mouse);
-        press_keys(&mut app, &[KeyCode::Char('j'), KeyCode::Char('l')]); // hints
+        change(&mut app, Setting::HintStart);
         assert_eq!(game_of(&mut app).game.hint_start(), 2);
-        press_keys(&mut app, &[KeyCode::Char('j'), KeyCode::Char('l')]); // t
+        change(&mut app, Setting::MarksToCandidates);
         assert_eq!(app.config.marks_to_candidates, MarksToCandidates::Merge);
-        press_keys(&mut app, &[KeyCode::Char('j'), KeyCode::Char('l')]); // same digit
-        assert!(!game_of(&mut app).view.highlights.same_digit);
-        press_keys(
-            &mut app,
-            &[
-                KeyCode::Char('k'),
-                KeyCode::Char('k'),
-                KeyCode::Char('k'),
-                KeyCode::Char('k'),
-            ],
+        assert_eq!(
+            game_of(&mut app).game.candidates_from_marks(),
+            CandidatesFromMarks::Merge
         );
-        press_keys(&mut app, &[KeyCode::Char('k'), KeyCode::Char('h')]); // the key bar
-        assert!(game_of(&mut app).view.key_bar_hidden);
-        press_keys(&mut app, &[KeyCode::Char('k'), KeyCode::Char('l')]); // the theme
+        change(&mut app, Setting::SameDigit);
+        assert!(!game_of(&mut app).view.highlights.same_digit);
+        change(&mut app, Setting::Theme);
         assert_eq!(app.theme.name, "Tokyo Night");
+        change(&mut app, Setting::KeyBar);
+        assert!(game_of(&mut app).view.key_bar_hidden);
+        change(&mut app, Setting::Animations);
+        assert!(!game_of(&mut app).animations);
         press_keys(&mut app, &[KeyCode::Esc]);
         assert_eq!(menu_kind(&app), Some(Kind::Pause));
     }

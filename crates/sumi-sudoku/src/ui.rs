@@ -13,6 +13,7 @@ use sumi_core::grid::{Cell, col, row, sees};
 use sumi_core::hint::{Hint, Rung};
 use sumi_core::technique::Level;
 
+use crate::animation::{Animation, Light};
 use crate::config::Config;
 use crate::config::Highlights;
 use crate::game::{CandidatesFromMarks, Game, Mode};
@@ -119,6 +120,8 @@ pub struct View {
     pub highlights: Highlights,
     /// The settings hide the key bar.
     pub key_bar_hidden: bool,
+    /// Animations running, oldest first.
+    pub animations: Vec<Animation>,
 }
 
 /// A hint on its way up the ladder.
@@ -921,7 +924,8 @@ impl Board<'_> {
         // Without colour, the two highlights whose cells nothing else names
         // are drawn reversed: a hint's pattern and the filter's cells.
         let hint_cell = self.rung.as_ref().is_some_and(|r| r.cells.contains(&cell));
-        if self.theme.monochrome && (hint_cell || self.filtered(cell)) {
+        let pulse = self.light(cell) == Some(Light::Strong);
+        if self.theme.monochrome && (hint_cell || pulse || self.filtered(cell)) {
             buf.set_style(rect, Style::new().add_modifier(Modifier::REVERSED));
         }
         if cell == self.game.cursor() && self.areas.density == Density::Full {
@@ -981,6 +985,12 @@ impl Board<'_> {
             None => {}
         }
         self.render_hint_marks(cell, rect, buf);
+    }
+
+    /// How the animations running light `cell`; the strongest wins.
+    fn light(&self, cell: Cell) -> Option<Light> {
+        let lights = self.view.animations.iter().filter_map(|a| a.light(cell));
+        lights.min_by_key(|light| *light != Light::Strong)
     }
 
     /// Whether the candidate filter lights `cell`.
@@ -1105,6 +1115,11 @@ impl Board<'_> {
             Some(self.theme.hint_cell)
         } else if cell == cursor {
             Some(self.theme.cursor)
+        } else if let Some(light) = self.light(cell) {
+            Some(match light {
+                Light::Strong => self.theme.same_digit,
+                Light::Faint => self.theme.peer,
+            })
         } else if filtered {
             Some(self.theme.filter)
         } else if self.view.highlights.same_digit
@@ -1418,7 +1433,7 @@ fn settings_lines(page: &SettingsPage, theme: &Theme) -> Vec<Line<'static>> {
 
 /// The smallest window the settings page fits in: its widest row (a label
 /// and the longest theme name), its rows, the frame, and the keys.
-const SETTINGS_NEEDED: (u16, u16) = (52, 28);
+const SETTINGS_NEEDED: (u16, u16) = (52, 30);
 
 pub fn settings_fit(area: Rect) -> bool {
     area.width >= SETTINGS_NEEDED.0 && area.height >= SETTINGS_NEEDED.1
@@ -3042,6 +3057,64 @@ mod tests {
                     "{size:?}"
                 );
             }
+        }
+    }
+
+    /// The page's rows, the frame and the key bar fit the height it asks
+    /// for.
+    #[test]
+    fn the_settings_page_fits_the_size_it_asks_for() {
+        let area = Rect::new(0, 0, SETTINGS_NEEDED.0, SETTINGS_NEEDED.1);
+        let (boxed, inner, keys) = settings_areas(area);
+        assert_eq!(inner.height as usize, settings_rows().len() + 2);
+        assert!(boxed.bottom() <= keys.y && keys.bottom() <= area.bottom());
+        assert_eq!(
+            boxed.y + keys.bottom() - area.bottom(),
+            boxed.y,
+            "no room to spare"
+        );
+    }
+
+    /// While a completed house pulses, its cells are lit; without colour,
+    /// reversed.
+    #[test]
+    fn a_pulse_lights_the_house() {
+        use crate::animation::{Animation, Kind};
+        let theme = Theme::tokyo_night_amoled();
+        let game = game();
+        let view = View {
+            animations: vec![Animation::new(Kind::House(sumi_core::grid::House::Row(8)))],
+            ..View::default()
+        };
+        let backend = render(&game, &view);
+        assert_eq!(backend.buffer()[middle(76)].bg, theme.same_digit);
+        assert_ne!(backend.buffer()[middle(67)].bg, theme.same_digit);
+        let plain = render_in(&game, &view, &Theme::monochrome());
+        assert!(
+            plain.buffer()[middle(76)]
+                .modifier
+                .contains(Modifier::REVERSED)
+        );
+    }
+
+    /// Where two animations light a cell, the stronger light shows.
+    #[test]
+    fn the_strongest_light_wins() {
+        use crate::animation::{Animation, Kind};
+        use sumi_core::grid::House;
+        let theme = Theme::tokyo_night_amoled();
+        let faint = Animation {
+            kind: Kind::House(House::Row(8)),
+            elapsed: std::time::Duration::from_millis(200),
+        };
+        let strong = Animation::new(Kind::House(House::Col(4)));
+        for animations in [vec![faint, strong], vec![strong, faint]] {
+            let view = View {
+                animations,
+                ..View::default()
+            };
+            let bg = render(&game(), &view).buffer()[middle(76)].bg;
+            assert_eq!(bg, theme.same_digit);
         }
     }
 

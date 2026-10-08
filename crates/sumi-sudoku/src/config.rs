@@ -18,6 +18,9 @@ pub struct Config {
     pub key_bar: bool,
     /// Clicks and taps act on the board, the pad and the menus.
     pub mouse: bool,
+    /// A completed row, column or box pulses, and a wave crosses the board
+    /// at a win.
+    pub animations: bool,
     pub highlights: Highlights,
 }
 
@@ -30,6 +33,7 @@ impl Default for Config {
             marks_to_candidates: MarksToCandidates::Fill,
             key_bar: true,
             mouse: true,
+            animations: true,
             highlights: Highlights::default(),
         }
     }

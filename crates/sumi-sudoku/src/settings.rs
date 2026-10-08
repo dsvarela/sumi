@@ -17,6 +17,7 @@ pub enum Setting {
     NoteClashes,
     Theme,
     KeyBar,
+    Animations,
 }
 
 /// The groups in order, each with its settings. Keys has none yet:
@@ -34,7 +35,10 @@ pub const GROUPS: [(&str, &[Setting]); 6] = [
             Setting::NoteClashes,
         ],
     ),
-    ("Look", &[Setting::Theme, Setting::KeyBar]),
+    (
+        "Look",
+        &[Setting::Theme, Setting::KeyBar, Setting::Animations],
+    ),
     ("Keys", &[]),
 ];
 
@@ -56,6 +60,7 @@ impl Setting {
             Setting::NoteClashes => "Notes that clash",
             Setting::Theme => "Theme",
             Setting::KeyBar => "Key bar",
+            Setting::Animations => "Animations",
         }
     }
 
@@ -72,6 +77,7 @@ impl Setting {
             Setting::NoteClashes => &["highlights", "note_clashes"],
             Setting::Theme => &["theme"],
             Setting::KeyBar => &["key_bar"],
+            Setting::Animations => &["animations"],
         }
     }
 
@@ -93,6 +99,7 @@ impl Setting {
             Setting::NoteClashes => on(config.highlights.note_clashes),
             Setting::Theme => theme.to_string(),
             Setting::KeyBar => if config.key_bar { "shown" } else { "hidden" }.to_string(),
+            Setting::Animations => on(config.animations),
         }
     }
 
@@ -136,6 +143,7 @@ impl Setting {
                 config.theme = Some(themes[next].clone());
             }
             Setting::KeyBar => config.key_bar = !config.key_bar,
+            Setting::Animations => config.animations = !config.animations,
         }
     }
 
@@ -156,6 +164,7 @@ impl Setting {
             Setting::NoteClashes => h.note_clashes.into(),
             Setting::Theme => config.theme.clone().unwrap_or_default().into(),
             Setting::KeyBar => config.key_bar.into(),
+            Setting::Animations => config.animations.into(),
         }
     }
 }
@@ -267,14 +276,14 @@ mod tests {
     fn keys_on_the_page() {
         let mut page = Page::new(true);
         assert_eq!(page.handle(Action::Step(Direction::Up)), None);
-        assert_eq!(page.setting(), Setting::KeyBar);
+        assert_eq!(page.setting(), Setting::Animations);
         assert_eq!(
             page.handle(Action::Confirm),
-            Some(Choice::Change(Setting::KeyBar, true))
+            Some(Choice::Change(Setting::Animations, true))
         );
         assert_eq!(
             page.handle(Action::Step(Direction::Left)),
-            Some(Choice::Change(Setting::KeyBar, false))
+            Some(Choice::Change(Setting::Animations, false))
         );
         assert_eq!(page.handle(Action::Close), Some(Choice::Back));
         assert_eq!(page.handle(Action::Digit(4)), None);
