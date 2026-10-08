@@ -80,9 +80,38 @@ pub fn find(board: &Grid, solution: &Grid, notes: &[Option<Digits>; CELLS], uniq
     let Some(step) = ORDER.iter().find_map(|t| t.find(&position)) else {
         return Hint::Stuck;
     };
+    let step = picked_form(&position, step);
     let level = step.technique.level();
     let count = steps_at(&position, level);
     Hint::Step(Box::new(StepHint { step, level, count }))
+}
+
+/// The form of `step` the hint names. A step that reads the same in several
+/// houses, as a hidden single in its box, row and column, takes the kind its
+/// cells and digits pick, so hints name boxes, rows and columns alike rather
+/// than the box `find` keeps, and a position always gives the same hint.
+fn picked_form(p: &Position, step: Step) -> Step {
+    let digits: usize = step.digits.iter().map(usize::from).sum();
+    let first = (step.cells.iter().sum::<usize>() + digits) % 3;
+    let same = |s: &Step| {
+        s.cells == step.cells && s.placement == step.placement && s.removals == step.removals
+    };
+    step.technique
+        .search(p)
+        .into_iter()
+        .filter(same)
+        .filter(|s| !s.houses.is_empty())
+        .min_by_key(|s| (kind(s.houses[0]) + 3 - first) % 3)
+        .unwrap_or(step)
+}
+
+/// Box, row and column as 0, 1 and 2.
+fn kind(house: House) -> usize {
+    match house {
+        House::Box(_) => 0,
+        House::Row(_) => 1,
+        House::Col(_) => 2,
+    }
 }
 
 /// What a step does: the digit it places, or the candidates it removes.
@@ -770,6 +799,36 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    /// A hidden single is often the only spot in its box, row and column at
+    /// once. Hints name each kind about a third of the time along the bank's
+    /// solving paths, and name the step the grader takes.
+    #[test]
+    fn hidden_singles_are_named_in_boxes_rows_and_columns_alike() {
+        let bank = include_str!("../data/bank.txt");
+        let mut named = [0usize; 3];
+        for line in bank.lines().filter(|l| !l.starts_with('#')).take(20) {
+            let clues: Grid = line.split(' ').next().unwrap().parse().unwrap();
+            let solution = solution_of(&clues);
+            let mut p = Position::new(&clues).known_unique();
+            for graded in solving_steps(&clues) {
+                let hint = find(p.grid(), &solution, &notes_of(&p), true);
+                let step = &step_of(&hint).step;
+                assert_eq!(
+                    (&step.cells, step.placement, &step.removals),
+                    (&graded.cells, graded.placement, &graded.removals)
+                );
+                if step.technique.name() == "Hidden single" {
+                    named[kind(step.houses[0])] += 1;
+                }
+                p.apply(&graded);
+            }
+        }
+        let total: usize = named.iter().sum();
+        for n in named {
+            assert!((total / 4..=total * 5 / 12).contains(&n), "{named:?}");
         }
     }
 
