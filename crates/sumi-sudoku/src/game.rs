@@ -4,6 +4,8 @@
 use sumi_core::digits::Digits;
 use sumi_core::generate::Puzzle;
 use sumi_core::grid::{CELLS, Cell, Grid, col, peers, row};
+use sumi_core::hint::{self, Hint};
+use sumi_core::step::Step as SolverStep;
 
 pub struct Game {
     puzzle: Puzzle,
@@ -19,6 +21,8 @@ pub struct Game {
     cursor: Cell,
     mode: Mode,
     candidates_from_marks: CandidatesFromMarks,
+    /// The rung a hint opens at, from 1.
+    hint_start: usize,
     undo: Vec<Step>,
     redo: Vec<Step>,
 }
@@ -98,6 +102,7 @@ impl Game {
             cursor: 0,
             mode: Mode::Digit,
             candidates_from_marks: CandidatesFromMarks::default(),
+            hint_start: 1,
             undo: Vec::new(),
             redo: Vec::new(),
         }
@@ -162,6 +167,20 @@ impl Game {
     )]
     pub fn set_candidates_from_marks(&mut self, choice: CandidatesFromMarks) {
         self.candidates_from_marks = choice;
+    }
+
+    /// The rung a new hint opens at; a ladder shorter than that opens at its
+    /// last rung.
+    pub fn hint_start(&self) -> usize {
+        self.hint_start
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the settings page in milestone 6 calls it")
+    )]
+    pub fn set_hint_start(&mut self, rung: usize) {
+        self.hint_start = rung.clamp(1, 5);
     }
 
     /// Digit, then candidate, then box mark, then back to digit.
@@ -289,6 +308,48 @@ impl Game {
                 }
             }
         });
+    }
+
+    /// The hint for the board as it is, built from the player's candidates.
+    /// Puzzles are generated or banked with one solution, so the techniques
+    /// that need that are allowed.
+    pub fn hint(&self) -> Hint {
+        hint::find(&self.board, &self.puzzle.solution, &self.candidates, true)
+    }
+
+    /// Does what a hint's step says: places its digit, or removes its
+    /// candidates from the player's lists. A cell without a list gets the
+    /// digits it can hold, less the removed ones. One undo step.
+    pub fn apply_hint(&mut self, step: &SolverStep) {
+        self.record(|g| {
+            if let Some((cell, digit)) = step.placement {
+                g.place(cell, digit);
+            }
+            for &(cell, digits) in &step.removals {
+                let listed = g.working_candidates(cell);
+                g.candidates[cell] = Some(listed.without(digits));
+            }
+        });
+    }
+
+    /// The player's digits that differ from the solution, in cell order.
+    pub fn wrong_digits(&self) -> Vec<(Cell, u8)> {
+        (0..CELLS)
+            .filter(|&c| !self.is_clue(c))
+            .filter_map(|c| {
+                let digit = self.board.get(c)?;
+                (self.puzzle.solution.get(c) != Some(digit)).then_some((c, digit))
+            })
+            .collect()
+    }
+
+    /// Writes the solution's digit in the cursor cell. A clue or a right
+    /// digit is already it, so nothing changes.
+    pub fn reveal(&mut self) {
+        let cell = self.cursor;
+        if let Some(answer) = self.puzzle.solution.get(cell) {
+            self.record(|g| g.place(cell, answer));
+        }
     }
 
     /// Takes back the last step and puts the cursor where it was then.
@@ -442,6 +503,7 @@ mod tests {
     use super::*;
     use crate::fixtures::{game, solution};
     use proptest::prelude::*;
+    use sumi_core::step::Step as SolverStep;
 
     /// r1c3 is empty; its possible digits are 1, 2 and 4, and its answer is 4.
     const R1C3: Cell = 2;
@@ -456,6 +518,149 @@ mod tests {
 
     fn digits(list: &[u8]) -> Digits {
         list.iter().copied().collect()
+    }
+
+    #[test]
+    fn reveal_places_the_answer_and_undo_takes_it_back() {
+        let mut g = at(R1C3);
+        g.reveal();
+        assert_eq!(g.board().get(R1C3), Some(4));
+        g.undo();
+        assert_eq!(g.board().get(R1C3), None);
+    }
+
+    #[test]
+    fn reveal_replaces_a_wrong_digit_and_skips_clues_and_right_digits() {
+        let mut g = at(R1C3);
+        g.press(1);
+        g.reveal();
+        assert_eq!(g.board().get(R1C3), Some(4));
+
+        let steps = g.undo.len();
+        g.reveal();
+        assert_eq!(g.undo.len(), steps, "a right digit is not changed");
+        g.cursor = 0;
+        g.reveal();
+        assert_eq!(g.undo.len(), steps, "a clue is not changed");
+    }
+
+    #[test]
+    fn wrong_digits_are_those_that_differ_from_the_solution() {
+        let mut g = at(R1C3);
+        g.press(1); // the answer is 4
+        g.cursor = R1C8;
+        g.press(1); // the answer is 1
+        assert_eq!(g.wrong_digits(), [(R1C3, 1)]);
+    }
+
+    fn removal(cell: Cell, digit: u8) -> SolverStep {
+        SolverStep {
+            technique: &sumi_core::technique::Pointing,
+            digits: digits(&[digit]),
+            houses: vec![],
+            cells: vec![cell],
+            removals: vec![(cell, digits(&[digit]))],
+            placement: None,
+            key_cells: vec![],
+        }
+    }
+
+    #[test]
+    fn a_hint_removal_writes_the_cells_candidates_less_the_digit() {
+        let mut g = game();
+        g.apply_hint(&removal(R1C3, 1)); // no candidates written: 1, 2, 4 possible
+        assert_eq!(g.candidates(R1C3), digits(&[2, 4]));
+        g.apply_hint(&removal(R1C3, 2));
+        assert_eq!(g.candidates(R1C3), digits(&[4]));
+        g.undo();
+        assert_eq!(g.candidates(R1C3), digits(&[2, 4]));
+    }
+
+    #[test]
+    fn a_hint_placement_is_one_undo_step_and_cleans_the_notes_around_it() {
+        let mut g = game();
+        g.fill_candidates();
+        let Hint::Step(hint) = g.hint() else {
+            panic!("the fixture has a step")
+        };
+        let (cell, digit) = hint
+            .step
+            .placement
+            .expect("the fixture's first step places");
+        let steps = g.undo.len();
+        g.apply_hint(&hint.step);
+        assert_eq!(g.board().get(cell), Some(digit));
+        assert_eq!(g.undo.len(), steps + 1);
+        assert!(peers(cell).all(|p| !g.candidates(p).contains(digit)));
+        g.undo();
+        assert_eq!(g.board().get(cell), None);
+    }
+
+    #[test]
+    fn the_hint_reads_the_players_candidates() {
+        let mut g = at(R1C3);
+        g.next_mode();
+        g.press(1); // writes only 1 in r1c3, whose answer is 4
+        assert_eq!(g.hint(), Hint::StruckOut(R1C3));
+        g.press(4);
+        assert_ne!(g.hint(), Hint::StruckOut(R1C3));
+    }
+
+    #[test]
+    fn a_wrong_digit_is_the_first_hint() {
+        let mut g = at(R1C3);
+        g.press(1);
+        assert_eq!(g.hint(), Hint::Mistake(R1C3));
+    }
+
+    proptest! {
+        /// From any correct play, following hints keeps every digit right and
+        /// every written candidate list holding its cell's answer.
+        #[test]
+        fn following_hints_never_breaks_the_solution(
+            seed in any::<u64>(),
+            play in prop::collection::vec((0..CELLS, 1u8..=9, 0u8..3), 0..80),
+        ) {
+            use rand::SeedableRng;
+            let mut rng = rand::rngs::Xoshiro256PlusPlus::seed_from_u64(seed);
+            let (puzzle, _) = sumi_core::generate::generate_solvable(&mut rng);
+            let solution = puzzle.solution;
+            let mut g = Game::new(puzzle);
+            for (cell, digit, kind) in play {
+                g.cursor = cell;
+                let answer = solution.get(cell).unwrap();
+                match kind {
+                    0 => {
+                        g.mode = Mode::Digit;
+                        g.press(answer);
+                    }
+                    1 => g.fill_candidates(),
+                    _ => {
+                        // Strike a wrong candidate, if the cell lists it.
+                        g.mode = Mode::Candidate;
+                        if digit != answer && g.candidates(cell).contains(digit) {
+                            g.press(digit);
+                        }
+                    }
+                }
+            }
+            for _ in 0..200 {
+                match g.hint() {
+                    Hint::Step(hint) => g.apply_hint(&hint.step),
+                    Hint::Mistake(c) | Hint::StruckOut(c) => {
+                        return Err(TestCaseError::fail(format!("mistake at {c}")));
+                    }
+                    Hint::Solved | Hint::Stuck => break,
+                }
+                for cell in 0..CELLS {
+                    let answer = solution.get(cell).unwrap();
+                    prop_assert!(g.board().get(cell).is_none_or(|d| d == answer));
+                    if g.board().get(cell).is_none() {
+                        prop_assert!(g.candidates[cell].is_none_or(|set| set.contains(answer)));
+                    }
+                }
+            }
+        }
     }
 
     #[test]

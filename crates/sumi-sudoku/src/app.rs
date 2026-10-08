@@ -17,7 +17,7 @@ use sumi_core::technique::Level;
 use crate::game::Game;
 use crate::input::{Action, FilterKey, action, filter_key};
 use crate::theme::Theme;
-use crate::ui::{self, Filter, View};
+use crate::ui::{self, Filter, OpenHint, View};
 
 /// Plays puzzles of `level`, or any generated puzzle without one. Fails
 /// without changing the terminal when there is none to draw on.
@@ -101,6 +101,24 @@ impl Session {
         let Some(action) = action(key) else {
             return Flow::Continue;
         };
+        // Looking around, switching mode or filtering leave a hint as it is;
+        // anything that changes the board or the notes closes it.
+        if !matches!(
+            action,
+            Action::Step(_)
+                | Action::Jump(_)
+                | Action::NextMode
+                | Action::ToggleNotes
+                | Action::Filter
+                | Action::Hint
+                | Action::Check
+                | Action::Close
+                | Action::Confirm
+                | Action::Quit
+        ) {
+            self.view.hint = None;
+        }
+        self.view.notice = None;
         let game = &mut self.game;
         match action {
             Action::Quit => return Flow::Quit,
@@ -126,9 +144,49 @@ impl Session {
             Action::Filter => self.view.awaiting_filter = true,
             Action::Undo => game.undo(),
             Action::Redo => game.redo(),
-            Action::Confirm => {}
+            Action::Hint => self.climb_hint(),
+            Action::Close => {
+                if self.view.hint.take().is_none() {
+                    self.view.checked.clear();
+                }
+            }
+            Action::Check => {
+                self.view.checked = game.wrong_digits();
+                self.view.notice = self.view.checked.is_empty().then_some("no mistakes");
+            }
+            Action::Reveal => game.reveal(),
+            Action::Confirm => self.apply_hint(),
         }
         Flow::Continue
+    }
+}
+
+impl Session {
+    /// Opens a hint at the game's starting rung, or moves an open one up a
+    /// rung, stopping at the last.
+    fn climb_hint(&mut self) {
+        match &mut self.view.hint {
+            Some(open) => open.rung = (open.rung + 1).min(open.hint.rungs()),
+            None => {
+                let hint = self.game.hint();
+                let rung = self.game.hint_start().clamp(1, hint.rungs());
+                self.view.hint = Some(OpenHint { hint, rung });
+            }
+        }
+    }
+
+    /// Does the open hint's step, if its last rung is showing.
+    fn apply_hint(&mut self) {
+        let step = self
+            .view
+            .hint
+            .as_ref()
+            .filter(|open| open.rung == open.hint.rungs())
+            .and_then(|open| open.hint.step().cloned());
+        if let Some(step) = step {
+            self.game.apply_hint(&step);
+            self.view.hint = None;
+        }
     }
 }
 
@@ -207,6 +265,111 @@ mod tests {
         assert_eq!(s.game.cursor(), 0);
         assert_eq!(s.game.candidates(2), sumi_core::digits::Digits::NONE);
         assert_eq!(s.handle(key(KeyCode::Char('q')), false), Flow::Quit);
+    }
+
+    fn rung(s: &Session) -> Option<usize> {
+        s.view.hint.as_ref().map(|open| open.rung)
+    }
+
+    #[test]
+    fn the_hint_key_opens_the_ladder_and_climbs_a_rung_a_press() {
+        let mut s = session();
+        assert_eq!(rung(&s), None);
+        type_keys(&mut s, "?");
+        assert_eq!(rung(&s), Some(1));
+        type_keys(&mut s, "?");
+        assert_eq!(rung(&s), Some(2));
+        type_keys(&mut s, "????");
+        assert_eq!(rung(&s), Some(5), "the top rung is the last");
+    }
+
+    #[test]
+    fn moving_leaves_the_hint_open_and_typing_or_esc_closes_it() {
+        let mut s = session();
+        type_keys(&mut s, "?ljHn");
+        assert_eq!(rung(&s), Some(1), "moving and changing mode keep it");
+        s.handle(key(KeyCode::Esc), true);
+        assert_eq!(rung(&s), None);
+
+        type_keys(&mut s, "?4");
+        assert_eq!(rung(&s), None, "a digit closes it");
+        type_keys(&mut s, "?u");
+        assert_eq!(rung(&s), None, "so does undo");
+        type_keys(&mut s, "?a");
+        assert_eq!(rung(&s), None, "and fill");
+    }
+
+    #[test]
+    fn a_closed_hint_starts_again_at_the_first_rung() {
+        let mut s = session();
+        type_keys(&mut s, "???");
+        s.handle(key(KeyCode::Esc), true);
+        type_keys(&mut s, "?");
+        assert_eq!(rung(&s), Some(1));
+    }
+
+    #[test]
+    fn enter_applies_the_hint_at_the_last_rung_and_not_before() {
+        let mut s = session();
+        type_keys(&mut s, "??");
+        let before = s.game.board().filled();
+        s.handle(key(KeyCode::Enter), true);
+        assert_eq!(s.game.board().filled(), before);
+        assert_eq!(rung(&s), Some(2));
+
+        type_keys(&mut s, "???");
+        assert_eq!(rung(&s), Some(5));
+        s.handle(key(KeyCode::Enter), true);
+        assert_eq!(s.game.board().filled(), before + 1);
+        assert_eq!(rung(&s), None);
+    }
+
+    #[test]
+    fn hint_start_skips_the_early_rungs() {
+        let mut s = session();
+        s.game.set_hint_start(3);
+        type_keys(&mut s, "?");
+        assert_eq!(rung(&s), Some(3));
+        s.handle(key(KeyCode::Esc), true);
+        s.game.set_hint_start(5);
+        type_keys(&mut s, "?");
+        assert_eq!(rung(&s), Some(5));
+    }
+
+    #[test]
+    fn a_short_ladder_opens_at_its_last_rung_when_hint_start_is_past_it() {
+        let mut s = session();
+        s.game.set_hint_start(5);
+        type_keys(&mut s, "ll"); // r1c3
+        type_keys(&mut s, "1"); // a wrong digit: the answer is 4
+        type_keys(&mut s, "?");
+        assert_eq!(rung(&s), Some(3));
+    }
+
+    #[test]
+    fn check_marks_wrong_digits_and_says_when_there_are_none() {
+        let mut s = session();
+        type_keys(&mut s, "c");
+        assert_eq!(s.view.notice, Some("no mistakes"));
+        assert!(s.view.checked.is_empty());
+
+        type_keys(&mut s, "ll1"); // r1c3 gets a 1; its answer is 4
+        type_keys(&mut s, "c");
+        assert_eq!(s.view.notice, None);
+        assert_eq!(s.view.checked, [(2, 1)]);
+
+        s.handle(key(KeyCode::Esc), true);
+        assert!(s.view.checked.is_empty(), "Esc clears the marks");
+    }
+
+    #[test]
+    fn reveal_writes_the_answer_closes_the_hint_and_undoes() {
+        let mut s = session();
+        type_keys(&mut s, "ll?r");
+        assert_eq!(s.game.board().get(2), Some(4));
+        assert_eq!(rung(&s), None);
+        type_keys(&mut s, "u");
+        assert_eq!(s.game.board().get(2), None);
     }
 
     #[test]

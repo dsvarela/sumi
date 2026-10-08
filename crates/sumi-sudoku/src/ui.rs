@@ -4,12 +4,13 @@
 
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Constraint, Rect};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Paragraph, Widget, Wrap};
+use ratatui::widgets::{Block, BorderType, Padding, Paragraph, Widget, Wrap};
 
 use sumi_core::grid::{Cell, col, row, sees};
+use sumi_core::hint::Hint;
 
 use crate::game::{Game, Mode};
 use crate::input::{Action, key_label};
@@ -21,13 +22,31 @@ const CELL_HEIGHT: u16 = 3;
 const BOARD_WIDTH: u16 = 9 * (CELL_WIDTH + 1) + 1;
 const BOARD_HEIGHT: u16 = 9 * (CELL_HEIGHT + 1) + 1;
 
+/// The panel beside the board is this wide, borders and padding included. It
+/// leaves 30 columns for text, which every hint rung is written to fit.
+const PANEL_WIDTH: u16 = 34;
+
 /// What the screen shows besides the game itself. None of it is undoable.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct View {
     pub filter: Option<Filter>,
     pub notes_hidden: bool,
     /// `f` was pressed and the next key picks the filter.
     pub awaiting_filter: bool,
+    pub hint: Option<OpenHint>,
+    /// The digits `c` found wrong. A mark stays while its cell still holds
+    /// that digit.
+    pub checked: Vec<(Cell, u8)>,
+    /// A one-word answer to the last key, shown in the status line.
+    pub notice: Option<&'static str>,
+}
+
+/// A hint on its way up the ladder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenHint {
+    pub hint: Hint,
+    /// The rung showing, from 1.
+    pub rung: usize,
 }
 
 /// Which empty cells the candidate filter lights up.
@@ -39,8 +58,10 @@ pub enum Filter {
     TwoCandidates,
 }
 
-/// The board inside its frame: the smallest window the game can be drawn in.
-const NEEDED: (u16, u16) = (BOARD_WIDTH + 2, BOARD_HEIGHT + 2);
+/// The board inside its frame, a gap and the panel: the smallest window the
+/// game can be drawn in.
+const FRAME_WIDTH: u16 = BOARD_WIDTH + 2;
+const NEEDED: (u16, u16) = (FRAME_WIDTH + 1 + PANEL_WIDTH, BOARD_HEIGHT + 2);
 
 /// Whether `draw` shows the board in a window of this size. The app asks
 /// this too, so keys never act on a board the player can't see.
@@ -56,13 +77,57 @@ pub fn draw(frame: &mut Frame, game: &Game, view: &View, theme: &Theme) {
         return;
     }
 
-    let outer = area.centered(Constraint::Length(NEEDED.0), Constraint::Length(NEEDED.1));
+    let whole = area.centered(Constraint::Length(NEEDED.0), Constraint::Length(NEEDED.1));
+    let [outer, _, side] = Layout::horizontal([
+        Constraint::Length(FRAME_WIDTH),
+        Constraint::Length(1),
+        Constraint::Length(PANEL_WIDTH),
+    ])
+    .areas(whole);
     let block = frame_block(theme)
         .title_top(status(game, view, theme).right_aligned())
         .title_bottom(key_bar(&keys(game, view), theme).centered());
     let inner = block.inner(outer);
     frame.render_widget(block, outer);
     frame.render_widget(Board { game, view, theme }, inner);
+    panel(frame, side, view, theme);
+}
+
+/// The side panel: the hint's words, or how to ask for one.
+fn panel(frame: &mut Frame, area: Rect, view: &View, theme: &Theme) {
+    let block = panel_block(theme, "Hint");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let text = match &view.hint {
+        Some(open) => {
+            let rung = open.hint.rung(open.rung);
+            vec![
+                Line::from(Span::styled(
+                    format!("Rung {} of {}", open.rung, open.hint.rungs()),
+                    Style::new().fg(theme.dimmed),
+                )),
+                Line::raw(""),
+                Line::from(Span::styled(rung.text, Style::new().fg(theme.text))),
+            ]
+        }
+        None => vec![Line::from(Span::styled(
+            format!("{} for a hint", key_label(Action::Hint)),
+            Style::new().fg(theme.dimmed),
+        ))],
+    };
+    frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: true }), inner);
+}
+
+/// The block beside the board that holds a panel's text, with a title.
+pub fn panel_block(theme: &Theme, title: &str) -> Block<'static> {
+    Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(theme.frame))
+        .padding(Padding::horizontal(1))
+        .title_top(Line::from(Span::styled(
+            format!(" {title} "),
+            Style::new().fg(theme.accent),
+        )))
 }
 
 fn status(game: &Game, view: &View, theme: &Theme) -> Line<'static> {
@@ -77,6 +142,12 @@ fn status(game: &Game, view: &View, theme: &Theme) -> Line<'static> {
         Some(Filter::Digit(d)) => parts.push(format!("filter {d}")),
         Some(Filter::TwoCandidates) => parts.push("filter pairs".to_string()),
         None => {}
+    }
+    if let Some(open) = &view.hint {
+        parts.push(format!("hint {}/{}", open.rung, open.hint.rungs()));
+    }
+    if let Some(notice) = view.notice {
+        parts.push(notice.to_string());
     }
     parts.push(
         match game.mode() {
@@ -104,6 +175,21 @@ fn keys(game: &Game, view: &View) -> Vec<(&'static str, &'static str)> {
             ("other", "cancel"),
         ];
     }
+    if let Some(open) = &view.hint {
+        let mut keys = Vec::new();
+        if open.rung < open.hint.rungs() {
+            keys.push((Action::Hint, "next rung"));
+        } else if open.hint.step().is_some() {
+            keys.push((Action::Confirm, "apply"));
+        }
+        keys.push((Action::Step(crate::game::Direction::Up), "look around"));
+        keys.push((Action::Close, "close"));
+        keys.push((Action::Quit, "quit"));
+        return keys
+            .into_iter()
+            .map(|(action, words)| (key_label(action), words))
+            .collect();
+    }
     let actions: &[(Action, &str)] = if game.is_won() {
         &[(Action::Confirm, "new game"), (Action::Quit, "quit")]
     } else {
@@ -114,6 +200,7 @@ fn keys(game: &Game, view: &View) -> Vec<(&'static str, &'static str)> {
                 (Action::NextMode, "mode"),
                 (Action::FillCandidates, "fill"),
                 (Action::Filter, "filter"),
+                (Action::Hint, "hint"),
                 (Action::Undo, "undo"),
                 (Action::Quit, "quit"),
             ],
@@ -404,7 +491,7 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     fn render(game: &Game, view: &View) -> TestBackend {
-        let mut terminal = Terminal::new(TestBackend::new(75, 39)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(NEEDED.0, NEEDED.1)).unwrap();
         terminal
             .draw(|frame| draw(frame, game, view, &Theme::tokyo_night_amoled()))
             .unwrap();
@@ -412,7 +499,7 @@ mod tests {
     }
 
     /// The screen position of a cell's middle character, for the full layout
-    /// in a 75×39 window: the frame and the board's outer line take one
+    /// in a window of exactly `NEEDED`: the frame and the board's outer line take one
     /// column and row each.
     fn middle(cell: Cell) -> (u16, u16) {
         (5 + 8 * col(cell) as u16, 3 + 4 * row(cell) as u16)

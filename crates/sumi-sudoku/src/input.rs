@@ -23,6 +23,14 @@ pub enum Action {
     Filter,
     Undo,
     Redo,
+    /// Opens the hint, or moves it up a rung.
+    Hint,
+    /// Closes the hint, or the marks a check left.
+    Close,
+    /// Marks the digits that differ from the solution.
+    Check,
+    /// Writes the cursor cell's digit from the solution.
+    Reveal,
     Confirm,
     Quit,
 }
@@ -66,6 +74,10 @@ pub fn action(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('v') => Action::ToggleNotes,
         KeyCode::Char('f') => Action::Filter,
         KeyCode::Char('u') => Action::Undo,
+        KeyCode::Char('?') => Action::Hint,
+        KeyCode::Char('c') => Action::Check,
+        KeyCode::Char('r') => Action::Reveal,
+        KeyCode::Esc => Action::Close,
         KeyCode::Enter => Action::Confirm,
         KeyCode::Char('q') => Action::Quit,
         _ => return None,
@@ -107,6 +119,10 @@ pub fn key_label(action: Action) -> &'static str {
         Action::Filter => "f",
         Action::Undo => "u",
         Action::Redo => "^r",
+        Action::Hint => "?",
+        Action::Close => "Esc",
+        Action::Check => "c",
+        Action::Reveal => "r",
         Action::Confirm => "Enter",
         Action::Quit => "q",
     }
@@ -155,6 +171,7 @@ mod tests {
     fn keys_of(label: &str) -> Vec<KeyEvent> {
         match label {
             "Enter" => vec![key(KeyCode::Enter)],
+            "Esc" => vec![key(KeyCode::Esc)],
             "1-9" => ('1'..='9').map(|c| key(KeyCode::Char(c))).collect(),
             l if l.starts_with('^') => l[1..]
                 .chars()
@@ -181,6 +198,10 @@ mod tests {
             Action::Filter,
             Action::Undo,
             Action::Redo,
+            Action::Hint,
+            Action::Close,
+            Action::Check,
+            Action::Reveal,
             Action::Confirm,
             Action::Quit,
         ];
@@ -194,6 +215,16 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Ctrl+c quits and Ctrl+r redoes, so c and r need no modifier.
+    #[test]
+    fn check_and_reveal_are_plain_keys() {
+        assert_eq!(action(key(KeyCode::Char('c'))), Some(Action::Check));
+        assert_eq!(action(key(KeyCode::Char('r'))), Some(Action::Reveal));
+        let ctrl = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
+        assert_eq!(action(ctrl('c')), Some(Action::Quit));
+        assert_eq!(action(ctrl('r')), Some(Action::Redo));
     }
 
     #[test]
