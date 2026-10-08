@@ -22,6 +22,14 @@ macro_rules! roles {
         }
 
         impl Theme {
+            #[cfg(test)]
+            fn role(&self, role: &str) -> Option<Color> {
+                match role {
+                    $(stringify!($role) => Some(self.$role),)*
+                    _ => None,
+                }
+            }
+
             fn role_mut(&mut self, role: &str) -> Option<&mut Color> {
                 match role {
                     $(stringify!($role) => Some(&mut self.$role),)*
@@ -279,6 +287,121 @@ mod tests {
         }
         let (a, b) = (luminance(a), luminance(b));
         (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    /// A colour in OKLab, after an optional colour-blindness simulation
+    /// (Machado, Oliveira and Fernandes 2009, severity 1, on linear RGB).
+    fn seen(c: Color, simulate: Option<&[[f64; 3]; 3]>) -> [f64; 3] {
+        let Color::Rgb(r, g, b) = c else {
+            panic!("{c:?} is not an RGB colour");
+        };
+        let linear = |v: u8| {
+            let v = f64::from(v) / 255.0;
+            if v <= 0.04045 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        let mut rgb = [linear(r), linear(g), linear(b)];
+        if let Some(m) = simulate {
+            let mixed = |i: usize| (0..3).map(|j| m[i][j] * rgb[j]).sum::<f64>();
+            rgb = [0, 1, 2].map(|i| mixed(i).clamp(0.0, 1.0));
+        }
+        let [r, g, b] = rgb;
+        let l = (0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b).cbrt();
+        let m = (0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b).cbrt();
+        let s = (0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b).cbrt();
+        [
+            0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+            1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+            0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s,
+        ]
+    }
+
+    const PROTANOPIA: [[f64; 3]; 3] = [
+        [0.152286, 1.052583, -0.204868],
+        [0.114503, 0.786281, 0.099216],
+        [-0.003882, -0.048116, 1.051998],
+    ];
+    const DEUTERANOPIA: [[f64; 3]; 3] = [
+        [0.367322, 0.860646, -0.227968],
+        [0.280085, 0.672501, 0.047413],
+        [-0.011820, 0.042940, 0.968881],
+    ];
+    const TRITANOPIA: [[f64; 3]; 3] = [
+        [1.255528, -0.076749, -0.178779],
+        [-0.078411, 0.930809, 0.147602],
+        [0.004733, 0.691367, 0.303900],
+    ];
+
+    /// Pairs that must look different, and the least OKLab distance between
+    /// them. The cursor has its own shape, so it is held apart only from the
+    /// background; peer shading is meant to be faint. The text pairs also
+    /// differ by weight or a mark, so colour is a second cue for them.
+    const APART: &[(&str, &str, f64)] = &[
+        ("background", "cursor", 0.04),
+        ("background", "hint_cell", 0.04),
+        ("background", "same_digit", 0.03),
+        ("background", "filter", 0.03),
+        ("background", "hint_area", 0.025),
+        ("background", "peer", 0.012),
+        ("hint_cell", "hint_area", 0.03),
+        ("hint_area", "same_digit", 0.02),
+        ("hint_area", "filter", 0.02),
+        ("same_digit", "filter", 0.02),
+        ("digit", "clue", 0.06),
+        ("conflict", "digit", 0.06),
+        ("box_mark", "candidate", 0.06),
+        ("hint_removal", "hint_placement", 0.06),
+    ];
+
+    fn too_close(theme: &Theme, simulate: Option<&[[f64; 3]; 3]>) -> Vec<String> {
+        let at = |role| seen(theme.role(role).unwrap(), simulate);
+        APART
+            .iter()
+            .filter_map(|&(a, b, floor)| {
+                let (p, q) = (at(a), at(b));
+                let distance = (0..3).map(|i| (p[i] - q[i]).powi(2)).sum::<f64>().sqrt();
+                (distance < floor).then(|| format!("{a}/{b} {distance:.3}"))
+            })
+            .collect()
+    }
+
+    /// Every built-in theme keeps its highlights and coloured text apart as
+    /// a person with full colour vision sees them.
+    #[test]
+    fn every_theme_keeps_its_highlights_apart() {
+        for (id, theme) in Theme::load_all(None).0 {
+            assert_eq!(too_close(&theme, None), Vec::<String>::new(), "{id}");
+        }
+    }
+
+    /// The theme named for colour blindness keeps the same pairs apart under
+    /// simulated protanopia, deuteranopia and tritanopia.
+    #[test]
+    fn the_colour_blind_theme_keeps_them_apart_without_full_colour_vision() {
+        let (themes, _) = Theme::load_all(None);
+        let theme = &themes.iter().find(|(id, _)| id == "okabe-ito").unwrap().1;
+        assert_eq!(theme.name, "Colour-blind safe");
+        for simulate in [PROTANOPIA, DEUTERANOPIA, TRITANOPIA] {
+            assert_eq!(too_close(theme, Some(&simulate)), Vec::<String>::new());
+        }
+    }
+
+    /// Box lines stand out from the lines between cells.
+    #[test]
+    fn box_lines_are_stronger_than_cell_lines() {
+        for (id, t) in Theme::load_all(None).0 {
+            let (line, box_line) = (
+                contrast(t.line, t.background),
+                contrast(t.box_line, t.background),
+            );
+            assert!(
+                box_line > line + 0.5,
+                "{id}: {box_line:.2} against {line:.2}"
+            );
+        }
     }
 
     /// Text needs 4.5:1 (WCAG 1.4.3) on every background it can be drawn on,
