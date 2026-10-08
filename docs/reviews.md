@@ -5,6 +5,66 @@ its mechanism, what was fixed and where, what was closed by decision and why,
 and where deferred items went. The class register at the end names the
 defect shapes this codebase repeats; hunt them by name in later reviews.
 
+## 2026-10-08: milestone 5 (81a57a3..5f6f615)
+
+Four read-only lanes: the wording of all 20 techniques against their steps, the
+screen and session run in a real terminal, the core's call sites, and the
+comments and record. They reported 37 findings, with overlap (the missing key
+bar entries and hints over hidden candidates were each found twice). No lane
+came back clean. Key-cell order, removal digits, row and column forms and
+articles were right in every step the wording lane tried, over 31 examples
+and 120 generated puzzles; the hint never broke a solution in about 70,000
+applied hints.
+
+**Prediction against result.** Predicted, and found: wording claims in the
+less-tested techniques, stale state, and record drift. Predicted, and wrong:
+key-cell order in the wings and Skyscraper (all correct). Not predicted: the
+status line overwriting the title, keys changing the view while the board was
+hidden, the hint count including steps another step contains, and eight
+tests that could not fail.
+
+### Fixed
+
+| Class | Finding and mechanism | Fix |
+| --- | --- | --- |
+| Two things must agree | A naked subset's effect line named all the subset's digits though a digit with no other candidate in the house is not removed (68% of such steps on generated puzzles); the naked single reason said the grid alone rules out the rest when the player's candidates had narrowed it | The effect names the removed digits; the reason is true either way. A test checks every digit an effect line names against the step's removals on Hard and Expert solving walks (structural) |
+| Two things must agree | The status line, sized in one place and the title in another, pushed the frame's title off with a hint, a notice, a filter and hidden candidates | The line drops its least useful parts until it fits beside the title; the mode is never dropped (structural) |
+| Two things must agree | Rung 1 counted a step another step contains as a separate step (27 to 32% of hints at Medium and above) | A step whose removals another step makes is not counted |
+| Two things must agree | A hint's removal on a cell with no candidates written left out the hidden notes `fill` records, so erasing a digit gave back different candidates depending on whether `a` had been pressed | The removal writes the cell as `fill` does |
+| Input from where the player isn't looking | Keys closed the hint, cleared the notice and answered the filter prompt while the window was too small to draw the board | `handle` returns before touching anything unless the key quits (structural) |
+| Input from where the player isn't looking | Check marks outlived a new game and came back when the digit was typed again; the notice stayed after a key that does nothing | A mark is dropped as soon as its cell no longer holds the checked digit; a new game starts a clean view but for hidden candidates |
+| A test that cannot fail | Mutants survived in the hint whitelist (v, f, c, Esc), notice clearing, Esc with marks, the new game's view, the notice in the status line, colouring's second group, StruckOut's rungs and rung clamping | Each has a test that fails under its mutant |
+| Record | Four comments the range made false or misplaced (the NEEDED doc, the module doc on never showing an answer, ORDER's future tense, Step's "is to"); the module and test names cited the private plan | Corrected, citing research/hint-wording.md |
+
+### Closed by decision
+
+- **Hints over hidden candidates.** A hint reads, and Enter edits, the
+  player's candidates whether or not `v` shows them; the hint's own marks are
+  drawn regardless.
+- **The wording nits.** "Look for a claiming", a reason starting with a
+  numeral, "rows 2 and 6 and columns 2 and 3", and the colouring wrap not
+  saying that B is then true are accurate; left.
+- **Hidden single's "No other cell in row 3 can hold 5"** is true of the
+  player's candidates, not necessarily of the board; the same reading as the
+  hint's input.
+- **`known_unique` for every game.** True of every puzzle sumi builds today
+  and not enforced by the types; see the deferral.
+- **b8ac738 bundles `c` and `r` with the ladder.** The history is not
+  published; rewriting it would cost more than it tells.
+- **CLAUDE.md's layout** still says hint is to come; left for Daniel to
+  change.
+- **Equivalent mutants:** the clue filter in `wrong_digits` and the clamp in
+  `set_hint_start`.
+
+### Deferred
+
+| Item | Goes to |
+| --- | --- |
+| `c`, `r` and Esc are in no key bar; a mistake hint's key bar offers no action | Milestone 6, key bar and help screen |
+| The full layout needs 110x39 until the dense layout exists (the row above in 2026-10-07 said 75x39) | Milestone 6, dense layout |
+| Loaders that build a `Game` (autosave, a typed-in puzzle, the daily puzzle) must prove one solution before hints may use unique rectangle; nothing enforces it | Milestone 7 |
+| Stats must not count `c` and `r` | Milestone 7 |
+
 ## 2026-10-08: milestone 4 (8b42e02..f1b26d7)
 
 Four read-only lanes: the untested surfaces run for real (the CLI, a
@@ -136,8 +196,8 @@ test, and the shared-screen helpers. None described the pre-rewrite API.
 
 | Class | Seen | Hunt for |
 | --- | --- | --- |
-| Two things must agree, nothing makes them agree | 7 (key bar, board shown vs input, plan vs code, placement records vs notes, one step per house, stale candidates, comments vs measurements) | Text, sizes or rules stated in two files; a record of a change that later changes don't update |
+| Two things must agree, nothing makes them agree | 11 (status line vs title, effect line vs removals, count vs containment, fill vs hint removal; before: key bar, board shown vs input, plan vs code, placement records vs notes, one step per house, stale candidates, comments vs measurements) | Text, sizes or rules stated in two files; a record of a change that later changes don't update |
 | Two meanings, one value | 4 (empty notes, complete digit, a grade for an invalid grid, Beyond's step count) | An empty set, zero or `None` standing for more than one state |
-| Input from where the player isn't looking | 3 (hidden board, paste, modifiers) | Any path from an event to a game change that skips what is on screen |
-| A test that cannot fail | 9 | Tests whose fixture can't tell the order or the branch apart; a loop that stops checking early; mutate the line the name claims |
+| Input from where the player isn't looking | 5 (hidden board, paste, modifiers, view changing under a hidden board, marks across games) | Any path from an event to a game change that skips what is on screen |
+| A test that cannot fail | 17 | Tests whose fixture can't tell the order or the branch apart; a loop that stops checking early; mutate the line the name claims |
 | No instrument | 2 (contrast, outside grader) | A rule in the plan or CLAUDE.md that no test checks |
