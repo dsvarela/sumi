@@ -114,6 +114,7 @@ fn play(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                         config: &app.config,
                         theme_name: &app.theme_name(),
                         error: app.save_error.as_deref(),
+                        note: app.theme_note(),
                     };
                     ui::draw_settings(frame, &page, theme);
                 }
@@ -259,6 +260,17 @@ impl App {
         .name
     }
 
+    /// Why the theme chosen isn't the one drawn, when the terminal decides.
+    fn theme_note(&self) -> Option<&'static str> {
+        if self.setup.no_color {
+            Some("NO_COLOR is set, so no theme's colours show here.")
+        } else if !self.setup.truecolor {
+            Some("This terminal shows 16 colours, not the theme's.")
+        } else {
+            None
+        }
+    }
+
     /// Changes `setting`, saves it, and puts it into effect at once.
     fn change(&mut self, setting: Setting, forward: bool) {
         let ids: Vec<String> = self.setup.themes.iter().map(|(id, _)| id.clone()).collect();
@@ -267,8 +279,10 @@ impl App {
         if let Some(dir) = &self.setup.dir
             && let Err(err) = Config::save(dir, setting.key(), setting.value(&self.config))
         {
-            self.warnings
-                .push(format!("couldn't save a setting: {err}"));
+            let line = format!("couldn't save a setting: {err}");
+            if !self.warnings.contains(&line) {
+                self.warnings.push(line);
+            }
             self.save_error = Some(err);
         }
         self.theme = Theme::choose(
@@ -1701,6 +1715,21 @@ mod tests {
             .unwrap();
         app.handle(click(x, y), true);
         assert!(app.config.timer, "a click on a setting changes it");
+    }
+
+    /// A change that can't be saved says why on the page, and the same
+    /// failure is named once on stderr, however often it happens.
+    #[test]
+    fn a_failed_save_is_shown_and_named_once() {
+        let file = std::env::temp_dir().join(format!("sumi-not-a-dir-{}", std::process::id()));
+        std::fs::write(&file, "").unwrap();
+        let mut app = app_with(fixtures::game());
+        app.setup.dir = Some(file.clone());
+        open_settings(&mut app);
+        press_keys(&mut app, &[KeyCode::Enter, KeyCode::Enter, KeyCode::Enter]);
+        std::fs::remove_file(&file).unwrap();
+        assert!(app.save_error.is_some());
+        assert_eq!(app.warnings.len(), 1, "{:?}", app.warnings);
     }
 
     #[test]

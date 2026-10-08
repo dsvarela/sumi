@@ -347,10 +347,12 @@ pub fn draw(frame: &mut Frame, game: &Game, view: &View, theme: &Theme) {
     let keys = shown_keys(game, view);
     match areas.frame {
         Some(outer) => {
-            let block = frame_block(theme)
+            let mut block = frame_block(theme)
                 .title_top(title(theme))
-                .title_top(status(game, view, theme, STATUS_WIDTH).right_aligned())
-                .title_bottom(key_bar(&keys, theme).centered());
+                .title_top(status(game, view, theme, STATUS_WIDTH).right_aligned());
+            if !keys.is_empty() {
+                block = block.title_bottom(key_bar(&keys, theme).centered());
+            }
             frame.render_widget(block, outer);
         }
         None => {
@@ -546,21 +548,16 @@ fn status(game: &Game, view: &View, theme: &Theme, width: usize) -> Line<'static
         Mode::Candidate => "● CANDIDATE",
         Mode::BoxMark => "● BOX MARK",
     };
-    // Each part with its place on the line, most useful first. What does
-    // not fit beside the title is left off from the end, so the mode, which
-    // is always shown, is never lost.
+    // Each part with its place on the line, most useful first: what the
+    // player has turned on or asked for comes before the level and the
+    // time. What does not fit beside the title is shortened, then left off
+    // from the end, so the mode, which is always shown, is never lost.
     let mut optional: Vec<(u8, String)> = Vec::new();
     if let Some(open) = view.shown_hint() {
         optional.push((5, format!("hint {}/{}", open.rung, open.hint.rungs())));
     }
     if let Some(notice) = view.notice {
         optional.push((4, notice.to_string()));
-    }
-    if let Some(time) = view.time {
-        optional.push((1, clock_text(time)));
-    }
-    if let Some(level) = game.level() {
-        optional.push((0, level_name(level).to_string()));
     }
     match view.filter {
         Some(Filter::Digit(d)) => optional.push((3, format!("filter {d}"))),
@@ -570,6 +567,12 @@ fn status(game: &Game, view: &View, theme: &Theme, width: usize) -> Line<'static
     if view.notes_hidden {
         optional.push((2, "candidates and box marks hidden".to_string()));
     }
+    if let Some(time) = view.time {
+        optional.push((1, clock_text(time)));
+    }
+    if let Some(level) = game.level() {
+        optional.push((0, level_name(level).to_string()));
+    }
     let fits = |parts: &[(u8, String)]| {
         let shown: Vec<&str> = parts
             .iter()
@@ -578,6 +581,13 @@ fn status(game: &Game, view: &View, theme: &Theme, width: usize) -> Line<'static
             .collect();
         shown.join(" · ").chars().count() <= width
     };
+    if !fits(&optional) {
+        for (place, part) in &mut optional {
+            if *place == 2 {
+                *part = "notes hidden".to_string();
+            }
+        }
+    }
     while !fits(&optional) {
         optional.pop();
     }
@@ -1126,7 +1136,7 @@ impl Board<'_> {
         } else if let Some(light) = self.light(cell) {
             Some(match light {
                 Light::Strong => self.theme.same_digit,
-                Light::Faint => self.theme.peer,
+                Light::Faint => self.theme.hint_area,
             })
         } else if filtered {
             Some(self.theme.filter)
@@ -1292,10 +1302,17 @@ impl MenuAreas {
         }
     }
 
-    /// The row of the item at `index`.
+    /// The row of the item at `index`, as wide as the column it is drawn
+    /// in.
     fn item(&self, index: usize) -> Rect {
         let y = self.column.y + self.logo.len() as u16 + 1 + index as u16;
         Rect::new(self.column.x, y, self.column.width, 1)
+    }
+
+    /// Where a click chooses the item at `index`: its row, across the box.
+    fn target(&self, index: usize) -> Rect {
+        let row = self.item(index);
+        Rect::new(self.boxed.x + 1, row.y, self.boxed.width - 2, 1)
     }
 }
 
@@ -1306,7 +1323,7 @@ pub fn menu_hit(area: Rect, menu: &Menu, items: &[Item], x: u16, y: u16) -> Opti
     }
     let areas = MenuAreas::of(area, menu, items);
     let at = ratatui::layout::Position::new(x, y);
-    (0..items.len()).find(|&i| areas.item(i).contains(at))
+    (0..items.len()).find(|&i| areas.target(i).contains(at))
 }
 
 /// A menu in its frame, with the biggest logo that fits above the items
@@ -1348,6 +1365,8 @@ pub struct SettingsPage<'a> {
     pub theme_name: &'a str,
     /// Why the last change couldn't be saved.
     pub error: Option<&'a str>,
+    /// Why the theme chosen isn't the one drawn, when the terminal decides.
+    pub note: Option<&'a str>,
 }
 
 /// The settings page's rows: a heading for each group, its settings, and
@@ -1408,7 +1427,7 @@ fn settings_lines(page: &SettingsPage, theme: &Theme) -> Vec<Line<'static>> {
             SettingsRow::Setting(_, setting) => setting,
         };
         {
-            let value = setting.shown(page.config, page.theme_name);
+            let value = shorten(&setting.shown(page.config, page.theme_name), VALUE_WIDTH);
             let line = if setting == selected {
                 Line::from(vec![
                     Span::styled(format!("› {:<20}  ", setting.label()), accent),
@@ -1426,22 +1445,52 @@ fn settings_lines(page: &SettingsPage, theme: &Theme) -> Vec<Line<'static>> {
             lines.push(line);
         }
     }
-    // Two rows are kept for a save error, so the page doesn't move when
-    // one shows.
-    lines.push(Line::default());
-    lines.push(match page.error {
-        Some(error) => Line::from(Span::styled(
-            format!("Not saved: {error}"),
+    lines
+}
+
+/// The widest value a setting row has room for beside its label; a longer
+/// one, such as a user theme's name, is shortened.
+const VALUE_WIDTH: usize = 18;
+
+/// `text`, cut to `width` characters with … as the last when it is longer.
+fn shorten(text: &str, width: usize) -> String {
+    if text.chars().count() <= width {
+        return text.to_string();
+    }
+    let kept: String = text.chars().take(width - 1).collect();
+    format!("{kept}…")
+}
+
+/// The page's last two rows: why the last change wasn't saved, or else why
+/// the theme chosen isn't the one drawn.
+fn settings_message(page: &SettingsPage, theme: &Theme) -> Paragraph<'static> {
+    let line = match (page.error, page.note) {
+        // The page always saves to config.toml, so its path (named on stderr)
+        // gives way to the reason, and a long error to its first line.
+        (Some(error), _) => Line::from(Span::styled(
+            format!(
+                "config.toml not saved: {}",
+                error
+                    .split_once(": ")
+                    .map_or(error, |(_, reason)| reason)
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+            ),
             Style::new().fg(theme.conflict),
         )),
-        None => Line::default(),
-    });
-    lines
+        (None, Some(note)) => Line::from(Span::styled(
+            note.to_string(),
+            Style::new().fg(theme.dimmed),
+        )),
+        (None, None) => Line::default(),
+    };
+    Paragraph::new(line).wrap(Wrap { trim: true })
 }
 
 /// The smallest window the settings page fits in: its widest row (a label
 /// and the longest theme name), its rows, the frame, and the keys.
-const SETTINGS_NEEDED: (u16, u16) = (52, 30);
+const SETTINGS_NEEDED: (u16, u16) = (54, 30);
 
 pub fn settings_fit(area: Rect) -> bool {
     area.width >= SETTINGS_NEEDED.0 && area.height >= SETTINGS_NEEDED.1
@@ -1504,12 +1553,15 @@ pub fn draw_settings(frame: &mut Frame, page: &SettingsPage, theme: &Theme) {
     }
     let lines = settings_lines(page, theme);
     let (boxed, inner, keys_area) = settings_areas(area);
+    let [rows, message] =
+        Layout::vertical([Constraint::Fill(1), Constraint::Length(2)]).areas(inner);
     let block = frame_block(theme).title_top(Line::from(Span::styled(
         " Settings ",
         Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
     )));
     frame.render_widget(block, boxed);
-    frame.render_widget(Paragraph::new(lines), inner);
+    frame.render_widget(Paragraph::new(lines), rows);
+    frame.render_widget(settings_message(page, theme), message);
     let keys = key_bar_lines(&settings_keys(), theme, usize::from(area.width));
     frame.render_widget(Paragraph::new(keys).centered(), keys_area);
 }
@@ -2642,6 +2694,33 @@ mod tests {
         assert_eq!(status(&game, &hint), "1:02:05 · hint 2/5 · ● DIGIT");
     }
 
+    /// Hidden notes take their short name before anything is left off, and
+    /// what the player turned on outlasts the level and the time.
+    #[test]
+    fn the_status_line_keeps_what_the_player_turned_on() {
+        let game = game().rated(Level::Medium);
+        let view = View {
+            notes_hidden: true,
+            filter: Some(Filter::Digit(5)),
+            time: Some(std::time::Duration::from_secs(3725)),
+            ..View::default()
+        };
+        let full = top_line(&render(&game, &view));
+        assert!(
+            full.contains("Medium · 1:02:05 · notes hidden · filter 5"),
+            "{full}"
+        );
+        let dense = top_line(&render_dense(
+            &game,
+            &View {
+                filter: None,
+                ..view.clone()
+            },
+        ));
+        assert!(dense.contains("notes hidden · ● DIGIT"), "{dense}");
+        assert!(!dense.contains("Medium"), "{dense}");
+    }
+
     #[test]
     fn clock_text_shows_hours_only_when_there_are_some() {
         let at = |s| clock_text(std::time::Duration::from_secs(s));
@@ -2833,6 +2912,7 @@ mod tests {
             config,
             theme_name: "Tokyo Night AMOLED",
             error: None,
+            note: None,
         };
         terminal
             .draw(|frame| draw_settings(frame, &shown, &theme))
@@ -2854,21 +2934,30 @@ mod tests {
             marks_to_candidates: crate::config::MarksToCandidates::Merge,
             ..Config::default()
         };
-        for selected in 0..crate::settings::Setting::all().len() {
-            let page = Page {
-                selected,
-                from_pause: false,
-            };
-            let shown = SettingsPage {
-                page: &page,
-                config: &config,
-                theme_name: "Tokyo Night AMOLED",
-                error: None,
-            };
-            for line in settings_lines(&shown, &theme) {
-                assert!(line.width() + 6 <= usize::from(SETTINGS_NEEDED.0), "{line}");
+        let (_, inner, _) = settings_areas(Rect::new(0, 0, SETTINGS_NEEDED.0, SETTINGS_NEEDED.1));
+        for name in ["Tokyo Night AMOLED", "A user theme with a very long name"] {
+            for selected in 0..crate::settings::Setting::all().len() {
+                let page = Page {
+                    selected,
+                    from_pause: false,
+                };
+                let shown = SettingsPage {
+                    page: &page,
+                    config: &config,
+                    theme_name: name,
+                    error: None,
+                    note: None,
+                };
+                for line in settings_lines(&shown, &theme) {
+                    assert!(line.width() <= usize::from(inner.width), "{line}");
+                }
             }
         }
+        assert_eq!(
+            shorten("Tokyo Night AMOLED", VALUE_WIDTH),
+            "Tokyo Night AMOLED"
+        );
+        assert_eq!(shorten("abcdef", 4), "abc…");
     }
 
     /// The key bar says what t does under the setting in force.
@@ -2918,6 +3007,10 @@ mod tests {
             })
             .collect();
         assert!(!bottom.contains("quit"), "{bottom}");
+        assert!(
+            bottom.trim_matches(['╰', '╯']).chars().all(|c| c == '─'),
+            "{bottom}"
+        );
     }
 
     /// Every spot on screen where the buffer holds `symbol`.
@@ -3082,8 +3175,58 @@ mod tests {
                     Some(i),
                     "{size:?}"
                 );
+                // The whole row inside the box takes the click, not only the
+                // label.
+                let areas = MenuAreas::of(area, &menu, &items);
+                let edge = areas.boxed.x + 1;
+                assert_eq!(
+                    menu_hit(area, &menu, &items, edge, spot.1),
+                    Some(i),
+                    "{size:?}"
+                );
             }
         }
+    }
+
+    /// A save error's reason shows, however long the path before it, and
+    /// without one the page says when the terminal overrides the theme.
+    #[test]
+    fn the_settings_page_says_why_a_change_wasnt_saved() {
+        let theme = Theme::tokyo_night_amoled();
+        let page = Page::new(false);
+        let config = Config::default();
+        let error = "/home/someone/.config/sumi/config.toml: Permission denied (os error 13)";
+        let text = |error, note| {
+            let shown = SettingsPage {
+                page: &page,
+                config: &config,
+                theme_name: "Nord",
+                error,
+                note,
+            };
+            let mut terminal =
+                Terminal::new(TestBackend::new(SETTINGS_NEEDED.0, SETTINGS_NEEDED.1)).unwrap();
+            terminal
+                .draw(|frame| draw_settings(frame, &shown, &theme))
+                .unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            (0..buffer.area.height)
+                .map(|y| {
+                    (0..buffer.area.width)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>()
+                })
+                .map(|row| {
+                    row.trim_matches(|c| c == ' ' || c == '│')
+                        .trim()
+                        .to_string()
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let shown = text(Some(error), None);
+        assert!(shown.contains("Permission denied"), "{shown}");
+        assert!(text(None, Some("This terminal shows 16 colours.")).contains("16 colours"));
     }
 
     /// The page's rows, the frame and the key bar fit the height it asks
@@ -3139,8 +3282,10 @@ mod tests {
                 animations,
                 ..View::default()
             };
-            let bg = render(&game(), &view).buffer()[middle(76)].bg;
-            assert_eq!(bg, theme.same_digit);
+            let backend = render(&game(), &view);
+            assert_eq!(backend.buffer()[middle(76)].bg, theme.same_digit);
+            // r9c1 is in the faint row only: the faint light shows there.
+            assert_eq!(backend.buffer()[middle(72)].bg, theme.hint_area);
         }
     }
 
