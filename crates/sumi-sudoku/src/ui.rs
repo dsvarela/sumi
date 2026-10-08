@@ -26,6 +26,10 @@ const BOARD_HEIGHT: u16 = 9 * (CELL_HEIGHT + 1) + 1;
 /// leaves 30 columns for text, which every hint rung is written to fit.
 const PANEL_WIDTH: u16 = 34;
 
+/// The most text the status line can have beside the frame's title: the
+/// board's width less " sumi ", a border character, and the line's padding.
+const STATUS_WIDTH: usize = BOARD_WIDTH as usize - 6 - 1 - 2;
+
 /// What the screen shows besides the game itself. None of it is undoable.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct View {
@@ -58,9 +62,10 @@ pub enum Filter {
     TwoCandidates,
 }
 
+const FRAME_WIDTH: u16 = BOARD_WIDTH + 2;
+
 /// The board inside its frame, a gap and the panel: the smallest window the
 /// game can be drawn in.
-const FRAME_WIDTH: u16 = BOARD_WIDTH + 2;
 const NEEDED: (u16, u16) = (FRAME_WIDTH + 1 + PANEL_WIDTH, BOARD_HEIGHT + 2);
 
 /// Whether `draw` shows the board in a window of this size. The app asks
@@ -143,29 +148,39 @@ fn status(game: &Game, view: &View, theme: &Theme) -> Line<'static> {
     if game.is_won() {
         return Line::from(Span::styled(" Solved ", Style::new().fg(theme.accent)));
     }
-    let mut parts = Vec::new();
-    if view.notes_hidden {
-        parts.push("candidates and box marks hidden".to_string());
-    }
-    match view.filter {
-        Some(Filter::Digit(d)) => parts.push(format!("filter {d}")),
-        Some(Filter::TwoCandidates) => parts.push("filter pairs".to_string()),
-        None => {}
-    }
+    let mode = match game.mode() {
+        Mode::Digit => "● DIGIT",
+        Mode::Candidate => "● CANDIDATE",
+        Mode::BoxMark => "● BOX MARK",
+    };
+    // Most useful first. What does not fit beside the title is left off from
+    // the end, so the mode, which is always shown, is never lost.
+    let mut optional: Vec<String> = Vec::new();
     if let Some(open) = &view.hint {
-        parts.push(format!("hint {}/{}", open.rung, open.hint.rungs()));
+        optional.push(format!("hint {}/{}", open.rung, open.hint.rungs()));
     }
     if let Some(notice) = view.notice {
-        parts.push(notice.to_string());
+        optional.push(notice.to_string());
     }
-    parts.push(
-        match game.mode() {
-            Mode::Digit => "● DIGIT",
-            Mode::Candidate => "● CANDIDATE",
-            Mode::BoxMark => "● BOX MARK",
-        }
-        .to_string(),
-    );
+    match view.filter {
+        Some(Filter::Digit(d)) => optional.push(format!("filter {d}")),
+        Some(Filter::TwoCandidates) => optional.push("filter pairs".to_string()),
+        None => {}
+    }
+    if view.notes_hidden {
+        optional.push("candidates and box marks hidden".to_string());
+    }
+    let fits = |parts: &[String]| {
+        let shown: Vec<&str> = parts.iter().map(String::as_str).chain([mode]).collect();
+        shown.join(" · ").chars().count() <= STATUS_WIDTH
+    };
+    while !fits(&optional) {
+        optional.pop();
+    }
+    // Shown in the order the player reads them: the setting, the hint, the mode.
+    optional.reverse();
+    let mut parts = optional;
+    parts.push(mode.to_string());
     Line::from(Span::styled(
         format!(" {} ", parts.join(" · ")),
         Style::new().fg(theme.dimmed),
@@ -690,6 +705,33 @@ mod tests {
         assert_eq!(at(3, 72), theme.hint_area);
     }
 
+    /// Colouring's second group is shaded as the area is, and its first group
+    /// as a hint's cells are.
+    #[test]
+    fn a_colourings_second_group_is_drawn_fainter_than_its_first() {
+        use sumi_core::hint::StepHint;
+        let one: sumi_core::digits::Digits = [1].into_iter().collect();
+        let hint = Hint::Step(Box::new(StepHint {
+            step: sumi_core::step::Step {
+                technique: &sumi_core::technique::SimpleColouring,
+                digits: one,
+                houses: vec![],
+                cells: vec![40, 41, 49],
+                removals: vec![(80, one)],
+                placement: None,
+                key_cells: vec![40],
+            },
+            level: sumi_core::technique::Level::Expert,
+            count: 1,
+        }));
+        let theme = Theme::tokyo_night_amoled();
+        let game = game();
+        let at = |cell| background_at(&game, &open_hint(hint.clone(), 4), cell);
+        assert_eq!(at(40), theme.hint_cell);
+        assert_eq!(at(41), theme.hint_area);
+        assert_eq!(at(49), theme.hint_area);
+    }
+
     #[test]
     fn a_hint_cell_beats_the_cursor() {
         let theme = Theme::tokyo_night_amoled();
@@ -987,6 +1029,72 @@ mod tests {
         assert_eq!(backend.buffer()[middle(0)].fg, theme.clue);
     }
 
+    /// Every optional part at once, in the mode with the longest name: the
+    /// title stays, the mode and the hint stay, and what does not fit goes.
+    #[test]
+    fn the_status_line_gives_up_its_least_useful_parts_before_the_title() {
+        let mut game = game();
+        game.next_mode();
+        game.next_mode();
+        let view = View {
+            notes_hidden: true,
+            filter: Some(Filter::TwoCandidates),
+            notice: Some("no mistakes"),
+            ..open(&game, 5)
+        };
+        let backend = render(&game, &view);
+        let top: String = (0..FRAME_WIDTH)
+            .map(|x| backend.buffer()[(x, 0)].symbol())
+            .collect();
+        assert!(top.starts_with("╭ sumi "), "{top}");
+        assert!(top.ends_with("● BOX MARK ╮"), "{top}");
+        assert!(top.contains("hint 5/5"), "{top}");
+        assert!(top.contains("no mistakes"), "{top}");
+        assert!(!top.contains("hidden"), "{top}");
+    }
+
+    fn open(game: &Game, rung: usize) -> View {
+        open_hint(game.hint(), rung)
+    }
+
+    /// The panel's rows as text, with the trailing spaces gone.
+    fn panel_text(backend: &TestBackend) -> Vec<String> {
+        let buffer = backend.buffer();
+        let left = FRAME_WIDTH + 1;
+        (1..buffer.area.height - 1)
+            .map(|y| {
+                (left + 2..left + PANEL_WIDTH - 2)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_panel_says_how_to_ask_and_then_shows_the_rung() {
+        let game = game();
+        let closed = panel_text(&render(&game, &View::default()));
+        assert_eq!(closed[0], "? for a hint");
+
+        let lines = panel_text(&render(&game, &open(&game, 2)));
+        assert_eq!(lines[0], "Rung 2 of 5");
+        let text = lines[2..].join(" ");
+        assert!(text.contains("Look for"), "{text}");
+        assert!(lines[2..].iter().filter(|l| !l.is_empty()).count() <= 4);
+    }
+
+    #[test]
+    fn the_status_line_names_the_rung() {
+        let game = game();
+        let backend = render(&game, &open(&game, 3));
+        let top: String = (0..FRAME_WIDTH)
+            .map(|x| backend.buffer()[(x, 0)].symbol())
+            .collect();
+        assert!(top.contains("hint 3/5"), "{top}");
+    }
+
     #[test]
     fn every_key_bar_fits_under_the_board() {
         let mut game = game();
@@ -996,6 +1104,9 @@ mod tests {
                 awaiting_filter: true,
                 ..View::default()
             },
+            open(&game, 1),
+            open(&game, 5),
+            open_hint(Hint::Mistake(2), 3),
         ];
         for view in views {
             for _ in 0..3 {

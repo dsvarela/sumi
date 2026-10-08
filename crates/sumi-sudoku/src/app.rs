@@ -73,7 +73,8 @@ impl Session {
     }
 
     /// `board_shown` is false while the window is too small to draw the
-    /// board; keys then do nothing but quit, so nothing changes unseen.
+    /// board; keys then do nothing but quit, so nothing changes unseen, the
+    /// view included.
     fn handle(&mut self, event: Event, board_shown: bool) -> Flow {
         // Only presses act. Terminals that report releases and repeats as
         // separate events would otherwise apply every key twice.
@@ -86,7 +87,24 @@ impl Session {
         if is_ctrl_c(key) {
             return Flow::Quit;
         }
+        if !board_shown {
+            return if action(key) == Some(Action::Quit) {
+                Flow::Quit
+            } else {
+                Flow::Continue
+            };
+        }
+        let flow = self.dispatch(key);
+        // A check's mark belongs to the digit it found, not to the cell.
+        let board = self.game.board();
+        self.view
+            .checked
+            .retain(|&(cell, digit)| board.get(cell) == Some(digit));
+        flow
+    }
 
+    fn dispatch(&mut self, key: KeyEvent) -> Flow {
+        self.view.notice = None;
         if self.view.awaiting_filter {
             self.view.awaiting_filter = false;
             match filter_key(key) {
@@ -118,14 +136,17 @@ impl Session {
         ) {
             self.view.hint = None;
         }
-        self.view.notice = None;
         let game = &mut self.game;
         match action {
             Action::Quit => return Flow::Quit,
-            _ if !board_shown => {}
             Action::Confirm if game.is_won() => {
                 self.game = Game::new(new_puzzle(&mut self.rng, self.level));
-                self.view.filter = None;
+                // Hidden candidates carry over; nothing else of the last
+                // game does.
+                self.view = View {
+                    notes_hidden: self.view.notes_hidden,
+                    ..View::default()
+                };
             }
             // Once solved, the board and the view stay as they are until the
             // next game: Enter and quitting are the only keys that act.
@@ -370,6 +391,82 @@ mod tests {
         assert_eq!(rung(&s), None);
         type_keys(&mut s, "u");
         assert_eq!(s.game.board().get(2), None);
+    }
+
+    #[test]
+    fn nothing_but_quit_acts_while_the_board_is_hidden_not_even_the_view() {
+        let mut s = session();
+        type_keys(&mut s, "f");
+        s.handle(key(KeyCode::Char('3')), false);
+        assert_eq!(s.view.filter, None, "the filter key was not seen");
+
+        let mut s = session();
+        type_keys(&mut s, "?c");
+        let before = s.view.clone();
+        for c in "1u?a".chars() {
+            s.handle(key(KeyCode::Char(c)), false);
+        }
+        s.handle(key(KeyCode::Esc), false);
+        assert_eq!(s.view, before);
+        assert_eq!(s.handle(key(KeyCode::Char('q')), false), Flow::Quit);
+    }
+
+    #[test]
+    fn looking_around_filtering_and_checking_leave_a_hint_open() {
+        for keys in ["v", "f3", "c", "n", "H"] {
+            let mut s = session();
+            type_keys(&mut s, "?");
+            type_keys(&mut s, keys);
+            assert_eq!(rung(&s), Some(1), "{keys}");
+        }
+    }
+
+    #[test]
+    fn esc_closes_the_hint_before_it_clears_the_check_marks() {
+        let mut s = session();
+        type_keys(&mut s, "ll1c?");
+        s.handle(key(KeyCode::Esc), true);
+        assert_eq!(rung(&s), None);
+        assert_eq!(s.view.checked, [(2, 1)]);
+        s.handle(key(KeyCode::Esc), true);
+        assert!(s.view.checked.is_empty());
+    }
+
+    #[test]
+    fn a_notice_goes_with_the_next_key_even_one_that_does_nothing() {
+        let mut s = session();
+        type_keys(&mut s, "c");
+        assert_eq!(s.view.notice, Some("no mistakes"));
+        type_keys(&mut s, "z");
+        assert_eq!(s.view.notice, None);
+    }
+
+    #[test]
+    fn a_check_mark_goes_when_its_digit_does_and_stays_gone() {
+        let mut s = session();
+        type_keys(&mut s, "ll1c"); // r1c3 = 1, wrong
+        type_keys(&mut s, "4"); // right
+        assert!(s.view.checked.is_empty());
+        type_keys(&mut s, "1"); // wrong again, but nobody checked this one
+        assert!(s.view.checked.is_empty());
+    }
+
+    #[test]
+    fn a_new_game_starts_with_a_clean_view_but_keeps_hidden_candidates() {
+        let mut s = session();
+        type_keys(&mut s, "v");
+        type_keys(&mut s, "ll1c");
+        type_keys(&mut s, "f3");
+        type_keys(&mut s, "?");
+        win(&mut s);
+        s.handle(key(KeyCode::Enter), true);
+        assert_eq!(
+            s.view,
+            View {
+                notes_hidden: true,
+                ..View::default()
+            }
+        );
     }
 
     #[test]

@@ -326,6 +326,11 @@ impl Game {
                 g.place(cell, digit);
             }
             for &(cell, digits) in &step.removals {
+                // Writing the list out as fill does keeps the notes that
+                // the player's own digits rule out ready to come back.
+                if g.candidates[cell].is_none() {
+                    g.fill(cell);
+                }
                 let listed = g.working_candidates(cell);
                 g.candidates[cell] = Some(listed.without(digits));
             }
@@ -574,6 +579,19 @@ mod tests {
         assert_eq!(g.candidates(R1C3), digits(&[4]));
         g.undo();
         assert_eq!(g.candidates(R1C3), digits(&[2, 4]));
+    }
+
+    /// Fill writes the candidates a placed digit rules out as hidden notes, so
+    /// erasing the digit shows them again. A hint's removal on a cell with no
+    /// candidates written must leave the cell the same way.
+    #[test]
+    fn a_hint_removal_leaves_what_my_digits_rule_out_ready_to_come_back() {
+        let mut g = at(R1C8);
+        g.press(1); // r1c8 = 1, which r1c3 sees
+        g.apply_hint(&removal(R1C3, 2)); // r1c3 had no candidates written
+        assert_eq!(g.candidates(R1C3), digits(&[4]));
+        g.clear(); // erases the 1
+        assert_eq!(g.candidates(R1C3), digits(&[1, 4]));
     }
 
     #[test]
