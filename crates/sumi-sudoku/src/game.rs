@@ -242,7 +242,7 @@ impl Game {
         self.record(|g| {
             for cell in 0..CELLS {
                 if g.board.get(cell).is_none() && g.candidates[cell].is_none() {
-                    g.candidates[cell] = Some(g.board.possible(cell));
+                    g.fill(cell);
                 }
             }
         });
@@ -313,14 +313,22 @@ impl Game {
         }
     }
 
-    /// Every empty cell gets all its possible candidates, and none hidden.
+    /// Every empty cell gets all its possible candidates.
     fn refill(&mut self) {
         for cell in 0..CELLS {
             if self.board.get(cell).is_none() {
-                self.candidates[cell] = Some(self.board.possible(cell));
-                self.hidden[cell].candidates = Digits::NONE;
+                self.fill(cell);
             }
         }
+    }
+
+    /// Writes every candidate the clues allow in `cell`. Those the player's
+    /// own digits rule out are written hidden, so they show once those digits
+    /// are erased, as if they had been there before the digits were placed.
+    fn fill(&mut self, cell: Cell) {
+        let possible = self.board.possible(cell);
+        self.candidates[cell] = Some(possible);
+        self.hidden[cell].candidates = self.puzzle.clues.possible(cell).without(possible);
     }
 
     /// Writes the digit and hides it in the notes of every cell it sees. The
@@ -708,6 +716,31 @@ mod tests {
         g.marks_to_candidates(); // clears every box mark
         g.clear();
         assert_eq!(g.marks(5), Digits::NONE);
+    }
+
+    /// A wrong 1 in r1c3 keeps 1 out of r1c8 when candidates are filled;
+    /// erasing it brings 1 back to r1c8, but not where it was taken out by
+    /// hand.
+    #[test]
+    fn filled_candidates_a_wrong_digit_kept_out_come_back_when_it_goes() {
+        for fill in [
+            Game::fill_candidates,
+            Game::refill_candidates,
+            Game::marks_to_candidates,
+        ] {
+            let mut g = at(R1C3);
+            g.press(1);
+            fill(&mut g);
+            assert_eq!(g.candidates(R1C8), digits(&[2, 4, 9]));
+            g.mode = Mode::Candidate;
+            g.cursor = 6; // r1c7, possible {4, 8, 9}
+            g.press(9);
+            g.mode = Mode::Digit;
+            g.cursor = R1C3;
+            g.clear();
+            assert_eq!(g.candidates(R1C8), digits(&[1, 2, 4, 9]));
+            assert_eq!(g.candidates(6), digits(&[1, 4, 8]));
+        }
     }
 
     #[test]
