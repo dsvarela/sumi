@@ -241,7 +241,7 @@ mod tests {
             }
             table[*last] = toml_edit::value(setting.value(&config));
             assert_eq!(
-                Config::parse(&doc.to_string()).unwrap(),
+                Config::parse(&doc.to_string()).unwrap().0,
                 config,
                 "{setting:?}"
             );

@@ -25,7 +25,7 @@ use crate::game::{CandidatesFromMarks, Game, Mode};
 use crate::input::{Action, FilterKey, action, filter_key};
 use crate::menu::{Choice, Item, Kind, Menu};
 use crate::settings::{Choice as SettingsChoice, Page, Setting};
-use crate::theme::Theme;
+use crate::theme::{self, Theme};
 use crate::ui::{self, Filter, OpenHint, Target, View};
 
 /// Plays puzzles of `level`, or opens the main menu without one. Fails
@@ -63,7 +63,15 @@ fn start() -> (Config, Setup, Vec<String>) {
     let dir = Config::dir();
     let (config, warning) = Config::load(dir.as_ref());
     let (themes, warnings) = Theme::load_all(dir.as_ref().map(|d| d.join("themes")).as_deref());
-    let warnings: Vec<String> = warning.into_iter().chain(warnings).collect();
+    let mut warnings: Vec<String> = warning.into_iter().chain(warnings).collect();
+    if let Some(id) = &config.theme
+        && !themes.iter().any(|(known, _)| known == id)
+    {
+        warnings.push(format!(
+            "theme {id:?} isn't a theme; using {}",
+            theme::DEFAULT
+        ));
+    }
     let setup = Setup {
         dir,
         themes,
@@ -1471,7 +1479,7 @@ mod tests {
         press_keys(&mut app, &[KeyCode::Enter]);
         let saved = std::fs::read_to_string(dir.join("config.toml")).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
-        assert!(Config::parse(&saved).unwrap().timer);
+        assert!(Config::parse(&saved).unwrap().0.timer);
         assert_eq!(app.save_error, None);
     }
 
