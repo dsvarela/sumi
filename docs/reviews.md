@@ -61,7 +61,7 @@ tests that could not fail.
 | Item | Goes to |
 | --- | --- |
 | `c`, `r` and Esc are in no key bar; a mistake hint's key bar offers no action | Milestone 6, key bar and help screen |
-| The full layout needs 110x39 until the dense layout exists (the row above in 2026-10-07 said 75x39) | Milestone 6, dense layout |
+| The full layout needs 75x44 until the dense layout exists: the hint panel sits under the board (the 2026-10-07 row said 75x39) | Milestone 6, dense layout |
 | Loaders that build a `Game` (autosave, a typed-in puzzle, the daily puzzle) must prove one solution before hints may use unique rectangle; nothing enforces it | Milestone 7 |
 | Stats must not count `c` and `r` | Milestone 7 |
 

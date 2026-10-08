@@ -22,9 +22,10 @@ const CELL_HEIGHT: u16 = 3;
 const BOARD_WIDTH: u16 = 9 * (CELL_WIDTH + 1) + 1;
 const BOARD_HEIGHT: u16 = 9 * (CELL_HEIGHT + 1) + 1;
 
-/// The panel beside the board is this wide, borders and padding included. It
-/// leaves 30 columns for text, which every hint rung is written to fit.
-const PANEL_WIDTH: u16 = 34;
+/// The panel under the board is this tall, borders included: the rung's
+/// number and two lines of text, which every hint rung fits in at the
+/// board's width.
+const PANEL_HEIGHT: u16 = 5;
 
 /// The most text the status line can have beside the frame's title: the
 /// board's width less " sumi ", a border character, and the line's padding.
@@ -64,9 +65,9 @@ pub enum Filter {
 
 const FRAME_WIDTH: u16 = BOARD_WIDTH + 2;
 
-/// The board inside its frame, a gap and the panel: the smallest window the
-/// game can be drawn in.
-const NEEDED: (u16, u16) = (FRAME_WIDTH + 1 + PANEL_WIDTH, BOARD_HEIGHT + 2);
+/// The board inside its frame and the panel under it: the smallest window
+/// the game can be drawn in.
+const NEEDED: (u16, u16) = (FRAME_WIDTH, BOARD_HEIGHT + 2 + PANEL_HEIGHT);
 
 /// Whether `draw` shows the board in a window of this size. The app asks
 /// this too, so keys never act on a board the player can't see.
@@ -83,10 +84,9 @@ pub fn draw(frame: &mut Frame, game: &Game, view: &View, theme: &Theme) {
     }
 
     let whole = area.centered(Constraint::Length(NEEDED.0), Constraint::Length(NEEDED.1));
-    let [outer, _, side] = Layout::horizontal([
-        Constraint::Length(FRAME_WIDTH),
-        Constraint::Length(1),
-        Constraint::Length(PANEL_WIDTH),
+    let [outer, side] = Layout::vertical([
+        Constraint::Length(BOARD_HEIGHT + 2),
+        Constraint::Length(PANEL_HEIGHT),
     ])
     .areas(whole);
     let block = frame_block(theme)
@@ -107,7 +107,7 @@ pub fn draw(frame: &mut Frame, game: &Game, view: &View, theme: &Theme) {
     panel(frame, side, view, theme);
 }
 
-/// The side panel: the hint's words, or how to ask for one.
+/// The panel under the board: the hint's words, or how to ask for one.
 fn panel(frame: &mut Frame, area: Rect, view: &View, theme: &Theme) {
     let block = panel_block(theme, "Hint");
     let inner = block.inner(area);
@@ -120,7 +120,6 @@ fn panel(frame: &mut Frame, area: Rect, view: &View, theme: &Theme) {
                     format!("Rung {} of {}", open.rung, open.hint.rungs()),
                     Style::new().fg(theme.dimmed),
                 )),
-                Line::raw(""),
                 Line::from(Span::styled(rung.text, Style::new().fg(theme.text))),
             ]
         }
@@ -132,7 +131,7 @@ fn panel(frame: &mut Frame, area: Rect, view: &View, theme: &Theme) {
     frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: true }), inner);
 }
 
-/// The block beside the board that holds a panel's text, with a title.
+/// The block that holds a panel's text, with a title.
 pub fn panel_block(theme: &Theme, title: &str) -> Block<'static> {
     Block::bordered()
         .border_type(BorderType::Rounded)
@@ -1060,10 +1059,10 @@ mod tests {
     /// The panel's rows as text, with the trailing spaces gone.
     fn panel_text(backend: &TestBackend) -> Vec<String> {
         let buffer = backend.buffer();
-        let left = FRAME_WIDTH + 1;
-        (1..buffer.area.height - 1)
+        let top = BOARD_HEIGHT + 2;
+        (top + 1..top + PANEL_HEIGHT - 1)
             .map(|y| {
-                (left + 2..left + PANEL_WIDTH - 2)
+                (2..FRAME_WIDTH - 2)
                     .map(|x| buffer[(x, y)].symbol())
                     .collect::<String>()
                     .trim_end()
@@ -1080,9 +1079,7 @@ mod tests {
 
         let lines = panel_text(&render(&game, &open(&game, 2)));
         assert_eq!(lines[0], "Rung 2 of 5");
-        let text = lines[2..].join(" ");
-        assert!(text.contains("Look for"), "{text}");
-        assert!(lines[2..].iter().filter(|l| !l.is_empty()).count() <= 4);
+        assert!(lines[1].starts_with("Look for"), "{lines:?}");
     }
 
     #[test]
