@@ -544,6 +544,20 @@ mod tests {
         assert_eq!(seen, ORDER.len());
     }
 
+    /// An X-Wing's four cells are named on the fourth rung, not counted.
+    #[test]
+    fn the_cell_rung_names_up_to_six_cells() {
+        let p = X_WING_1.position().known_unique();
+        let step = ORDER[9].find(&p).unwrap();
+        assert_eq!(step.cells.len(), 4);
+        let hint = Hint::Step(Box::new(StepHint {
+            step,
+            level: Level::Hard,
+            count: 1,
+        }));
+        assert_eq!(hint.rung(4).text, "Cells: r2c5, r2c8, r5c5 and r5c8.");
+    }
+
     #[test]
     fn three_spots_in_a_box_make_a_pointing_triple() {
         let mut candidates = [Digits::ALL; CELLS];
@@ -676,6 +690,11 @@ mod tests {
         assert_eq!(count_distinct(vec![big.clone(), small.clone()]), 1);
         assert_eq!(count_distinct(vec![small.clone(), big, apart.clone()]), 2);
         assert_eq!(count_distinct(vec![small.clone(), small]), 1);
+        // Two cells losing 1 is not inside one cell losing 1 and 7, nor the
+        // other way round: they are two steps.
+        let wider: Effect = (None, vec![(5, one_seven)]);
+        let longer: Effect = (None, vec![(5, one), (9, one)]);
+        assert_eq!(count_distinct(vec![wider, longer]), 2);
         let place: Effect = (Some((4, 2)), vec![]);
         assert_eq!(count_distinct(vec![place.clone(), apart, place]), 2);
     }

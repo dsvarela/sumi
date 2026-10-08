@@ -163,6 +163,12 @@ mod tests {
     }
 
     #[test]
+    fn one_cell_sees_and_several_see() {
+        assert_eq!(see_all(&[0], "both"), "r1c1 sees both");
+        assert_eq!(see_all(&[0, 1], "both"), "these cells see both");
+    }
+
+    #[test]
     fn houses_are_plural_by_kind() {
         assert_eq!(houses(&[House::Row(1), House::Row(6)]), "rows 2 and 7");
         assert_eq!(houses(&[House::Box(4)]), "box 5");
