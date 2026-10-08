@@ -6,6 +6,7 @@ use std::fmt;
 use crate::grid::Grid;
 use crate::position::Position;
 use crate::solver::{Solutions, solve};
+use crate::step::Step;
 use crate::technique::{Level, ORDER, Technique};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,6 +21,9 @@ pub struct Grade {
     pub hardest_steps: usize,
     /// The sum of every step's score.
     pub score: u32,
+    /// Every step taken, in order. They solve the puzzle unless the level
+    /// is Beyond.
+    pub steps: Vec<Step>,
 }
 
 /// `None` for a puzzle without exactly one solution, which has no grade:
@@ -34,6 +38,7 @@ pub fn grade(clues: &Grid) -> Option<Grade> {
         hardest: None,
         hardest_steps: 0,
         score: 0,
+        steps: Vec::new(),
     };
     let mut hardest_index = 0;
     while p.grid().filled() < crate::grid::CELLS {
@@ -62,6 +67,7 @@ pub fn grade(clues: &Grid) -> Option<Grade> {
             }
         }
         p.apply(&step);
+        grade.steps.push(step);
     }
     Some(grade)
 }
@@ -143,6 +149,33 @@ mod tests {
         ];
         for (puzzle, expected) in cases {
             assert_eq!(grade_of(puzzle).to_string(), expected, "{puzzle}");
+        }
+    }
+
+    /// The steps finish a Hard puzzle and stop short on a Beyond one, and
+    /// the score and hardest technique are theirs.
+    #[test]
+    fn the_steps_are_the_solving_path() {
+        for (puzzle, finished) in [
+            (
+                "4..6.9..5..3.4.6.....7.1............7...9...1.81...53..68...95...5...2..1...7...8",
+                true,
+            ),
+            (
+                "8.......3....3..191..6.548..6...7....7..5..6....3...5..154.2..663..9....7.......8",
+                false,
+            ),
+        ] {
+            let clues: Grid = puzzle.parse().unwrap();
+            let g = grade(&clues).unwrap();
+            let mut p = Position::new(&clues).known_unique();
+            for step in &g.steps {
+                p.apply(step);
+            }
+            assert_eq!(p.grid().is_solved(), finished, "{puzzle}");
+            let score: u32 = g.steps.iter().map(|s| s.technique.score()).sum();
+            assert_eq!(score, g.score);
+            assert!(g.steps.iter().any(|s| Some(s.technique) == g.hardest));
         }
     }
 
