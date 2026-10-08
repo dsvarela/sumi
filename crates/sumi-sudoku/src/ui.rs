@@ -457,8 +457,7 @@ impl Board<'_> {
     /// place.
     fn render_hint_marks(&self, cell: Cell, x: u16, y: u16, buf: &mut Buffer) {
         let Some(rung) = &self.rung else { return };
-        for &(c, digits) in rung.removals.iter().filter(|&&(c, _)| c == cell) {
-            debug_assert_eq!(c, cell);
+        for &(_, digits) in rung.removals.iter().filter(|&&(c, _)| c == cell) {
             for digit in digits.iter() {
                 let spot = u16::from(digit - 1);
                 buf.set_string(
