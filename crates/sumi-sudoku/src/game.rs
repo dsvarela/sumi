@@ -1,11 +1,13 @@
 //! One game in progress: the puzzle, the player's digits and notes, the
 //! cursor, the input mode, and the undo history.
 
+use std::time::{Duration, Instant};
 use sumi_core::digits::Digits;
 use sumi_core::generate::Puzzle;
 use sumi_core::grid::{CELLS, Cell, Grid, col, peers, row};
 use sumi_core::hint::{self, Hint};
 use sumi_core::step::Step as SolverStep;
+use sumi_core::technique::Level;
 
 pub struct Game {
     puzzle: Puzzle,
@@ -27,6 +29,15 @@ pub struct Game {
     redo: Vec<Step>,
     /// Bumped by every change to the board or the notes.
     revision: u64,
+    /// The puzzle's rating, when it is known.
+    level: Option<Level>,
+    /// Hint ladders opened, and cells `r` changed.
+    hints_used: u32,
+    revealed: u32,
+    /// Time played before the clock last started, and when that was, if it
+    /// is running.
+    banked: Duration,
+    running_since: Option<Instant>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,7 +119,57 @@ impl Game {
             undo: Vec::new(),
             redo: Vec::new(),
             revision: 0,
+            level: None,
+            hints_used: 0,
+            revealed: 0,
+            banked: Duration::ZERO,
+            running_since: None,
         }
+    }
+
+    /// The game with its puzzle's rating.
+    pub fn rated(self, level: Level) -> Game {
+        Game {
+            level: Some(level),
+            ..self
+        }
+    }
+
+    pub fn level(&self) -> Option<Level> {
+        self.level
+    }
+
+    /// Counts a hint ladder the player opened.
+    pub fn count_hint(&mut self) {
+        self.hints_used += 1;
+    }
+
+    pub fn hints_used(&self) -> u32 {
+        self.hints_used
+    }
+
+    pub fn revealed(&self) -> u32 {
+        self.revealed
+    }
+
+    /// Starts the clock at `now`, unless it is running.
+    pub fn start_clock(&mut self, now: Instant) {
+        self.running_since.get_or_insert(now);
+    }
+
+    /// Stops the clock at `now`, keeping the time played so far.
+    pub fn stop_clock(&mut self, now: Instant) {
+        if let Some(since) = self.running_since.take() {
+            self.banked += now.saturating_duration_since(since);
+        }
+    }
+
+    /// Time played up to `now`.
+    pub fn elapsed(&self, now: Instant) -> Duration {
+        let running = self
+            .running_since
+            .map_or(Duration::ZERO, |since| now.saturating_duration_since(since));
+        self.banked + running
     }
 
     pub fn board(&self) -> &Grid {
@@ -360,7 +421,11 @@ impl Game {
     pub fn reveal(&mut self) {
         let cell = self.cursor;
         if let Some(answer) = self.puzzle.solution.get(cell) {
+            let before = self.revision;
             self.record(|g| g.place(cell, answer));
+            if self.revision != before {
+                self.revealed += 1;
+            }
         }
     }
 
@@ -540,6 +605,39 @@ mod tests {
 
     fn digits(list: &[u8]) -> Digits {
         list.iter().copied().collect()
+    }
+
+    fn secs(n: u64) -> Duration {
+        Duration::from_secs(n)
+    }
+
+    #[test]
+    fn the_clock_counts_only_while_it_runs() {
+        let mut g = game();
+        let t0 = Instant::now();
+        g.start_clock(t0);
+        g.stop_clock(t0 + secs(10));
+        assert_eq!(g.elapsed(t0 + secs(50)), secs(10));
+        g.start_clock(t0 + secs(50));
+        g.start_clock(t0 + secs(52)); // already running: no change
+        assert_eq!(g.elapsed(t0 + secs(55)), secs(15));
+        g.stop_clock(t0 + secs(55));
+        g.stop_clock(t0 + secs(60)); // already stopped: no change
+        assert_eq!(g.elapsed(t0 + secs(70)), secs(15));
+    }
+
+    /// A reveal counts when it changes a cell: not on a clue, and not on a
+    /// cell that already holds its answer.
+    #[test]
+    fn reveals_count_when_they_change_a_cell() {
+        let mut g = at(R1C3);
+        g.reveal();
+        assert_eq!(g.revealed(), 1);
+        g.reveal();
+        assert_eq!(g.revealed(), 1);
+        g.cursor = 0;
+        g.reveal();
+        assert_eq!(g.revealed(), 1);
     }
 
     #[test]

@@ -11,7 +11,9 @@ use ratatui::widgets::{Block, BorderType, Padding, Paragraph, Widget, Wrap};
 
 use sumi_core::grid::{Cell, col, row, sees};
 use sumi_core::hint::{Hint, Rung};
+use sumi_core::technique::Level;
 
+use crate::config::Highlights;
 use crate::game::{Game, Mode};
 use crate::input::{Action, key_label};
 use crate::theme::Theme;
@@ -103,6 +105,11 @@ pub struct View {
     pub notice: Option<&'static str>,
     /// The list of every key is open over the game.
     pub help: bool,
+    /// The game is paused, and the board hidden.
+    pub paused: bool,
+    /// The time played, when the timer is on.
+    pub time: Option<std::time::Duration>,
+    pub highlights: Highlights,
 }
 
 /// A hint on its way up the ladder.
@@ -182,13 +189,18 @@ pub fn draw(frame: &mut Frame, game: &Game, view: &View, theme: &Theme) {
             .vertical_margin(1)
             .areas(inner);
         frame.render_widget(key_list(theme), list);
+    } else if view.paused {
+        frame.render_widget(
+            paused(theme),
+            inner.centered_vertically(Constraint::Length(1)),
+        );
     } else {
         frame.render_widget(board, inner);
     }
-    let block = panel_block(theme, "Hint");
+    let block = panel_block(theme, if game.is_won() { "Solved" } else { "Hint" });
     let inner = block.inner(side);
     frame.render_widget(block, side);
-    frame.render_widget(hint_text(view, theme), inner);
+    frame.render_widget(hint_text(game, view, theme), inner);
 }
 
 /// The dense layout, top to bottom: the title and status line, the board,
@@ -220,16 +232,38 @@ fn draw_dense(frame: &mut Frame, board: Board) {
             .horizontal_margin(1)
             .areas(middle);
         frame.render_widget(key_list(theme), list);
+    } else if view.paused {
+        frame.render_widget(
+            paused(theme),
+            middle.centered_vertically(Constraint::Length(1)),
+        );
     } else {
         frame.render_widget(board, middle);
     }
-    frame.render_widget(hint_text(view, theme), hint);
+    frame.render_widget(hint_text(game, view, theme), hint);
     let lines = key_bar_lines(&keys(game, view), theme, usize::from(needed.0));
     frame.render_widget(Paragraph::new(lines).centered(), keys_area);
 }
 
+/// What shows in the board's place while the game is paused.
+fn paused(theme: &Theme) -> Paragraph<'static> {
+    Paragraph::new(Span::styled(
+        "Paused",
+        Style::new().fg(theme.text).add_modifier(Modifier::BOLD),
+    ))
+    .centered()
+}
+
 /// The hint's words under its rung's number, or how to ask for one.
-fn hint_text(view: &View, theme: &Theme) -> Paragraph<'static> {
+/// The panel's words: the hint, how to ask for one, or once the puzzle is
+/// solved, what it took.
+fn hint_text(game: &Game, view: &View, theme: &Theme) -> Paragraph<'static> {
+    if game.is_won() {
+        return Paragraph::new(solved_text(game, view, theme)).wrap(Wrap { trim: true });
+    }
+    if view.paused {
+        return Paragraph::new("");
+    }
     let text = match &view.hint {
         Some(open) => {
             let rung = open.hint.rung(open.rung);
@@ -247,6 +281,58 @@ fn hint_text(view: &View, theme: &Theme) -> Paragraph<'static> {
         ))],
     };
     Paragraph::new(text).wrap(Wrap { trim: true })
+}
+
+/// The win screen's words: the rating, the hints and reveals, and the time
+/// if the timer is on. Nothing is judged.
+fn solved_text(game: &Game, view: &View, theme: &Theme) -> Vec<Line<'static>> {
+    let first = match game.level() {
+        Some(level) => format!("Solved, {}.", level_name(level)),
+        None => "Solved.".to_string(),
+    };
+    let mut parts = vec![match game.hints_used() {
+        0 => "no hints".to_string(),
+        1 => "1 hint".to_string(),
+        n => format!("{n} hints"),
+    }];
+    match game.revealed() {
+        0 => {}
+        1 => parts.push("1 cell revealed".to_string()),
+        n => parts.push(format!("{n} cells revealed")),
+    }
+    if let Some(time) = view.time {
+        parts.push(clock_text(time));
+    }
+    let mut second = parts.join(", ");
+    second[..1].make_ascii_uppercase();
+    vec![
+        Line::from(Span::styled(first, Style::new().fg(theme.text))),
+        Line::from(Span::styled(
+            format!("{second}."),
+            Style::new().fg(theme.dimmed),
+        )),
+    ]
+}
+
+fn level_name(level: Level) -> &'static str {
+    match level {
+        Level::Easy => "Easy",
+        Level::Medium => "Medium",
+        Level::Hard => "Hard",
+        Level::Expert => "Expert",
+        Level::Beyond => "Beyond",
+    }
+}
+
+/// Minutes and seconds, with hours in front once there are any.
+fn clock_text(time: std::time::Duration) -> String {
+    let seconds = time.as_secs();
+    let (h, m, s) = (seconds / 3600, seconds / 60 % 60, seconds % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
 }
 
 /// The block that holds a panel's text, with a title.
@@ -271,33 +357,45 @@ fn status(game: &Game, view: &View, theme: &Theme, width: usize) -> Line<'static
         Mode::Candidate => "● CANDIDATE",
         Mode::BoxMark => "● BOX MARK",
     };
-    // Most useful first. What does not fit beside the title is left off from
-    // the end, so the mode, which is always shown, is never lost.
-    let mut optional: Vec<String> = Vec::new();
+    // Each part with its place on the line, most useful first. What does
+    // not fit beside the title is left off from the end, so the mode, which
+    // is always shown, is never lost.
+    let mut optional: Vec<(u8, String)> = Vec::new();
     if let Some(open) = &view.hint {
-        optional.push(format!("hint {}/{}", open.rung, open.hint.rungs()));
+        optional.push((5, format!("hint {}/{}", open.rung, open.hint.rungs())));
     }
     if let Some(notice) = view.notice {
-        optional.push(notice.to_string());
+        optional.push((4, notice.to_string()));
+    }
+    if let Some(time) = view.time {
+        optional.push((1, clock_text(time)));
+    }
+    if let Some(level) = game.level() {
+        optional.push((0, level_name(level).to_string()));
     }
     match view.filter {
-        Some(Filter::Digit(d)) => optional.push(format!("filter {d}")),
-        Some(Filter::TwoCandidates) => optional.push("filter pairs".to_string()),
+        Some(Filter::Digit(d)) => optional.push((3, format!("filter {d}"))),
+        Some(Filter::TwoCandidates) => optional.push((3, "filter pairs".to_string())),
         None => {}
     }
     if view.notes_hidden {
-        optional.push("candidates and box marks hidden".to_string());
+        optional.push((2, "candidates and box marks hidden".to_string()));
     }
-    let fits = |parts: &[String]| {
-        let shown: Vec<&str> = parts.iter().map(String::as_str).chain([mode]).collect();
+    let fits = |parts: &[(u8, String)]| {
+        let shown: Vec<&str> = parts
+            .iter()
+            .map(|(_, p)| p.as_str())
+            .chain([mode])
+            .collect();
         shown.join(" · ").chars().count() <= width
     };
     while !fits(&optional) {
         optional.pop();
     }
-    // Shown in the order the player reads them: the setting, the hint, the mode.
-    optional.reverse();
-    let mut parts = optional;
+    // Shown in the order the player reads them: the level and time, the
+    // settings, the hint, the mode.
+    optional.sort_by_key(|&(place, _)| place);
+    let mut parts: Vec<String> = optional.into_iter().map(|(_, part)| part).collect();
     parts.push(mode.to_string());
     Line::from(Span::styled(
         format!(" {} ", parts.join(" · ")),
@@ -320,6 +418,8 @@ fn keys(game: &Game, view: &View) -> Vec<(&'static str, &'static str)> {
     }
     let mut keys: Vec<(Action, &str)> = if view.help {
         vec![(Action::Close, "close")]
+    } else if view.paused {
+        vec![(Action::Pause, "carry on")]
     } else if let Some(open) = &view.hint {
         let mut keys = Vec::new();
         if open.rung < open.hint.rungs() {
@@ -443,6 +543,7 @@ fn help_words(action: Action) -> &'static str {
         Action::Undo => "undo",
         Action::Redo => "redo",
         Action::Help => "this list",
+        Action::Pause => "pause, or carry on (Space)",
         Action::Quit => "quit",
     }
 }
@@ -463,7 +564,7 @@ fn help_group(action: Action) -> &'static str {
         Action::Hint | Action::Confirm | Action::Check | Action::Reveal | Action::Close => {
             "Hints and checks"
         }
-        Action::Undo | Action::Redo | Action::Help | Action::Quit => "Game",
+        Action::Undo | Action::Redo | Action::Pause | Action::Help | Action::Quit => "Game",
     }
 }
 
@@ -646,7 +747,10 @@ impl Board<'_> {
                     self.theme.wrong_digit
                 } else if conflict {
                     self.theme.conflict
-                } else if self.game.is_complete(digit) && !self.game.is_won() {
+                } else if self.view.highlights.complete_digits
+                    && self.game.is_complete(digit)
+                    && !self.game.is_won()
+                {
                     self.theme.dimmed
                 } else if self.game.is_clue(cell) {
                     self.theme.clue
@@ -794,7 +898,7 @@ impl Board<'_> {
             } else {
                 Style::new().fg(self.theme.candidate)
             };
-            if self.game.note_clashes(cell, digit) {
+            if self.view.highlights.note_clashes && self.game.note_clashes(cell, digit) {
                 style = style
                     .fg(self.theme.conflict)
                     .add_modifier(Modifier::REVERSED);
@@ -821,13 +925,16 @@ impl Board<'_> {
             Some(self.theme.cursor)
         } else if filtered {
             Some(self.theme.filter)
-        } else if digit.is_some() && digit == game.board().get(cursor) {
+        } else if self.view.highlights.same_digit
+            && digit.is_some()
+            && digit == game.board().get(cursor)
+        {
             Some(self.theme.same_digit)
         } else if rung.is_some_and(|r| {
             r.second_group.contains(&cell) || r.areas.iter().any(|h| h.contains(cell))
         }) {
             Some(self.theme.hint_area)
-        } else if sees(cell, cursor) {
+        } else if self.view.highlights.peer && sees(cell, cursor) {
             Some(self.theme.peer)
         } else {
             None
@@ -1524,7 +1631,7 @@ mod tests {
             let area = Rect::new(0, 0, width, 10);
             let view = open_hint(hint.clone(), rung);
             let mut buffer = Buffer::empty(area);
-            hint_text(&view, &theme).render(area, &mut buffer);
+            hint_text(&game(), &view, &theme).render(area, &mut buffer);
             (0..area.height)
                 .filter(|&y| (0..area.width).any(|x| buffer[(x, y)].symbol() != " "))
                 .count()
@@ -1936,5 +2043,192 @@ mod tests {
                 assert!(text.contains(&line), "{line:?} in\n{text}");
             }
         }
+    }
+
+    fn top_line(backend: &TestBackend) -> String {
+        let buffer = backend.buffer();
+        (0..buffer.area.width)
+            .map(|x| buffer[(x, 0)].symbol())
+            .collect()
+    }
+
+    #[test]
+    fn the_status_line_shows_the_level_and_the_time() {
+        let game = game().rated(Level::Medium);
+        let view = View {
+            time: Some(std::time::Duration::from_secs(65)),
+            ..View::default()
+        };
+        let top = top_line(&render(&game, &view));
+        assert!(top.contains(" Medium · 1:05 · ● DIGIT "), "{top}");
+        let without = top_line(&render(&game, &View::default()));
+        assert!(without.contains(" Medium · ● DIGIT "), "{without}");
+    }
+
+    /// In the dense layout's narrow status line an open hint beats the
+    /// time, and the time beats the level.
+    #[test]
+    fn the_dense_status_line_keeps_the_hint_then_the_time_then_the_level() {
+        fn status(game: &Game, view: &View) -> String {
+            top_line(&render_dense(game, view))[TITLE.len()..]
+                .trim()
+                .to_string()
+        }
+        let mut game = game().rated(Level::Medium);
+        game.next_mode();
+        let time = Some(std::time::Duration::from_secs(3725));
+        let plain = View {
+            time,
+            ..View::default()
+        };
+        assert_eq!(status(&game, &plain), "Medium · 1:02:05 · ● CANDIDATE");
+        let hint = View {
+            time,
+            ..open(&game, 2)
+        };
+        assert_eq!(status(&game, &hint), "hint 2/5 · ● CANDIDATE");
+        game.next_mode();
+        game.next_mode();
+        let hint = View {
+            time,
+            ..open(&game, 2)
+        };
+        assert_eq!(status(&game, &hint), "1:02:05 · hint 2/5 · ● DIGIT");
+    }
+
+    #[test]
+    fn clock_text_shows_hours_only_when_there_are_some() {
+        let at = |s| clock_text(std::time::Duration::from_secs(s));
+        assert_eq!(at(0), "0:00");
+        assert_eq!(at(65), "1:05");
+        assert_eq!(at(3725), "1:02:05");
+    }
+
+    /// Pausing hides the board in both layouts: no digit of it shows, and
+    /// no hint.
+    #[test]
+    fn pausing_hides_the_board() {
+        let game = game();
+        // A hint open when the game was paused doesn't show either.
+        let view = View {
+            paused: true,
+            ..open(&game, 2)
+        };
+        for (backend, layout) in [
+            (render(&game, &view), "full"),
+            (render_dense(&game, &view), "dense"),
+        ] {
+            let buffer = backend.buffer();
+            let text: String = (0..buffer.area.height)
+                .flat_map(|y| (0..buffer.area.width).map(move |x| (x, y)))
+                .map(|pos| buffer[pos].symbol().to_string())
+                .collect();
+            assert!(text.contains("Paused"), "{layout}");
+            assert!(text.contains("p carry on"), "{layout}");
+            assert!(!text.contains('┼'), "{layout}: the board's lines show");
+            assert!(!text.contains("53"), "{layout}");
+            assert!(!text.contains("Rung"), "{layout}");
+        }
+    }
+
+    /// The panel's text rows, trimmed.
+    fn panel_lines(backend: &TestBackend) -> Vec<String> {
+        let buffer = backend.buffer();
+        let top = BOARD_HEIGHT + 2;
+        (top + 1..top + PANEL_HEIGHT - 1)
+            .map(|y| {
+                (2..FRAME_WIDTH - 2)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect()
+    }
+
+    /// The win screen says the rating, the hints and reveals, and the time
+    /// only if the timer is on.
+    #[test]
+    fn the_win_screen_says_what_the_game_took() {
+        let mut game = won_game().rated(Level::Hard);
+        let lines = panel_lines(&render(&game, &View::default()));
+        assert_eq!(lines, ["Solved, Hard.", "No hints.", ""]);
+        game.count_hint();
+        game.count_hint();
+        let timed = View {
+            time: Some(std::time::Duration::from_secs(754)),
+            ..View::default()
+        };
+        let lines = panel_lines(&render(&game, &timed));
+        assert_eq!(lines, ["Solved, Hard.", "2 hints, 12:34.", ""]);
+        let unrated = panel_lines(&render(&won_game(), &View::default()));
+        assert_eq!(unrated[0], "Solved.");
+    }
+
+    #[test]
+    fn a_reveal_shows_on_the_win_screen() {
+        let mut game = game();
+        go(&mut game, 2);
+        game.reveal();
+        let solution = solution();
+        for cell in 0..81 {
+            if game.board().get(cell).is_none() {
+                go(&mut game, cell);
+                game.press(solution.get(cell).unwrap());
+            }
+        }
+        let lines = panel_lines(&render(&game, &View::default()));
+        assert_eq!(lines[1], "No hints, 1 cell revealed.");
+    }
+
+    /// Each highlight switched off leaves its cells as they would be
+    /// without it.
+    #[test]
+    fn each_highlight_can_be_switched_off() {
+        let theme = Theme::tokyo_night_amoled();
+        let off = |change: fn(&mut Highlights)| {
+            let mut highlights = Highlights::default();
+            change(&mut highlights);
+            View {
+                highlights,
+                ..View::default()
+            }
+        };
+        let bg = |game: &Game, view: &View, cell| render(game, view).buffer()[middle(cell)].bg;
+
+        let mut game = game();
+        go(&mut game, 2);
+        game.press(5); // clashes with the clue 5 at r1c1
+        go(&mut game, 0);
+        assert_eq!(bg(&game, &View::default(), 14), theme.same_digit);
+        assert_eq!(
+            bg(&game, &off(|h| h.same_digit = false), 14),
+            theme.background
+        );
+        assert_eq!(bg(&game, &View::default(), 36), theme.peer);
+        assert_eq!(bg(&game, &off(|h| h.peer = false), 36), theme.background);
+
+        let mut notes = self::game();
+        notes.next_mode();
+        go(&mut notes, 3);
+        notes.press(5); // a candidate 5 in a row that holds a 5
+        go(&mut notes, 40);
+        let clash = |view: &View| render(&notes, view).buffer()[note_at(3, 5)].clone();
+        assert_eq!(clash(&View::default()).fg, theme.conflict);
+        let quiet = clash(&off(|h| h.note_clashes = false));
+        assert_eq!(quiet.fg, theme.candidate);
+        assert!(!quiet.modifier.contains(Modifier::REVERSED));
+
+        let mut complete = self::game();
+        let solution = solution();
+        for cell in 0..81 {
+            if solution.get(cell) == Some(5) && !complete.is_clue(cell) {
+                go(&mut complete, cell);
+                complete.press(5);
+            }
+        }
+        let five = |view: &View| render(&complete, view).buffer()[middle(0)].fg;
+        assert_eq!(five(&View::default()), theme.dimmed);
+        assert_eq!(five(&off(|h| h.complete_digits = false)), theme.clue);
     }
 }

@@ -2,6 +2,7 @@
 //! to the session.
 
 use std::io;
+use std::time::{Duration, Instant};
 
 use rand::rngs::Xoshiro256PlusPlus;
 use ratatui::DefaultTerminal;
@@ -11,7 +12,7 @@ use ratatui::crossterm::event::{
 };
 use ratatui::crossterm::execute;
 use sumi_core::bank;
-use sumi_core::generate::{LevelGenerator, Puzzle, generate_solvable};
+use sumi_core::generate::{LevelGenerator, generate_solvable};
 use sumi_core::hint::Hint;
 use sumi_core::technique::Level;
 
@@ -24,13 +25,13 @@ use crate::ui::{self, Filter, OpenHint, View};
 /// Plays puzzles of `level`, or any generated puzzle without one. Fails
 /// without changing the terminal when there is none to draw on.
 pub fn run(level: Option<Level>) -> io::Result<()> {
-    let (theme, warnings) = start_theme();
+    let (config, theme, warnings) = start();
     let mut terminal = ratatui::try_init()
         .map_err(|err| io::Error::new(err.kind(), format!("can't open the terminal: {err}")))?;
     // With bracketed paste on, pasted text arrives as one event that the game
     // ignores, instead of as keys that could place digits or quit.
     let result = execute!(io::stdout(), EnableBracketedPaste)
-        .and_then(|()| play(&mut terminal, level, &theme));
+        .and_then(|()| play(&mut terminal, level, &config, &theme));
     let _ = execute!(io::stdout(), DisableBracketedPaste);
     ratatui::restore();
     // The screen hid them while the game ran.
@@ -40,9 +41,9 @@ pub fn run(level: Option<Level>) -> io::Result<()> {
     result
 }
 
-/// The theme the player asked for, if the environment allows it, and a
-/// line for each file that couldn't be read.
-fn start_theme() -> (Theme, Vec<String>) {
+/// The config, the theme the player asked for if the environment allows it,
+/// and a line for each file that couldn't be read.
+fn start() -> (Config, Theme, Vec<String>) {
     let dir = Config::dir();
     let (config, warning) = Config::load(dir.as_ref());
     let (themes, warnings) = Theme::load_all(dir.map(|d| d.join("themes")).as_deref());
@@ -50,18 +51,36 @@ fn start_theme() -> (Theme, Vec<String>) {
     let no_color = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
     let truecolor = std::env::var("COLORTERM").is_ok_and(|v| v == "truecolor" || v == "24bit");
     let theme = Theme::choose(&themes, config.theme.as_deref(), no_color, truecolor);
-    (theme, warnings)
+    (config, theme, warnings)
 }
 
-fn play(terminal: &mut DefaultTerminal, level: Option<Level>, theme: &Theme) -> io::Result<()> {
-    let mut session = Session::new(rand::make_rng(), level);
+fn play(
+    terminal: &mut DefaultTerminal,
+    level: Option<Level>,
+    config: &Config,
+    theme: &Theme,
+) -> io::Result<()> {
+    let mut session = Session::new(rand::make_rng(), level, config);
     loop {
+        session.view.time = session.time();
         let mut board_shown = true;
         terminal.draw(|frame| {
             board_shown = ui::fits(frame.area());
             ui::draw(frame, &session.game, &session.view, theme);
         })?;
-        if session.handle(event::read()?, board_shown) == Flow::Quit {
+        // A running timer is redrawn as its seconds change; otherwise the
+        // loop sleeps until a key arrives.
+        let event = match session.view.time {
+            Some(time) if session.clock_running() => {
+                let to_next_second = Duration::from_millis(1000 - u64::from(time.subsec_millis()));
+                if !event::poll(to_next_second)? {
+                    continue;
+                }
+                event::read()?
+            }
+            _ => event::read()?,
+        };
+        if session.handle(event, board_shown) == Flow::Quit {
             return Ok(());
         }
     }
@@ -79,16 +98,44 @@ struct Session {
     view: View,
     rng: Xoshiro256PlusPlus,
     level: Option<Level>,
+    /// Show the time played.
+    timer: bool,
+    /// Where the time comes from; tests set their own.
+    clock: fn() -> Instant,
 }
 
 impl Session {
-    fn new(mut rng: Xoshiro256PlusPlus, level: Option<Level>) -> Session {
-        Session {
-            game: Game::new(new_puzzle(&mut rng, level)),
-            view: View::default(),
+    fn new(mut rng: Xoshiro256PlusPlus, level: Option<Level>, config: &Config) -> Session {
+        let game = new_game(&mut rng, level);
+        let mut session = Session {
+            game,
+            view: View {
+                highlights: config.highlights,
+                ..View::default()
+            },
             rng,
             level,
-        }
+            timer: config.timer,
+            clock: Instant::now,
+        };
+        session.game.start_clock((session.clock)());
+        session
+    }
+
+    /// Starts `game`, with its clock running.
+    fn begin(&mut self, game: Game) {
+        self.game = game;
+        self.game.start_clock((self.clock)());
+    }
+
+    /// The time to show, if the timer is on.
+    fn time(&self) -> Option<Duration> {
+        self.timer.then(|| self.game.elapsed((self.clock)()))
+    }
+
+    /// Whether the time played is going up: not paused, and not won.
+    fn clock_running(&self) -> bool {
+        !self.view.paused && !self.game.is_won()
     }
 
     /// `board_shown` is false while the window is too small to draw the
@@ -114,6 +161,9 @@ impl Session {
             };
         }
         let flow = self.dispatch(key);
+        if self.game.is_won() {
+            self.game.stop_clock((self.clock)());
+        }
         // A hint is about the board it was worked out from: any change to
         // the board or the notes closes it, so Enter never applies a step to
         // a board it wasn't found on.
@@ -150,11 +200,24 @@ impl Session {
         let Some(action) = action(key) else {
             return Flow::Continue;
         };
-        // The key list covers the board, so nothing under it acts.
+        // The key list and the pause screen cover the board, so nothing
+        // under them acts.
         if self.view.help {
             match action {
                 Action::Quit => return Flow::Quit,
                 Action::Help | Action::Close => self.view.help = false,
+                _ => {}
+            }
+            return Flow::Continue;
+        }
+        if self.view.paused {
+            match action {
+                Action::Quit => return Flow::Quit,
+                Action::Help => self.view.help = true,
+                Action::Pause => {
+                    self.view.paused = false;
+                    self.game.start_clock((self.clock)());
+                }
                 _ => {}
             }
             return Flow::Continue;
@@ -164,17 +227,23 @@ impl Session {
             Action::Quit => return Flow::Quit,
             Action::Help => self.view.help = true,
             Action::Confirm if game.is_won() => {
-                self.game = Game::new(new_puzzle(&mut self.rng, self.level));
-                // Hidden candidates carry over; nothing else of the last
-                // game does.
+                let game = new_game(&mut self.rng, self.level);
+                self.begin(game);
+                // Hidden candidates and the highlight switches carry over;
+                // nothing else of the last game's view does.
                 self.view = View {
                     notes_hidden: self.view.notes_hidden,
+                    highlights: self.view.highlights,
                     ..View::default()
                 };
             }
             // Once solved, the board and the view stay as they are until the
             // next game: Enter and quitting are the only keys that act.
             _ if game.is_won() => {}
+            Action::Pause => {
+                self.view.paused = true;
+                game.stop_clock((self.clock)());
+            }
             Action::Step(direction) => game.step(direction),
             Action::Jump(direction) => game.jump(direction),
             Action::Digit(digit) => game.press(digit),
@@ -213,6 +282,7 @@ impl Session {
         match &mut self.view.hint {
             Some(open) => open.rung = (open.rung + 1).min(open.hint.rungs()),
             None => {
+                self.game.count_hint();
                 let hint = self.game.hint();
                 let rung = self.game.hint_start().clamp(1, hint.rungs());
                 self.view.hint = Some(OpenHint {
@@ -247,16 +317,22 @@ impl Session {
     }
 }
 
+/// A game of `level`, or of any level sumi can finish, with its rating.
 /// Easy and Medium puzzles are generated on the spot; Hard and Expert ones
 /// come from the bank, which says why.
-fn new_puzzle(rng: &mut Xoshiro256PlusPlus, level: Option<Level>) -> Puzzle {
-    match level {
-        None => generate_solvable(rng).0,
-        Some(level @ (Level::Hard | Level::Expert)) => {
-            bank::pick(rng, level).expect("the bank holds Hard and Expert puzzles")
+fn new_game(rng: &mut Xoshiro256PlusPlus, level: Option<Level>) -> Game {
+    let (puzzle, level) = match level {
+        None => {
+            let (puzzle, grade) = generate_solvable(rng);
+            (puzzle, grade.level)
         }
-        Some(level) => LevelGenerator::new(level).next(rng).0,
-    }
+        Some(level @ (Level::Hard | Level::Expert)) => {
+            let puzzle = bank::pick(rng, level).expect("the bank holds Hard and Expert puzzles");
+            (puzzle, level)
+        }
+        Some(level) => (LevelGenerator::new(level).next(rng).0, level),
+    };
+    Game::new(puzzle).rated(level)
 }
 
 fn is_ctrl_c(key: KeyEvent) -> bool {
@@ -271,9 +347,85 @@ mod tests {
     use sumi_core::grade::grade;
 
     fn session() -> Session {
-        let mut s = Session::new(Xoshiro256PlusPlus::seed_from_u64(1), None);
-        s.game = fixtures::game();
+        let mut s = Session::new(
+            Xoshiro256PlusPlus::seed_from_u64(1),
+            None,
+            &Config::default(),
+        );
+        s.clock = now;
+        s.begin(fixtures::game());
         s
+    }
+
+    thread_local! {
+        static NOW: std::cell::Cell<Instant> = std::cell::Cell::new(Instant::now());
+    }
+
+    /// The clock tests run on: it moves only when `advance` moves it.
+    fn now() -> Instant {
+        NOW.with(std::cell::Cell::get)
+    }
+
+    fn advance(seconds: u64) {
+        NOW.with(|now| now.set(now.get() + Duration::from_secs(seconds)));
+    }
+
+    fn secs(n: u64) -> Duration {
+        Duration::from_secs(n)
+    }
+
+    /// p pauses: the board is hidden, the clock stops, and keys meant for
+    /// the board do nothing until p or Space resumes.
+    #[test]
+    fn pausing_hides_the_board_and_stops_the_clock() {
+        let mut s = session();
+        type_keys(&mut s, "ll"); // r1c3, empty
+        advance(10);
+        type_keys(&mut s, "p");
+        assert!(s.view.paused);
+        advance(30);
+        let before = (s.game.revision(), s.game.cursor());
+        type_keys(&mut s, "4j?");
+        assert_eq!((s.game.revision(), s.game.cursor()), before);
+        assert_eq!(rung(&s), None);
+        type_keys(&mut s, " ");
+        assert!(!s.view.paused);
+        advance(5);
+        assert_eq!(s.game.elapsed(now()), secs(15));
+        assert_eq!(type_keys(&mut s, "pq"), Flow::Quit, "q quits while paused");
+    }
+
+    #[test]
+    fn the_clock_stops_at_the_win_and_a_new_game_starts_it_again() {
+        let mut s = session();
+        advance(7);
+        win(&mut s);
+        advance(100);
+        assert_eq!(s.game.elapsed(now()), secs(7));
+        s.handle(key(KeyCode::Enter), true);
+        advance(3);
+        assert_eq!(s.game.elapsed(now()), secs(3));
+    }
+
+    /// The time is there to show only with the timer on.
+    #[test]
+    fn the_time_shows_only_with_the_timer_on() {
+        let mut s = session();
+        advance(4);
+        assert_eq!(s.time(), None);
+        s.timer = true;
+        assert_eq!(s.time(), Some(secs(4)));
+    }
+
+    /// Each hint opened counts once, however many rungs it is climbed.
+    #[test]
+    fn each_hint_opened_counts_once() {
+        let mut s = session();
+        type_keys(&mut s, "???");
+        assert_eq!(s.game.hints_used(), 1);
+        s.handle(key(KeyCode::Esc), true);
+        type_keys(&mut s, "?");
+        assert_eq!(s.game.hints_used(), 2);
     }
 
     fn key(code: KeyCode) -> Event {
@@ -550,8 +702,9 @@ mod tests {
     }
 
     #[test]
-    fn a_new_game_starts_with_a_clean_view_but_keeps_hidden_candidates() {
+    fn a_new_game_starts_with_a_clean_view_but_keeps_hidden_candidates_and_switches() {
         let mut s = session();
+        s.view.highlights.peer = false;
         type_keys(&mut s, "v");
         type_keys(&mut s, "ll1c");
         type_keys(&mut s, "f3");
@@ -562,6 +715,10 @@ mod tests {
             s.view,
             View {
                 notes_hidden: true,
+                highlights: crate::config::Highlights {
+                    peer: false,
+                    ..Default::default()
+                },
                 ..View::default()
             }
         );
@@ -636,7 +793,12 @@ mod tests {
     #[test]
     fn every_game_is_of_the_level_asked_for() {
         for level in [Level::Medium, Level::Hard] {
-            let mut s = Session::new(Xoshiro256PlusPlus::seed_from_u64(2), Some(level));
+            let mut s = Session::new(
+                Xoshiro256PlusPlus::seed_from_u64(2),
+                Some(level),
+                &Config::default(),
+            );
+            assert_eq!(s.game.level(), Some(level));
             assert_eq!(grade(s.game.board()).unwrap().level, level);
             s.game = fixtures::game();
             win(&mut s);

@@ -34,13 +34,15 @@ pub enum Action {
     Confirm,
     /// Opens or closes the list of every key.
     Help,
+    /// Stops the clock and hides the board, or carries on.
+    Pause,
     Quit,
 }
 
 impl Action {
     /// One of each action, in the order the help screen lists them. A test
     /// holds this to `index`, whose match the compiler makes complete.
-    pub const ALL: [Action; 21] = [
+    pub const ALL: [Action; 22] = [
         Action::Step(Direction::Up),
         Action::Jump(Direction::Up),
         Action::Digit(1),
@@ -60,6 +62,7 @@ impl Action {
         Action::Close,
         Action::Undo,
         Action::Redo,
+        Action::Pause,
         Action::Help,
         Action::Quit,
     ];
@@ -87,8 +90,9 @@ impl Action {
             Action::Close => 16,
             Action::Undo => 17,
             Action::Redo => 18,
-            Action::Help => 19,
-            Action::Quit => 20,
+            Action::Pause => 19,
+            Action::Help => 20,
+            Action::Quit => 21,
         }
     }
 }
@@ -138,6 +142,7 @@ pub fn action(key: KeyEvent) -> Option<Action> {
         KeyCode::Esc => Action::Close,
         KeyCode::Enter => Action::Confirm,
         KeyCode::Char('i') => Action::Help,
+        KeyCode::Char('p') | KeyCode::Char(' ') => Action::Pause,
         KeyCode::Char('q') => Action::Quit,
         _ => return None,
     };
@@ -184,6 +189,7 @@ pub fn key_label(action: Action) -> &'static str {
         Action::Reveal => "r",
         Action::Confirm => "Enter",
         Action::Help => "i",
+        Action::Pause => "p",
         Action::Quit => "q",
     }
 }
