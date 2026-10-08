@@ -16,20 +16,74 @@ use crate::game::{Game, Mode};
 use crate::input::{Action, key_label};
 use crate::theme::Theme;
 
-/// A cell is 7 columns by 3 rows, with a one-character line between cells.
+/// A cell is 3 rows tall in both layouts, with a one-character line between
+/// cells. The full layout's cells are 7 columns wide.
 const CELL_WIDTH: u16 = 7;
 const CELL_HEIGHT: u16 = 3;
-const BOARD_WIDTH: u16 = 9 * (CELL_WIDTH + 1) + 1;
+const BOARD_WIDTH: u16 = Density::Full.board_width();
 const BOARD_HEIGHT: u16 = 9 * (CELL_HEIGHT + 1) + 1;
 
-/// The panel under the board is this tall, borders included: the rung's
-/// number and two lines of text, which every hint rung fits in at the
-/// board's width.
+/// The panel under the full board is this tall, borders included: the
+/// rung's number and two lines of text, which every hint rung fits in at
+/// the board's width.
 const PANEL_HEIGHT: u16 = 5;
 
+/// The dense layout's hint area has no border: the rung's number and four
+/// lines of text, which every rung fits in at 30 columns.
+const DENSE_PANEL_HEIGHT: u16 = 5;
+
+/// " sumi ", as the frame's title and the dense layout's first line.
+const TITLE: &str = " sumi ";
+
 /// The most text the status line can have beside the frame's title: the
-/// board's width less " sumi ", a border character, and the line's padding.
-const STATUS_WIDTH: usize = BOARD_WIDTH as usize - 6 - 1 - 2;
+/// board's width less the title, a border character, and the line's padding.
+const STATUS_WIDTH: usize = BOARD_WIDTH as usize - TITLE.len() - 1 - 2;
+
+/// How big the board is drawn, chosen from the window's size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Density {
+    /// Cells 7 wide with the candidates spaced out, inside the frame.
+    Full,
+    /// Cells 3 wide with the candidates packed, and no frame: the board's
+    /// outline is the frame. For phones and narrow windows.
+    Dense,
+}
+
+impl Density {
+    const fn cell_width(self) -> u16 {
+        match self {
+            Density::Full => CELL_WIDTH,
+            Density::Dense => 3,
+        }
+    }
+
+    const fn board_width(self) -> u16 {
+        9 * (self.cell_width() + 1) + 1
+    }
+
+    /// Columns left of the board for the row numbers. The full layout writes
+    /// them on the board's left line, beside a column notes never use; a
+    /// dense cell's candidates start at its edge, so a number there would
+    /// read as part of them.
+    const fn gutter(self) -> u16 {
+        match self {
+            Density::Full => 0,
+            Density::Dense => 1,
+        }
+    }
+
+    /// The smallest window the layout fits in.
+    const fn needed(self) -> (u16, u16) {
+        match self {
+            Density::Full => (FRAME_WIDTH, BOARD_HEIGHT + 2 + PANEL_HEIGHT),
+            // The status line, the board, the hint and the key bar.
+            Density::Dense => (
+                Density::Dense.gutter() + Density::Dense.board_width(),
+                1 + BOARD_HEIGHT + DENSE_PANEL_HEIGHT + 1,
+            ),
+        }
+    }
+}
 
 /// What the screen shows besides the game itself. None of it is undoable.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -68,21 +122,41 @@ pub enum Filter {
 
 const FRAME_WIDTH: u16 = BOARD_WIDTH + 2;
 
-/// The board inside its frame and the panel under it: the smallest window
-/// the game can be drawn in.
-const NEEDED: (u16, u16) = (FRAME_WIDTH, BOARD_HEIGHT + 2 + PANEL_HEIGHT);
+/// The full layout's board inside its frame and the panel under it.
+const NEEDED: (u16, u16) = Density::Full.needed();
+
+/// The layout a window of this size gets, the full one if it fits, or none
+/// if even the dense one doesn't.
+pub fn density(area: Rect) -> Option<Density> {
+    let fits = |d: Density| area.width >= d.needed().0 && area.height >= d.needed().1;
+    [Density::Full, Density::Dense]
+        .into_iter()
+        .find(|&d| fits(d))
+}
 
 /// Whether `draw` shows the board in a window of this size. The app asks
 /// this too, so keys never act on a board the player can't see.
 pub fn fits(area: Rect) -> bool {
-    area.width >= NEEDED.0 && area.height >= NEEDED.1
+    density(area).is_some()
 }
 
 pub fn draw(frame: &mut Frame, game: &Game, view: &View, theme: &Theme) {
     let area = frame.area();
     frame.render_widget(Block::new().style(Style::new().bg(theme.background)), area);
-    if !fits(area) {
+    let Some(density) = density(area) else {
         too_small(frame, theme);
+        return;
+    };
+    let rung = view.hint.as_ref().map(|open| open.hint.rung(open.rung));
+    let board = Board {
+        game,
+        view,
+        theme,
+        rung,
+        density,
+    };
+    if density == Density::Dense {
+        draw_dense(frame, board);
         return;
     }
 
@@ -93,33 +167,49 @@ pub fn draw(frame: &mut Frame, game: &Game, view: &View, theme: &Theme) {
     ])
     .areas(whole);
     let block = frame_block(theme)
-        .title_top(status(game, view, theme).right_aligned())
+        .title_top(status(game, view, theme, STATUS_WIDTH).right_aligned())
         .title_bottom(key_bar(&keys(game, view), theme).centered());
     let inner = block.inner(outer);
     frame.render_widget(block, outer);
-    let rung = view.hint.as_ref().map(|open| open.hint.rung(open.rung));
-    frame.render_widget(
-        Board {
-            game,
-            view,
-            theme,
-            rung,
-        },
-        inner,
-    );
-    panel(frame, side, view, theme);
-}
-
-/// The panel under the board: the hint's words, or how to ask for one.
-fn panel(frame: &mut Frame, area: Rect, view: &View, theme: &Theme) {
+    frame.render_widget(board, inner);
     let block = panel_block(theme, "Hint");
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    frame.render_widget(panel_text(view, theme), inner);
+    let inner = block.inner(side);
+    frame.render_widget(block, side);
+    frame.render_widget(hint_text(view, theme), inner);
 }
 
-/// The panel's words, wrapped as they are drawn.
-fn panel_text(view: &View, theme: &Theme) -> Paragraph<'static> {
+/// The dense layout, top to bottom: the title and status line, the board,
+/// the hint and the key bar.
+fn draw_dense(frame: &mut Frame, board: Board) {
+    let (game, view, theme) = (board.game, board.view, board.theme);
+    let needed = Density::Dense.needed();
+    let whole = frame
+        .area()
+        .centered(Constraint::Length(needed.0), Constraint::Length(needed.1));
+    let [top, middle, hint, keys_area] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(BOARD_HEIGHT),
+        Constraint::Length(DENSE_PANEL_HEIGHT),
+        Constraint::Length(1),
+    ])
+    .areas(whole);
+    let width = usize::from(needed.0) - TITLE.len() - 2;
+    let [title_area, status_area] =
+        Layout::horizontal([Constraint::Length(TITLE.len() as u16), Constraint::Fill(1)])
+            .areas(top);
+    frame.render_widget(title(theme), title_area);
+    frame.render_widget(
+        status(game, view, theme, width).right_aligned(),
+        status_area,
+    );
+    frame.render_widget(board, middle);
+    frame.render_widget(hint_text(view, theme), hint);
+    let line = key_bar_within(&keys(game, view), theme, usize::from(needed.0));
+    frame.render_widget(line.centered(), keys_area);
+}
+
+/// The hint's words under its rung's number, or how to ask for one.
+fn hint_text(view: &View, theme: &Theme) -> Paragraph<'static> {
     let text = match &view.hint {
         Some(open) => {
             let rung = open.hint.rung(open.rung);
@@ -151,7 +241,8 @@ pub fn panel_block(theme: &Theme, title: &str) -> Block<'static> {
         )))
 }
 
-fn status(game: &Game, view: &View, theme: &Theme) -> Line<'static> {
+/// The status line, at most `width` characters between its padding.
+fn status(game: &Game, view: &View, theme: &Theme, width: usize) -> Line<'static> {
     if game.is_won() {
         return Line::from(Span::styled(" Solved ", Style::new().fg(theme.accent)));
     }
@@ -179,7 +270,7 @@ fn status(game: &Game, view: &View, theme: &Theme) -> Line<'static> {
     }
     let fits = |parts: &[String]| {
         let shown: Vec<&str> = parts.iter().map(String::as_str).chain([mode]).collect();
-        shown.join(" · ").chars().count() <= STATUS_WIDTH
+        shown.join(" · ").chars().count() <= width
     };
     while !fits(&optional) {
         optional.pop();
@@ -263,10 +354,14 @@ pub fn frame_block(theme: &Theme) -> Block<'static> {
     Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(theme.frame))
-        .title_top(Line::from(Span::styled(
-            " sumi ",
-            Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
-        )))
+        .title_top(title(theme))
+}
+
+fn title(theme: &Theme) -> Line<'static> {
+    Line::from(Span::styled(
+        TITLE,
+        Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
+    ))
 }
 
 /// A row of keys and what they do, keys in the accent colour.
@@ -285,12 +380,24 @@ pub fn key_bar(keys: &[(&str, &str)], theme: &Theme) -> Line<'static> {
     Line::from(spans)
 }
 
+/// As many of `keys` as fit in `width` columns. Keys are left out from the
+/// one before last backwards, so the last (quit, or cancel after `f`)
+/// always stays.
+pub fn key_bar_within(keys: &[(&str, &str)], theme: &Theme, width: usize) -> Line<'static> {
+    let mut keys = keys.to_vec();
+    while keys.len() > 1 && key_bar(&keys, theme).width() > width {
+        keys.remove(keys.len() - 2);
+    }
+    key_bar(&keys, theme)
+}
+
 /// The message wraps, so a narrow window still shows as much of it as fits.
 fn too_small(frame: &mut Frame, theme: &Theme) {
     let area = frame.area();
+    let smallest = Density::Dense.needed();
     let message = format!(
         "Make the window at least {}×{}. It is {}×{} now.",
-        NEEDED.0, NEEDED.1, area.width, area.height
+        smallest.0, smallest.1, area.width, area.height
     );
     frame.render_widget(
         Paragraph::new(message)
@@ -307,30 +414,41 @@ struct Board<'a> {
     theme: &'a Theme,
     /// What the open hint shows at its rung.
     rung: Option<Rung>,
+    density: Density,
 }
 
 impl Widget for Board<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let area = area.centered(
-            Constraint::Length(BOARD_WIDTH),
+        let gutter = self.density.gutter();
+        let whole = area.centered(
+            Constraint::Length(gutter + self.density.board_width()),
             Constraint::Length(BOARD_HEIGHT),
         );
+        let area = Rect {
+            x: whole.x + gutter,
+            width: whole.width - gutter,
+            ..whole
+        };
         self.render_lines(area, buf);
-        self.render_numbers(area, buf);
         let conflicts = self.game.board().conflicts();
         for (cell, &conflict) in conflicts.iter().enumerate() {
             self.render_cell(cell, conflict, area, buf);
         }
+        if self.density == Density::Dense {
+            self.render_cursor_frame(area, buf);
+        }
+        self.render_numbers(area, buf);
     }
 }
 
 impl Board<'_> {
     fn render_lines(&self, area: Rect, buf: &mut Buffer) {
+        let cell_width = self.density.cell_width();
         for dy in 0..BOARD_HEIGHT {
-            for dx in 0..BOARD_WIDTH {
-                let on_vertical = dx % (CELL_WIDTH + 1) == 0;
+            for dx in 0..self.density.board_width() {
+                let on_vertical = dx % (cell_width + 1) == 0;
                 let on_horizontal = dy % (CELL_HEIGHT + 1) == 0;
-                let kx = dx / (CELL_WIDTH + 1);
+                let kx = dx / (cell_width + 1);
                 let ky = dy / (CELL_HEIGHT + 1);
                 let (symbol, heavy) = match (on_vertical, on_horizontal) {
                     (true, true) => junction(kx, ky),
@@ -353,9 +471,9 @@ impl Board<'_> {
     }
 
     /// Writes each column's number into the board's top line and each row's
-    /// into its left line, in the middle of the cell they belong to. Those
-    /// lines are drawn anyway, so the numbers cost no room. The cursor's row
-    /// and column stand out.
+    /// into its left line, or the gutter left of it (`Density::gutter`), in
+    /// the middle of the cell they belong to. The cursor's row and column
+    /// stand out.
     fn render_numbers(&self, area: Rect, buf: &mut Buffer) {
         let cursor = self.game.cursor();
         let style = |here: bool| {
@@ -367,18 +485,19 @@ impl Board<'_> {
                 Style::new().fg(self.theme.dimmed)
             }
         };
+        let cell_width = self.density.cell_width();
         for i in 0..9 {
             let number = (i + 1).to_string();
-            let offset = 1 + i as u16 * (CELL_WIDTH + 1);
+            let offset = 1 + i as u16 * (cell_width + 1);
             buf.set_string(
-                area.x + offset + CELL_WIDTH / 2,
+                area.x + offset + cell_width / 2,
                 area.y,
                 &number,
                 style(col(cursor) == i),
             );
             let offset = 1 + i as u16 * (CELL_HEIGHT + 1);
             buf.set_string(
-                area.x,
+                area.x - self.density.gutter(),
                 area.y + offset + CELL_HEIGHT / 2,
                 &number,
                 style(row(cursor) == i),
@@ -387,20 +506,19 @@ impl Board<'_> {
     }
 
     fn render_cell(&self, cell: Cell, conflict: bool, area: Rect, buf: &mut Buffer) {
-        let x = area.x + 1 + col(cell) as u16 * (CELL_WIDTH + 1);
-        let y = area.y + 1 + row(cell) as u16 * (CELL_HEIGHT + 1);
-        let rect = Rect::new(x, y, CELL_WIDTH, CELL_HEIGHT);
+        let rect = self.cell_rect(cell, area);
+        let (x, y) = (rect.x, rect.y);
         if let Some(bg) = self.background(cell) {
             buf.set_style(rect, Style::new().bg(bg));
         }
         if self.theme.monochrome && self.rung.as_ref().is_some_and(|r| r.cells.contains(&cell)) {
             buf.set_style(rect, Style::new().add_modifier(Modifier::REVERSED));
         }
-        if cell == self.game.cursor() {
+        if cell == self.game.cursor() && self.density == Density::Full {
             // Corner marks show the cursor without relying on colour. Notes
             // never use a cell's first or last column, so they don't collide.
             let mark = Style::new().fg(self.theme.accent);
-            let (right, bottom) = (x + CELL_WIDTH - 1, y + CELL_HEIGHT - 1);
+            let (right, bottom) = (x + rect.width - 1, y + CELL_HEIGHT - 1);
             for (cx, cy, symbol) in [
                 (x, y, "┌"),
                 (right, y, "┐"),
@@ -440,7 +558,7 @@ impl Board<'_> {
                     style = style.add_modifier(Modifier::UNDERLINED);
                 }
                 buf.set_string(
-                    x + CELL_WIDTH / 2,
+                    x + rect.width / 2,
                     y + CELL_HEIGHT / 2,
                     digit.to_string(),
                     style,
@@ -449,20 +567,66 @@ impl Board<'_> {
             None if !self.view.notes_hidden => self.render_notes(cell, x, y, buf),
             None => {}
         }
-        self.render_hint_marks(cell, x, y, buf);
+        self.render_hint_marks(cell, rect, buf);
+    }
+
+    /// Where a cell's contents go, inside the lines around it.
+    fn cell_rect(&self, cell: Cell, board: Rect) -> Rect {
+        let width = self.density.cell_width();
+        let x = board.x + 1 + col(cell) as u16 * (width + 1);
+        let y = board.y + 1 + row(cell) as u16 * (CELL_HEIGHT + 1);
+        Rect::new(x, y, width, CELL_HEIGHT)
+    }
+
+    /// Where a note for `digit` goes in a cell whose contents start at
+    /// `(x, y)`: a fixed spot in a 3×3 grid, 1 top left and 9 bottom right,
+    /// spaced out in the full layout and packed in the dense one.
+    fn note_spot(&self, digit: u8, x: u16, y: u16) -> (u16, u16) {
+        let spot = u16::from(digit - 1);
+        match self.density {
+            Density::Full => (x + 1 + 2 * (spot % 3), y + spot / 3),
+            Density::Dense => (x + spot % 3, y + spot / 3),
+        }
+    }
+
+    /// The dense layout's cells have no room for corner marks, so the lines
+    /// around the cursor are drawn double instead: a shape no other line on
+    /// the board has.
+    fn render_cursor_frame(&self, board: Rect, buf: &mut Buffer) {
+        let cell = self.cell_rect(self.game.cursor(), board);
+        let style = Style::new().fg(self.theme.accent);
+        let (left, right) = (cell.x - 1, cell.x + cell.width);
+        let (top, bottom) = (cell.y - 1, cell.y + cell.height);
+        for x in cell.x..right {
+            buf.set_string(x, top, "═", style);
+            buf.set_string(x, bottom, "═", style);
+        }
+        for y in cell.y..bottom {
+            buf.set_string(left, y, "║", style);
+            buf.set_string(right, y, "║", style);
+        }
+        for (x, y, corner) in [
+            (left, top, "╔"),
+            (right, top, "╗"),
+            (left, bottom, "╚"),
+            (right, bottom, "╝"),
+        ] {
+            buf.set_string(x, y, corner, style);
+        }
     }
 
     /// What the open hint writes in a cell: the candidates it removes,
     /// crossed out, or the digit it places, which takes the cell's notes'
     /// place.
-    fn render_hint_marks(&self, cell: Cell, x: u16, y: u16, buf: &mut Buffer) {
+    fn render_hint_marks(&self, cell: Cell, rect: Rect, buf: &mut Buffer) {
         let Some(rung) = &self.rung else { return };
+        let (x, y) = (rect.x, rect.y);
         for &(_, digits) in rung.removals.iter().filter(|&&(c, _)| c == cell) {
             for digit in digits.iter() {
-                let spot = u16::from(digit - 1);
+                let (nx, ny) = self.note_spot(digit, x, y);
                 buf.set_string(
-                    x + 1 + 2 * (spot % 3),
-                    y + spot / 3,
+                    nx,
+                    ny,
                     digit.to_string(),
                     Style::new()
                         .fg(self.theme.hint_removal)
@@ -473,16 +637,22 @@ impl Board<'_> {
         if let Some((c, digit)) = rung.placement
             && c == cell
         {
+            // The full layout's notes never use a cell's first and last
+            // columns, where the cursor's corner marks go.
+            let blank = match self.density {
+                Density::Full => Rect::new(x + 1, y, rect.width - 2, CELL_HEIGHT),
+                Density::Dense => rect,
+            };
             for dy in 0..CELL_HEIGHT {
                 buf.set_string(
-                    x + 1,
+                    blank.x,
                     y + dy,
-                    " ".repeat(usize::from(CELL_WIDTH) - 2),
+                    " ".repeat(usize::from(blank.width)),
                     Style::new(),
                 );
             }
             buf.set_string(
-                x + CELL_WIDTH / 2,
+                x + rect.width / 2,
                 y + CELL_HEIGHT / 2,
                 digit.to_string(),
                 Style::new()
@@ -492,14 +662,13 @@ impl Board<'_> {
         }
     }
 
-    /// Each digit has a fixed spot in a 3×3 grid, 1 top left and 9 bottom
-    /// right, spaced out across the cell's 7 columns. A box mark takes the
-    /// spot over from a candidate.
+    /// Each note goes in its digit's spot (`note_spot`). A box mark takes
+    /// the spot over from a candidate.
     fn render_notes(&self, cell: Cell, x: u16, y: u16, buf: &mut Buffer) {
         let candidates = self.game.candidates(cell);
         let marks = self.game.marks(cell);
         for digit in candidates.union(marks).iter() {
-            let spot = u16::from(digit - 1);
+            let (nx, ny) = self.note_spot(digit, x, y);
             let mut style = if marks.contains(digit) {
                 Style::new()
                     .fg(self.theme.box_mark)
@@ -512,12 +681,7 @@ impl Board<'_> {
                     .fg(self.theme.conflict)
                     .add_modifier(Modifier::REVERSED);
             }
-            buf.set_string(
-                x + 1 + 2 * (spot % 3),
-                y + spot / 3,
-                digit.to_string(),
-                style,
-            );
+            buf.set_string(nx, ny, digit.to_string(), style);
         }
     }
 
@@ -1218,11 +1382,11 @@ mod tests {
         use rand::SeedableRng;
         use sumi_core::technique::Level;
         let theme = Theme::tokyo_night_amoled();
-        let area = Rect::new(0, 0, FRAME_WIDTH - 4, 10);
-        let rows_used = |hint: &Hint, rung: usize| {
+        let rows_used = |hint: &Hint, rung: usize, width: u16| {
+            let area = Rect::new(0, 0, width, 10);
             let view = open_hint(hint.clone(), rung);
             let mut buffer = Buffer::empty(area);
-            panel_text(&view, &theme).render(area, &mut buffer);
+            hint_text(&view, &theme).render(area, &mut buffer);
             (0..area.height)
                 .filter(|&y| (0..area.width).any(|x| buffer[(x, y)].symbol() != " "))
                 .count()
@@ -1238,19 +1402,30 @@ mod tests {
                 }
             }
         }
-        let mut longest = 0;
-        for hint in &hints {
-            for rung in 1..=hint.rungs() {
-                let used = rows_used(hint, rung);
-                longest = longest.max(used);
-                assert!(
-                    used <= usize::from(PANEL_HEIGHT - 2),
-                    "{}",
-                    hint.rung(rung).text
-                );
+        // The full panel inside its border and padding, and the dense hint
+        // area, which has neither.
+        let layouts = [
+            (FRAME_WIDTH - 4, PANEL_HEIGHT - 2),
+            (DENSE.0, DENSE_PANEL_HEIGHT),
+        ];
+        for (width, rows) in layouts {
+            let mut longest = 0;
+            for hint in &hints {
+                for rung in 1..=hint.rungs() {
+                    let used = rows_used(hint, rung, width);
+                    longest = longest.max(used);
+                    assert!(
+                        used <= usize::from(rows),
+                        "{width} columns: {}",
+                        hint.rung(rung).text
+                    );
+                }
             }
+            assert!(
+                longest >= usize::from(rows) - 1,
+                "{width} columns: {longest} rows at most"
+            );
         }
-        assert_eq!(longest, 3, "some rung uses both lines of text");
     }
 
     #[test]
@@ -1305,5 +1480,176 @@ mod tests {
             })
             .unwrap();
         insta::assert_snapshot!(terminal.backend());
+    }
+
+    const DENSE: (u16, u16) = Density::Dense.needed();
+
+    fn render_dense(game: &Game, view: &View) -> TestBackend {
+        let mut terminal = Terminal::new(TestBackend::new(DENSE.0, DENSE.1)).unwrap();
+        let theme = Theme::tokyo_night_amoled();
+        terminal
+            .draw(|frame| draw(frame, game, view, &theme))
+            .unwrap();
+        terminal.backend().clone()
+    }
+
+    /// The top left of a cell's contents in the dense layout, in a window of
+    /// exactly `DENSE`: the status line takes the first row, and the row
+    /// numbers' gutter and the board's outline take a column each.
+    fn dense_cell(cell: Cell) -> (u16, u16) {
+        (2 + 4 * col(cell) as u16, 2 + 4 * row(cell) as u16)
+    }
+
+    /// A row's number stands apart from the candidates in its first cell,
+    /// with the board's line between them.
+    #[test]
+    fn dense_row_numbers_sit_outside_the_board() {
+        let mut game = game();
+        game.next_mode();
+        go(&mut game, 18); // r3c1
+        game.press(4);
+        go(&mut game, 40);
+        let backend = render_dense(&game, &View::default());
+        let (x, y) = dense_cell(18);
+        let middle_row: String = (0..x + 1)
+            .map(|dx| backend.buffer()[(dx, y + 1)].symbol())
+            .collect();
+        assert_eq!(middle_row, "3┃4");
+    }
+
+    #[test]
+    fn the_window_picks_the_layout() {
+        let at = |width, height| density(Rect::new(0, 0, width, height));
+        assert_eq!(at(75, 44), Some(Density::Full));
+        assert_eq!(at(74, 44), Some(Density::Dense));
+        assert_eq!(at(38, 44), Some(Density::Dense));
+        assert_eq!(at(37, 44), None);
+        assert_eq!(at(38, 43), None);
+        assert_eq!(at(200, 43), None);
+        assert_eq!(DENSE, (38, 44));
+    }
+
+    #[test]
+    fn dense_layout_with_notes() {
+        let mut game = game();
+        game.fill_candidates();
+        go(&mut game, 2);
+        game.press(5); // r1c3 clashes with the 5 at r1c1
+        game.next_mode();
+        game.next_mode();
+        go(&mut game, 3);
+        game.press(6); // a box mark at r1c4
+        go(&mut game, 40);
+        insta::assert_snapshot!(render_dense(&game, &View::default()));
+    }
+
+    /// The dense layout packs a cell's candidates into its 3×3 characters.
+    #[test]
+    fn dense_candidates_fill_the_cell() {
+        let mut game = game();
+        game.next_mode();
+        go(&mut game, 3);
+        for digit in [2, 6, 8] {
+            game.press(digit);
+        }
+        go(&mut game, 40);
+        let backend = render_dense(&game, &View::default());
+        let (x, y) = dense_cell(3);
+        let row = |dy| {
+            (0..3)
+                .map(|dx| backend.buffer()[(x + dx, y + dy)].symbol())
+                .collect::<String>()
+        };
+        assert_eq!([row(0), row(1), row(2)], [" 2 ", "  6", " 8 "]);
+    }
+
+    /// No corner marks fit in a dense cell; the lines around the cursor are
+    /// drawn double, a shape no other line has.
+    #[test]
+    fn the_dense_cursor_is_framed_with_double_lines() {
+        let mut game = game();
+        go(&mut game, 40);
+        let backend = render_dense(&game, &View::default());
+        let b = backend.buffer();
+        let (x, y) = dense_cell(40);
+        assert_eq!(b[(x - 1, y - 1)].symbol(), "╔");
+        assert_eq!(b[(x + 3, y - 1)].symbol(), "╗");
+        assert_eq!(b[(x - 1, y + 3)].symbol(), "╚");
+        assert_eq!(b[(x + 3, y + 3)].symbol(), "╝");
+        assert_eq!(b[(x + 1, y - 1)].symbol(), "═");
+        assert_eq!(b[(x - 1, y + 1)].symbol(), "║");
+        let (ox, oy) = dense_cell(70); // r8c8: thin lines meet at its top left
+        assert_eq!(b[(ox - 1, oy - 1)].symbol(), "┼", "only the cursor's lines");
+        assert_eq!(b[(x, y)].symbol(), " ", "no corner marks inside");
+    }
+
+    /// Placing a digit blanks the whole dense cell: its notes fill it, and
+    /// none of them may show beside the digit.
+    #[test]
+    fn a_dense_hints_placement_takes_the_whole_cell() {
+        let mut game = game();
+        game.fill_candidates();
+        let hint = game.hint();
+        let (cell, digit) = hint.step().unwrap().placement.unwrap();
+        let backend = render_dense(&game, &open_hint(hint, 5));
+        let (x, y) = dense_cell(cell);
+        let text: String = (0..3)
+            .flat_map(|dy| (0..3).map(move |dx| (x + dx, y + dy)))
+            .map(|pos| backend.buffer()[pos].symbol().to_string())
+            .collect();
+        assert_eq!(text, format!("    {digit}    "));
+    }
+
+    /// The dense key bar is one line as wide as the board, and quit stays.
+    #[test]
+    fn the_dense_key_bar_fits_and_keeps_quit() {
+        let game = game();
+        let backend = render_dense(&game, &View::default());
+        let last: String = (0..DENSE.0)
+            .map(|x| backend.buffer()[(x, DENSE.1 - 1)].symbol())
+            .collect();
+        assert!(last.trim_end().ends_with("q quit"), "{last}");
+        assert!(last.contains("place"), "{last}");
+        assert!(!last.contains("undo"), "{last}");
+    }
+
+    /// The dense status line gives up its least useful parts, as the full
+    /// one does, before it would run into the title.
+    #[test]
+    fn the_dense_status_line_drops_parts_before_the_title() {
+        let mut game = game();
+        game.next_mode();
+        game.next_mode();
+        let view = View {
+            notes_hidden: true,
+            filter: Some(Filter::TwoCandidates),
+            notice: Some("no mistakes"),
+            ..open(&game, 5)
+        };
+        let backend = render_dense(&game, &view);
+        let top: String = (0..DENSE.0)
+            .map(|x| backend.buffer()[(x, 0)].symbol())
+            .collect();
+        assert!(top.starts_with(" sumi "), "{top}");
+        assert!(top.ends_with("● BOX MARK "), "{top}");
+        // Whole parts only: the hint, then the mode.
+        let status = top[TITLE.len()..].trim();
+        assert_eq!(status, "hint 5/5 · ● BOX MARK");
+    }
+
+    /// The status line above the dense board, and the rung's number at the
+    /// top of the hint area.
+    #[test]
+    fn the_dense_status_line_and_hint_fit() {
+        let game = game();
+        let view = open(&game, 2);
+        let backend = render_dense(&game, &view);
+        let b = backend.buffer();
+        let top: String = (0..DENSE.0).map(|x| b[(x, 0)].symbol()).collect();
+        assert!(top.starts_with(" sumi "), "{top}");
+        assert!(top.trim_end().ends_with("● DIGIT"), "{top}");
+        let first = 1 + BOARD_HEIGHT;
+        let rung: String = (0..DENSE.0).map(|x| b[(x, first)].symbol()).collect();
+        assert_eq!(rung.trim_end(), "Rung 2 of 5");
     }
 }
