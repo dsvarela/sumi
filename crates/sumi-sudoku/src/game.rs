@@ -210,6 +210,10 @@ impl Game {
         self.cursor = moved(self.cursor, direction, 1);
     }
 
+    pub fn move_to(&mut self, cell: Cell) {
+        self.cursor = cell;
+    }
+
     /// Moves to the same spot in the next box, wrapping around the board.
     pub fn jump(&mut self, direction: Direction) {
         self.cursor = moved(self.cursor, direction, 3);

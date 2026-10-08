@@ -12,6 +12,7 @@ use ratatui::crossterm::event::{
 use ratatui::crossterm::execute;
 use sumi_core::bank;
 use sumi_core::generate::{LevelGenerator, Puzzle, generate_solvable};
+use sumi_core::hint::Hint;
 use sumi_core::technique::Level;
 
 use crate::config::Config;
@@ -149,9 +150,19 @@ impl Session {
         let Some(action) = action(key) else {
             return Flow::Continue;
         };
+        // The key list covers the board, so nothing under it acts.
+        if self.view.help {
+            match action {
+                Action::Quit => return Flow::Quit,
+                Action::Help | Action::Close => self.view.help = false,
+                _ => {}
+            }
+            return Flow::Continue;
+        }
         let game = &mut self.game;
         match action {
             Action::Quit => return Flow::Quit,
+            Action::Help => self.view.help = true,
             Action::Confirm if game.is_won() => {
                 self.game = Game::new(new_puzzle(&mut self.rng, self.level));
                 // Hidden candidates carry over; nothing else of the last
@@ -213,17 +224,25 @@ impl Session {
         }
     }
 
-    /// Does the open hint's step, if its last rung is showing.
+    /// At the open hint's last rung, does its step, or takes the cursor to
+    /// the mistake it names.
     fn apply_hint(&mut self) {
-        let step = self
+        let Some(open) = self
             .view
             .hint
             .as_ref()
             .filter(|open| open.rung == open.hint.rungs())
-            .and_then(|open| open.hint.step().cloned());
-        if let Some(step) = step {
-            self.game.apply_hint(&step);
-            self.view.hint = None;
+        else {
+            return;
+        };
+        match &open.hint {
+            Hint::Mistake(cell) | Hint::StruckOut(cell) => self.game.move_to(*cell),
+            hint => {
+                if let Some(step) = hint.step().cloned() {
+                    self.game.apply_hint(&step);
+                    self.view.hint = None;
+                }
+            }
         }
     }
 }
@@ -381,6 +400,68 @@ mod tests {
         type_keys(&mut s, "ll"); // r1c3
         type_keys(&mut s, "1"); // a wrong digit: the answer is 4
         type_keys(&mut s, "?");
+        assert_eq!(rung(&s), Some(3));
+    }
+
+    /// `i` opens the list of keys. While it shows, keys meant for the board
+    /// do nothing; `i` or Esc closes it, and q still quits.
+    #[test]
+    fn the_key_list_opens_and_keys_under_it_do_nothing() {
+        let mut s = session();
+        type_keys(&mut s, "ll"); // r1c3, empty
+        type_keys(&mut s, "i");
+        assert!(s.view.help);
+        let before = (s.game.revision(), s.game.cursor());
+        type_keys(&mut s, "4ja?f");
+        assert_eq!((s.game.revision(), s.game.cursor()), before);
+        assert_eq!(rung(&s), None);
+        assert!(!s.view.awaiting_filter);
+        type_keys(&mut s, "i");
+        assert!(!s.view.help);
+        type_keys(&mut s, "i");
+        s.handle(key(KeyCode::Esc), true);
+        assert!(!s.view.help);
+        assert_eq!(type_keys(&mut s, "iq"), Flow::Quit);
+    }
+
+    /// The won screen offers the key list, so `i` opens it there too.
+    #[test]
+    fn the_key_list_opens_after_a_win() {
+        let mut s = session();
+        let solution = fixtures::solution();
+        for cell in 0..81 {
+            if !s.game.is_clue(cell) {
+                s.game.move_to(cell);
+                s.game.press(solution.get(cell).unwrap());
+            }
+        }
+        assert!(s.game.is_won());
+        type_keys(&mut s, "i");
+        assert!(s.view.help);
+    }
+
+    /// Esc with the key list over a hint closes only the list.
+    #[test]
+    fn esc_closes_the_key_list_before_the_hint() {
+        let mut s = session();
+        type_keys(&mut s, "??i");
+        s.handle(key(KeyCode::Esc), true);
+        assert!(!s.view.help);
+        assert_eq!(rung(&s), Some(2));
+    }
+
+    /// A mistake's last rung names the cell, and Enter takes the cursor there
+    /// with the hint still open; before the last rung Enter does nothing.
+    #[test]
+    fn enter_on_a_mistakes_last_rung_goes_to_its_cell() {
+        let mut s = session();
+        type_keys(&mut s, "ll1jj??"); // a wrong 1 at r1c3, then away
+        s.handle(key(KeyCode::Enter), true);
+        assert_eq!(s.game.cursor(), 20);
+        type_keys(&mut s, "?");
+        assert_eq!(rung(&s), Some(3));
+        s.handle(key(KeyCode::Enter), true);
+        assert_eq!(s.game.cursor(), 2);
         assert_eq!(rung(&s), Some(3));
     }
 

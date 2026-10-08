@@ -32,6 +32,9 @@ const PANEL_HEIGHT: u16 = 5;
 /// lines of text, which every rung fits in at 30 columns.
 const DENSE_PANEL_HEIGHT: u16 = 5;
 
+/// The dense key bar wraps to this many rows.
+const DENSE_KEY_ROWS: u16 = 2;
+
 /// " sumi ", as the frame's title and the dense layout's first line.
 const TITLE: &str = " sumi ";
 
@@ -79,7 +82,7 @@ impl Density {
             // The status line, the board, the hint and the key bar.
             Density::Dense => (
                 Density::Dense.gutter() + Density::Dense.board_width(),
-                1 + BOARD_HEIGHT + DENSE_PANEL_HEIGHT + 1,
+                1 + BOARD_HEIGHT + DENSE_PANEL_HEIGHT + DENSE_KEY_ROWS,
             ),
         }
     }
@@ -98,6 +101,8 @@ pub struct View {
     pub checked: Vec<(Cell, u8)>,
     /// A one-word answer to the last key, shown in the status line.
     pub notice: Option<&'static str>,
+    /// The list of every key is open over the game.
+    pub help: bool,
 }
 
 /// A hint on its way up the ladder.
@@ -171,7 +176,15 @@ pub fn draw(frame: &mut Frame, game: &Game, view: &View, theme: &Theme) {
         .title_bottom(key_bar(&keys(game, view), theme).centered());
     let inner = block.inner(outer);
     frame.render_widget(block, outer);
-    frame.render_widget(board, inner);
+    if view.help {
+        let [list] = Layout::horizontal([Constraint::Fill(1)])
+            .horizontal_margin(2)
+            .vertical_margin(1)
+            .areas(inner);
+        frame.render_widget(key_list(theme), list);
+    } else {
+        frame.render_widget(board, inner);
+    }
     let block = panel_block(theme, "Hint");
     let inner = block.inner(side);
     frame.render_widget(block, side);
@@ -190,7 +203,7 @@ fn draw_dense(frame: &mut Frame, board: Board) {
         Constraint::Length(1),
         Constraint::Length(BOARD_HEIGHT),
         Constraint::Length(DENSE_PANEL_HEIGHT),
-        Constraint::Length(1),
+        Constraint::Length(DENSE_KEY_ROWS),
     ])
     .areas(whole);
     let width = usize::from(needed.0) - TITLE.len() - 2;
@@ -202,10 +215,17 @@ fn draw_dense(frame: &mut Frame, board: Board) {
         status(game, view, theme, width).right_aligned(),
         status_area,
     );
-    frame.render_widget(board, middle);
+    if view.help {
+        let [list] = Layout::horizontal([Constraint::Fill(1)])
+            .horizontal_margin(1)
+            .areas(middle);
+        frame.render_widget(key_list(theme), list);
+    } else {
+        frame.render_widget(board, middle);
+    }
     frame.render_widget(hint_text(view, theme), hint);
-    let line = key_bar_within(&keys(game, view), theme, usize::from(needed.0));
-    frame.render_widget(line.centered(), keys_area);
+    let lines = key_bar_lines(&keys(game, view), theme, usize::from(needed.0));
+    frame.render_widget(Paragraph::new(lines).centered(), keys_area);
 }
 
 /// The hint's words under its rung's number, or how to ask for one.
@@ -287,6 +307,7 @@ fn status(game: &Game, view: &View, theme: &Theme, width: usize) -> Line<'static
 
 /// The keys the key bar offers, as key text and what the key does. Key
 /// text comes from `input::key_label`, so it always matches the bindings.
+/// Each list fits one line of the full layout; `i` lists the rest.
 fn keys(game: &Game, view: &View) -> Vec<(&'static str, &'static str)> {
     if view.awaiting_filter {
         // The key after f is read by `input::filter_key`, not `input::action`.
@@ -297,55 +318,58 @@ fn keys(game: &Game, view: &View) -> Vec<(&'static str, &'static str)> {
             ("other", "cancel"),
         ];
     }
-    if let Some(open) = &view.hint {
+    let mut keys: Vec<(Action, &str)> = if view.help {
+        vec![(Action::Close, "close")]
+    } else if let Some(open) = &view.hint {
         let mut keys = Vec::new();
         if open.rung < open.hint.rungs() {
             keys.push((Action::Hint, "next rung"));
         } else if open.hint.step().is_some() {
             keys.push((Action::Confirm, "apply"));
+        } else if let Hint::Mistake(_) | Hint::StruckOut(_) = open.hint {
+            keys.push((Action::Confirm, "go to cell"));
         }
         keys.push((Action::Step(crate::game::Direction::Up), "look around"));
         keys.push((Action::Close, "close"));
-        keys.push((Action::Quit, "quit"));
-        return keys
-            .into_iter()
-            .map(|(action, words)| (key_label(action), words))
-            .collect();
-    }
-    let actions: &[(Action, &str)] = if game.is_won() {
-        &[(Action::Confirm, "new game"), (Action::Quit, "quit")]
+        keys
+    } else if game.is_won() {
+        vec![(Action::Confirm, "new game")]
     } else {
         match game.mode() {
-            Mode::Digit => &[
+            Mode::Digit if !view.checked.is_empty() => vec![
+                (Action::Digit(1), "place"),
+                (Action::NextMode, "mode"),
+                (Action::Hint, "hint"),
+                (Action::Undo, "undo"),
+                (Action::Close, "clear marks"),
+            ],
+            Mode::Digit => vec![
                 (Action::Digit(1), "place"),
                 (Action::Clear, "clear"),
                 (Action::NextMode, "mode"),
-                (Action::FillCandidates, "fill"),
                 (Action::Filter, "filter"),
                 (Action::Hint, "hint"),
                 (Action::Undo, "undo"),
-                (Action::Quit, "quit"),
             ],
-            Mode::Candidate => &[
+            Mode::Candidate => vec![
                 (Action::Digit(1), "toggle"),
-                (Action::FillCandidates, "fill"),
                 (Action::ClearLayer, "clear candidates"),
-                (Action::ClearAllNotes, "clear both"),
+                (Action::FillCandidates, "fill"),
                 (Action::NextMode, "mode"),
-                (Action::Quit, "quit"),
             ],
-            Mode::BoxMark => &[
+            Mode::BoxMark => vec![
                 (Action::Digit(1), "toggle"),
-                (Action::MarksToCandidates, "to candidates"),
-                (Action::ClearLayer, "clear box marks"),
+                (Action::MarksToCandidates, "fill, drop marks"),
                 (Action::NextMode, "mode"),
-                (Action::Quit, "quit"),
             ],
         }
     };
-    actions
-        .iter()
-        .map(|&(action, words)| (key_label(action), words))
+    if !view.help {
+        keys.push((Action::Help, "keys"));
+    }
+    keys.push((Action::Quit, "quit"));
+    keys.into_iter()
+        .map(|(action, words)| (key_label(action), words))
         .collect()
 }
 
@@ -380,15 +404,96 @@ pub fn key_bar(keys: &[(&str, &str)], theme: &Theme) -> Line<'static> {
     Line::from(spans)
 }
 
-/// As many of `keys` as fit in `width` columns. Keys are left out from the
-/// one before last backwards, so the last (quit, or cancel after `f`)
-/// always stays.
-pub fn key_bar_within(keys: &[(&str, &str)], theme: &Theme, width: usize) -> Line<'static> {
-    let mut keys = keys.to_vec();
-    while keys.len() > 1 && key_bar(&keys, theme).width() > width {
-        keys.remove(keys.len() - 2);
+/// `keys` in as many rows as it takes to keep each at most `width` columns
+/// wide, no key split from its words.
+pub fn key_bar_lines(keys: &[(&str, &str)], theme: &Theme, width: usize) -> Vec<Line<'static>> {
+    let mut rows: Vec<Vec<(&str, &str)>> = vec![Vec::new()];
+    for &entry in keys {
+        let row = rows.last_mut().unwrap();
+        row.push(entry);
+        if row.len() > 1 && key_bar(row, theme).width() > width {
+            row.pop();
+            rows.push(vec![entry]);
+        }
     }
-    key_bar(&keys, theme)
+    rows.iter().map(|row| key_bar(row, theme)).collect()
+}
+
+/// What the key list says an action does, in at most 28 characters so a
+/// line fits the dense board's width.
+fn help_words(action: Action) -> &'static str {
+    match action {
+        Action::Step(_) => "move (arrows too)",
+        Action::Jump(_) => "next box",
+        Action::Digit(_) => "place, or toggle a note",
+        Action::Clear => "clear the cell",
+        Action::NextMode => "mode: digit, candidate, mark",
+        Action::FillCandidates => "fill empty cells' candidates",
+        Action::RefillCandidates => "refill every empty cell",
+        Action::MarksToCandidates => "fill, drop box marks",
+        Action::ClearLayer => "clear this mode's notes",
+        Action::ClearAllNotes => "clear all notes",
+        Action::ToggleNotes => "hide or show notes",
+        Action::Filter => "filter: 1-9, b pairs, 0 off",
+        Action::Hint => "hint, then its next rung",
+        Action::Confirm => "apply hint, go to mistake",
+        Action::Check => "check for mistakes",
+        Action::Reveal => "reveal this cell",
+        Action::Close => "close, or clear marks",
+        Action::Undo => "undo",
+        Action::Redo => "redo",
+        Action::Help => "this list",
+        Action::Quit => "quit",
+    }
+}
+
+/// The heading the key list puts an action under. `Action::ALL` keeps each
+/// group together.
+fn help_group(action: Action) -> &'static str {
+    match action {
+        Action::Step(_) | Action::Jump(_) => "Move",
+        Action::Digit(_) | Action::Clear | Action::NextMode => "Write",
+        Action::FillCandidates
+        | Action::RefillCandidates
+        | Action::MarksToCandidates
+        | Action::ClearLayer
+        | Action::ClearAllNotes
+        | Action::ToggleNotes
+        | Action::Filter => "Notes",
+        Action::Hint | Action::Confirm | Action::Check | Action::Reveal | Action::Close => {
+            "Hints and checks"
+        }
+        Action::Undo | Action::Redo | Action::Help | Action::Quit => "Game",
+    }
+}
+
+/// Every action and its key, under headings, drawn where the board goes.
+fn key_list(theme: &Theme) -> Paragraph<'static> {
+    let mut lines = Vec::new();
+    let mut group = "";
+    for action in Action::ALL {
+        if help_group(action) != group {
+            group = help_group(action);
+            if !lines.is_empty() {
+                lines.push(Line::default());
+            }
+            lines.push(Line::from(Span::styled(
+                group,
+                Style::new().fg(theme.text).add_modifier(Modifier::BOLD),
+            )));
+        }
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{:>5}", key_label(action)),
+                Style::new().fg(theme.accent),
+            ),
+            Span::styled(
+                format!("  {}", help_words(action)),
+                Style::new().fg(theme.text),
+            ),
+        ]));
+    }
+    Paragraph::new(lines)
 }
 
 /// The message wraps, so a narrow window still shows as much of it as fits.
@@ -1554,12 +1659,12 @@ mod tests {
     fn the_window_picks_the_layout() {
         let at = |width, height| density(Rect::new(0, 0, width, height));
         assert_eq!(at(75, 44), Some(Density::Full));
-        assert_eq!(at(74, 44), Some(Density::Dense));
-        assert_eq!(at(38, 44), Some(Density::Dense));
-        assert_eq!(at(37, 44), None);
-        assert_eq!(at(38, 43), None);
+        assert_eq!(at(74, 45), Some(Density::Dense));
+        assert_eq!(at(38, 45), Some(Density::Dense));
+        assert_eq!(at(37, 45), None);
+        assert_eq!(at(38, 44), None);
         assert_eq!(at(200, 43), None);
-        assert_eq!(DENSE, (38, 44));
+        assert_eq!(DENSE, (38, 45));
     }
 
     #[test]
@@ -1633,21 +1738,6 @@ mod tests {
         assert_eq!(text, format!("    {digit}    "));
     }
 
-    /// The dense key bar is one line as wide as the board, and quit stays.
-    #[test]
-    fn the_dense_key_bar_fits_and_keeps_quit() {
-        let game = game();
-        let backend = render_dense(&game, &View::default());
-        let last: String = (0..DENSE.0)
-            .map(|x| backend.buffer()[(x, DENSE.1 - 1)].symbol())
-            .collect();
-        assert!(last.trim_end().ends_with("q quit"), "{last}");
-        assert!(last.contains("place"), "{last}");
-        assert!(!last.contains("undo"), "{last}");
-    }
-
-    /// The dense status line gives up its least useful parts, as the full
-    /// one does, before it would run into the title.
     #[test]
     fn the_dense_status_line_drops_parts_before_the_title() {
         let mut game = game();
@@ -1684,5 +1774,167 @@ mod tests {
         let first = 1 + BOARD_HEIGHT;
         let rung: String = (0..DENSE.0).map(|x| b[(x, first)].symbol()).collect();
         assert_eq!(rung.trim_end(), "Rung 2 of 5");
+    }
+
+    fn won_game() -> Game {
+        let solution = solution();
+        let mut game = game();
+        for cell in 0..81 {
+            if !game.is_clue(cell) {
+                go(&mut game, cell);
+                game.press(solution.get(cell).unwrap());
+            }
+        }
+        assert!(game.is_won());
+        game
+    }
+
+    /// Every state the key bar has keys of its own for.
+    fn contexts() -> Vec<(&'static str, Game, View)> {
+        let mode = |presses| {
+            let mut game = game();
+            for _ in 0..presses {
+                game.next_mode();
+            }
+            game
+        };
+        let wrong = || {
+            let mut game = game();
+            go(&mut game, 2);
+            game.press(1); // the answer is 4
+            game
+        };
+        let (plain, mistake) = (game(), wrong().hint());
+        let checked = wrong().wrong_digits();
+        vec![
+            ("digit", game(), View::default()),
+            ("candidate", mode(1), View::default()),
+            ("box mark", mode(2), View::default()),
+            (
+                "filter prompt",
+                game(),
+                View {
+                    awaiting_filter: true,
+                    ..View::default()
+                },
+            ),
+            ("hint", game(), open(&plain, 2)),
+            ("last rung", game(), open(&plain, 5)),
+            ("mistake", wrong(), open_hint(mistake, 3)),
+            (
+                "marks",
+                wrong(),
+                View {
+                    checked,
+                    ..View::default()
+                },
+            ),
+            (
+                "key list",
+                game(),
+                View {
+                    help: true,
+                    ..View::default()
+                },
+            ),
+            ("won", won_game(), View::default()),
+        ]
+    }
+
+    /// Every key bar but the filter's prompt, where any other key cancels,
+    /// ends with quit; and every one but those two and the key list itself
+    /// offers the key list, so every key is in reach from anywhere.
+    #[test]
+    fn every_key_bar_offers_the_key_list_and_quit() {
+        for (name, game, view) in contexts() {
+            let keys = keys(&game, &view);
+            let last = if name == "filter prompt" {
+                ("other", "cancel")
+            } else {
+                ("q", "quit")
+            };
+            assert_eq!(keys.last(), Some(&last), "{name}");
+            let list = keys.contains(&(key_label(Action::Help), "keys"));
+            let expected = !matches!(name, "filter prompt" | "key list");
+            assert_eq!(list, expected, "{name}: {keys:?}");
+        }
+    }
+
+    #[test]
+    fn each_key_bar_offers_what_its_state_needs() {
+        let all: Vec<_> = contexts()
+            .into_iter()
+            .map(|(name, game, view)| (name, keys(&game, &view)))
+            .collect();
+        let has = |name: &str, entry: (&str, &str)| {
+            let (_, keys) = all.iter().find(|(n, _)| *n == name).unwrap();
+            assert!(keys.contains(&entry), "{name}: {keys:?}");
+        };
+        has("box mark", ("t", "fill, drop marks"));
+        has("hint", ("?", "next rung"));
+        has("last rung", ("Enter", "apply"));
+        has("mistake", ("Enter", "go to cell"));
+        has("marks", ("Esc", "clear marks"));
+        has("key list", ("Esc", "close"));
+        has("won", ("Enter", "new game"));
+    }
+
+    /// The full layout's key bar is one line in the frame's bottom edge;
+    /// the dense one takes at most two rows, and shows every key.
+    #[test]
+    fn every_key_bar_fits_both_layouts() {
+        let theme = Theme::tokyo_night_amoled();
+        for (name, game, view) in contexts() {
+            let keys = keys(&game, &view);
+            let width = key_bar(&keys, &theme).width();
+            assert!(width <= usize::from(FRAME_WIDTH) - 4, "{name}: {width}");
+            let lines = key_bar_lines(&keys, &theme, usize::from(DENSE.0));
+            assert!(lines.len() <= 2, "{name}: {} rows", lines.len());
+            let backend = render_dense(&game, &view);
+            let rows: String = (DENSE.1 - 2..DENSE.1)
+                .flat_map(|y| (0..DENSE.0).map(move |x| (x, y)))
+                .map(|pos| backend.buffer()[pos].symbol().to_string())
+                .collect();
+            for (key, words) in &keys {
+                assert!(rows.contains(&format!("{key} {words}")), "{name}: {rows}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_key_list_in_both_layouts() {
+        let view = View {
+            help: true,
+            ..View::default()
+        };
+        insta::assert_snapshot!("key_list_full", render(&game(), &view));
+        insta::assert_snapshot!("key_list_dense", render_dense(&game(), &view));
+    }
+
+    /// The key list names every action with its key, in both layouts.
+    #[test]
+    fn the_key_list_shows_every_action() {
+        let game = game();
+        let view = View {
+            help: true,
+            ..View::default()
+        };
+        for backend in [render(&game, &view), render_dense(&game, &view)] {
+            let buffer = backend.buffer();
+            let text: String = (0..buffer.area.height)
+                .map(|y| {
+                    (0..buffer.area.width)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>()
+                        + "\n"
+                })
+                .collect();
+            for action in Action::ALL {
+                let words = help_words(action);
+                assert!(!words.is_empty(), "{action:?}");
+                let line = format!("{}  {words}", key_label(action));
+                assert!(text.contains(&line), "{line:?} in\n{text}");
+            }
+        }
     }
 }

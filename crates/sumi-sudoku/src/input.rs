@@ -32,7 +32,65 @@ pub enum Action {
     /// Writes the cursor cell's digit from the solution.
     Reveal,
     Confirm,
+    /// Opens or closes the list of every key.
+    Help,
     Quit,
+}
+
+impl Action {
+    /// One of each action, in the order the help screen lists them. A test
+    /// holds this to `index`, whose match the compiler makes complete.
+    pub const ALL: [Action; 21] = [
+        Action::Step(Direction::Up),
+        Action::Jump(Direction::Up),
+        Action::Digit(1),
+        Action::Clear,
+        Action::NextMode,
+        Action::FillCandidates,
+        Action::RefillCandidates,
+        Action::MarksToCandidates,
+        Action::ClearLayer,
+        Action::ClearAllNotes,
+        Action::ToggleNotes,
+        Action::Filter,
+        Action::Hint,
+        Action::Confirm,
+        Action::Check,
+        Action::Reveal,
+        Action::Close,
+        Action::Undo,
+        Action::Redo,
+        Action::Help,
+        Action::Quit,
+    ];
+
+    /// The action's place in `ALL`.
+    #[cfg(test)]
+    fn index(self) -> usize {
+        match self {
+            Action::Step(_) => 0,
+            Action::Jump(_) => 1,
+            Action::Digit(_) => 2,
+            Action::Clear => 3,
+            Action::NextMode => 4,
+            Action::FillCandidates => 5,
+            Action::RefillCandidates => 6,
+            Action::MarksToCandidates => 7,
+            Action::ClearLayer => 8,
+            Action::ClearAllNotes => 9,
+            Action::ToggleNotes => 10,
+            Action::Filter => 11,
+            Action::Hint => 12,
+            Action::Confirm => 13,
+            Action::Check => 14,
+            Action::Reveal => 15,
+            Action::Close => 16,
+            Action::Undo => 17,
+            Action::Redo => 18,
+            Action::Help => 19,
+            Action::Quit => 20,
+        }
+    }
 }
 
 /// What the key after `f` asks the candidate filter for.
@@ -79,6 +137,7 @@ pub fn action(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('r') => Action::Reveal,
         KeyCode::Esc => Action::Close,
         KeyCode::Enter => Action::Confirm,
+        KeyCode::Char('i') => Action::Help,
         KeyCode::Char('q') => Action::Quit,
         _ => return None,
     };
@@ -124,6 +183,7 @@ pub fn key_label(action: Action) -> &'static str {
         Action::Check => "c",
         Action::Reveal => "r",
         Action::Confirm => "Enter",
+        Action::Help => "i",
         Action::Quit => "q",
     }
 }
@@ -181,31 +241,20 @@ mod tests {
         }
     }
 
+    /// `ALL` has every action once, in `index` order. A new action fails to
+    /// compile until `index` has it, and then fails here until `ALL` does.
+    #[test]
+    fn all_lists_every_action_once() {
+        for (i, action) in Action::ALL.iter().enumerate() {
+            assert_eq!(action.index(), i, "{action:?}");
+        }
+        let last = Action::ALL.iter().map(|a| a.index()).max().unwrap();
+        assert_eq!(Action::ALL.len(), last + 1);
+    }
+
     #[test]
     fn every_key_label_names_keys_that_do_that_action() {
-        let all = [
-            Action::Step(Direction::Up),
-            Action::Jump(Direction::Up),
-            Action::Digit(1),
-            Action::Clear,
-            Action::NextMode,
-            Action::FillCandidates,
-            Action::RefillCandidates,
-            Action::MarksToCandidates,
-            Action::ClearLayer,
-            Action::ClearAllNotes,
-            Action::ToggleNotes,
-            Action::Filter,
-            Action::Undo,
-            Action::Redo,
-            Action::Hint,
-            Action::Close,
-            Action::Check,
-            Action::Reveal,
-            Action::Confirm,
-            Action::Quit,
-        ];
-        for wanted in all {
+        for wanted in Action::ALL {
             for k in keys_of(key_label(wanted)) {
                 let got = action(k).unwrap_or_else(|| panic!("{k:?} does nothing"));
                 assert_eq!(
