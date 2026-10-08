@@ -52,6 +52,9 @@ pub struct OpenHint {
     pub hint: Hint,
     /// The rung showing, from 1.
     pub rung: usize,
+    /// The game's revision the hint was worked out at; at any other the
+    /// board has changed and the hint no longer holds.
+    pub revision: u64,
 }
 
 /// Which empty cells the candidate filter lights up.
@@ -797,7 +800,11 @@ mod tests {
 
     fn open_hint(hint: Hint, rung: usize) -> View {
         View {
-            hint: Some(OpenHint { hint, rung }),
+            hint: Some(OpenHint {
+                hint,
+                rung,
+                revision: 0,
+            }),
             ..View::default()
         }
     }

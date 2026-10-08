@@ -25,6 +25,8 @@ pub struct Game {
     hint_start: usize,
     undo: Vec<Step>,
     redo: Vec<Step>,
+    /// Bumped by every change to the board or the notes.
+    revision: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,6 +107,7 @@ impl Game {
             hint_start: 1,
             undo: Vec::new(),
             redo: Vec::new(),
+            revision: 0,
         }
     }
 
@@ -357,6 +360,13 @@ impl Game {
         }
     }
 
+    /// Changes when the board or the notes do, by any action, undo and redo
+    /// included; moving and switching mode leave it. Whatever was worked out
+    /// from the game at one revision is stale at any other.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
     /// Takes back the last step and puts the cursor where it was then.
     pub fn undo(&mut self) {
         if let Some(step) = self.undo.pop() {
@@ -365,6 +375,7 @@ impl Game {
             }
             self.cursor = step.cursor;
             self.redo.push(step);
+            self.revision += 1;
         }
     }
 
@@ -376,6 +387,7 @@ impl Game {
             }
             self.cursor = step.cursor;
             self.undo.push(step);
+            self.revision += 1;
         }
     }
 
@@ -472,6 +484,7 @@ impl Game {
                 cells,
             });
             self.redo.clear();
+            self.revision += 1;
         }
     }
 
@@ -679,6 +692,32 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn the_revision_counts_changes_to_the_board_and_notes_only() {
+        let mut g = at(R1C3);
+        let start = g.revision();
+        g.step(Direction::Right);
+        g.next_mode();
+        g.step(Direction::Left);
+        assert_eq!(
+            g.revision(),
+            start,
+            "moving and changing mode change nothing"
+        );
+        g.press(1); // a candidate in r1c3
+        let one = g.revision();
+        assert_ne!(one, start);
+        g.undo();
+        assert_ne!(g.revision(), one, "undo is a change");
+        let undone = g.revision();
+        g.redo();
+        assert_ne!(g.revision(), undone, "and so is redo");
+        let redone = g.revision();
+        g.cursor = 0;
+        g.press(5); // r1c1 is a clue: nothing changes
+        assert_eq!(g.revision(), redone);
     }
 
     #[test]

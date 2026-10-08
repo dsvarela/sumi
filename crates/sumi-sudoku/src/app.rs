@@ -113,6 +113,18 @@ impl Session {
             };
         }
         let flow = self.dispatch(key);
+        // A hint is about the board it was worked out from: any change to
+        // the board or the notes closes it, so Enter never applies a step to
+        // a board it wasn't found on.
+        let revision = self.game.revision();
+        if self
+            .view
+            .hint
+            .as_ref()
+            .is_some_and(|open| open.revision != revision)
+        {
+            self.view.hint = None;
+        }
         // A check's mark belongs to the digit it found, not to the cell.
         let board = self.game.board();
         self.view
@@ -137,23 +149,6 @@ impl Session {
         let Some(action) = action(key) else {
             return Flow::Continue;
         };
-        // Looking around, switching mode or filtering leave a hint as it is;
-        // anything that changes the board or the notes closes it.
-        if !matches!(
-            action,
-            Action::Step(_)
-                | Action::Jump(_)
-                | Action::NextMode
-                | Action::ToggleNotes
-                | Action::Filter
-                | Action::Hint
-                | Action::Check
-                | Action::Close
-                | Action::Confirm
-                | Action::Quit
-        ) {
-            self.view.hint = None;
-        }
         let game = &mut self.game;
         match action {
             Action::Quit => return Flow::Quit,
@@ -209,7 +204,11 @@ impl Session {
             None => {
                 let hint = self.game.hint();
                 let rung = self.game.hint_start().clamp(1, hint.rungs());
-                self.view.hint = Some(OpenHint { hint, rung });
+                self.view.hint = Some(OpenHint {
+                    hint,
+                    rung,
+                    revision: self.game.revision(),
+                });
             }
         }
     }
@@ -485,6 +484,22 @@ mod tests {
                 ..View::default()
             }
         );
+    }
+
+    /// What closes a hint is the game changing, however it changed, not
+    /// which key was pressed.
+    #[test]
+    fn a_hint_closes_when_the_game_changes_and_only_then() {
+        let mut s = session();
+        type_keys(&mut s, "?");
+        s.game.press(5); // r1c1 is a clue: nothing changes
+        type_keys(&mut s, "l");
+        assert_eq!(rung(&s), Some(1));
+        s.game.press(4); // r1c2 is a clue too; move to r1c3, which is empty
+        type_keys(&mut s, "l");
+        s.game.press(4);
+        type_keys(&mut s, "l");
+        assert_eq!(rung(&s), None, "a change made any way closes it");
     }
 
     #[test]
