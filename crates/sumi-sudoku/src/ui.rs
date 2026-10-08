@@ -124,6 +124,14 @@ pub struct View {
     pub animations: Vec<Animation>,
 }
 
+impl View {
+    /// The open hint, if it shows: pausing hides it with the board, so it
+    /// is neither drawn, counted in the status line nor closed by a click.
+    pub fn shown_hint(&self) -> Option<&OpenHint> {
+        self.hint.as_ref().filter(|_| !self.paused)
+    }
+}
+
 /// A hint on its way up the ladder.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenHint {
@@ -298,7 +306,7 @@ pub enum Target {
 pub fn hit(area: Rect, view: &View, x: u16, y: u16) -> Option<Target> {
     let areas = Areas::of(area)?;
     let at = ratatui::layout::Position::new(x, y);
-    if view.hint.is_some() && areas.close_hint().contains(at) {
+    if view.shown_hint().is_some() && areas.close_hint().contains(at) {
         return Some(Target::CloseHint);
     }
     if view.help || view.paused {
@@ -328,7 +336,7 @@ pub fn draw(frame: &mut Frame, game: &Game, view: &View, theme: &Theme) {
         too_small(frame, theme, Density::Dense.needed());
         return;
     };
-    let rung = view.hint.as_ref().map(|open| open.hint.rung(open.rung));
+    let rung = view.shown_hint().map(|open| open.hint.rung(open.rung));
     let board = Board {
         game,
         view,
@@ -382,7 +390,7 @@ pub fn draw(frame: &mut Frame, game: &Game, view: &View, theme: &Theme) {
     match areas.density {
         Density::Full => {
             let mut block = panel_block(theme, if game.is_won() { "Solved" } else { "Hint" });
-            if view.hint.is_some() {
+            if view.shown_hint().is_some() {
                 block = block
                     .title_top(Line::from(vec![" ".into(), close, " ".into()]).right_aligned());
             }
@@ -392,7 +400,7 @@ pub fn draw(frame: &mut Frame, game: &Game, view: &View, theme: &Theme) {
         }
         Density::Dense => {
             frame.render_widget(text, areas.hint);
-            if view.hint.is_some() {
+            if view.shown_hint().is_some() {
                 frame.render_widget(close, areas.close_hint());
             }
         }
@@ -542,7 +550,7 @@ fn status(game: &Game, view: &View, theme: &Theme, width: usize) -> Line<'static
     // not fit beside the title is left off from the end, so the mode, which
     // is always shown, is never lost.
     let mut optional: Vec<(u8, String)> = Vec::new();
-    if let Some(open) = &view.hint {
+    if let Some(open) = view.shown_hint() {
         optional.push((5, format!("hint {}/{}", open.rung, open.hint.rungs())));
     }
     if let Some(notice) = view.notice {
@@ -623,7 +631,7 @@ fn keys(game: &Game, view: &View) -> Vec<(&'static str, &'static str)> {
         keys.push((Action::Close, "close"));
         keys
     } else if game.is_won() {
-        vec![(Action::Confirm, "new game")]
+        vec![(Action::Confirm, "new game"), (Action::Close, "menu")]
     } else {
         match game.mode() {
             Mode::Digit if !view.checked.is_empty() => vec![
@@ -2521,6 +2529,7 @@ mod tests {
         has("marks", ("Esc", "clear marks"));
         has("key list", ("Esc", "close"));
         has("won", ("Enter", "new game"));
+        has("won", ("Esc", "menu"));
     }
 
     /// The full layout's key bar is one line in the frame's bottom edge;
@@ -2646,7 +2655,9 @@ mod tests {
     #[test]
     fn pausing_hides_the_board() {
         let game = game();
-        // A hint open when the game was paused doesn't show either.
+        // A hint open when the game was paused doesn't show either: not its
+        // words, its rung in the status line, nor its close button, which
+        // takes no click.
         let view = View {
             paused: true,
             ..open(&game, 2)
@@ -2665,6 +2676,8 @@ mod tests {
             assert!(!text.contains('┼'), "{layout}: the board's lines show");
             assert!(!text.contains("53"), "{layout}");
             assert!(!text.contains("Rung"), "{layout}");
+            assert!(!text.contains("hint 2/5"), "{layout}");
+            assert!(!text.contains('×'), "{layout}");
         }
     }
 
@@ -2991,6 +3004,19 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// While paused, the hint's close button takes no click.
+    #[test]
+    fn a_paused_hint_takes_no_click() {
+        let game = game();
+        let shown = open(&game, 2);
+        let x = find(&render(&game, &shown), "×")[0];
+        let paused = View {
+            paused: true,
+            ..shown
+        };
+        assert_eq!(hit(full_area(), &paused, x.0, x.1), None);
     }
 
     /// The hint's close button is where × is drawn, and only with a hint open.

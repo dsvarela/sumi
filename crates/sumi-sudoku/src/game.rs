@@ -164,6 +164,10 @@ impl Game {
         }
     }
 
+    pub fn clock_is_running(&self) -> bool {
+        self.running_since.is_some()
+    }
+
     /// Time played up to `now`.
     pub fn elapsed(&self, now: Instant) -> Duration {
         let running = self

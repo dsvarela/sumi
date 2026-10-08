@@ -123,13 +123,18 @@ fn play(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                 (Screen::Game, None) => unreachable!("the game screen shows a game"),
             }
         })?;
+        if app.screen == Screen::Game
+            && let Some(session) = &mut app.session
+        {
+            session.set_shown(shown);
+        }
         // A running timer is redrawn as its seconds change; otherwise the
         // loop sleeps until a key arrives.
         let ticking = app.screen == Screen::Game
             && app
                 .session
                 .as_ref()
-                .is_some_and(|s| s.view.time.is_some() && s.clock_running());
+                .is_some_and(|s| s.view.time.is_some() && s.game.clock_is_running());
         let animating = app.screen == Screen::Game
             && app
                 .session
@@ -290,7 +295,9 @@ impl App {
     }
 
     fn resume(&mut self) {
-        if let Some(session) = &mut self.session {
+        if let Some(session) = &mut self.session
+            && session.clock_running()
+        {
             session.game.start_clock((self.clock)());
         }
         self.screen = Screen::Game;
@@ -393,9 +400,7 @@ impl App {
         match &mut self.screen {
             Screen::Game => {
                 let session = self.session.as_mut().expect("the game screen shows a game");
-                if let Some(target) = ui::hit(self.area, &session.view, x, y) {
-                    session.click(target);
-                }
+                session.click(ui::hit(self.area, &session.view, x, y));
                 Flow::Continue
             }
             Screen::Menu(menu) => {
@@ -501,9 +506,20 @@ impl Session {
         self.timer.then(|| self.game.elapsed((self.clock)()))
     }
 
-    /// Whether the time played is going up: not paused, and not won.
+    /// Whether the time played should be going up: not paused, and not won.
     fn clock_running(&self) -> bool {
         !self.view.paused && !self.game.is_won()
+    }
+
+    /// Stops the clock while the window is too small to show the board,
+    /// and starts it again once the board shows, unless paused or won.
+    fn set_shown(&mut self, shown: bool) {
+        let now = (self.clock)();
+        if !shown {
+            self.game.stop_clock(now);
+        } else if self.clock_running() {
+            self.game.start_clock(now);
+        }
     }
 
     /// `board_shown` is false while the window is too small to draw the
@@ -528,12 +544,17 @@ impl Session {
         flow
     }
 
-    /// A click on `target`. It acts as the keys would: a cell moves the
-    /// cursor there, a note's spot toggles that note in the note modes, and
-    /// a pad digit is pressed, or picks the filter after `f`.
-    fn click(&mut self, target: Target) {
+    /// A click on `target`, or on nothing. It acts as the keys would: a
+    /// cell moves the cursor there, a note's spot toggles that note in the
+    /// note modes, and a pad digit is pressed, or picks the filter after
+    /// `f`. Any click, even on nothing, ends the prompt after `f` and clears
+    /// the notice, as any key does.
+    fn click(&mut self, target: Option<Target>) {
         self.view.notice = None;
         let filtering = std::mem::take(&mut self.view.awaiting_filter);
+        let Some(target) = target else {
+            return;
+        };
         match target {
             Target::CloseHint => self.view.hint = None,
             _ if self.game.is_won() => {}
@@ -634,6 +655,7 @@ impl Session {
             Action::Quit => return Flow::Quit,
             Action::Help => self.view.help = true,
             Action::Confirm if game.is_won() => return Flow::NewGame,
+            Action::Close if game.is_won() => return Flow::Menu,
             // Once solved, the board and the view stay as they are until the
             // next game: Enter and quitting are the only keys that act.
             _ if game.is_won() => {}
@@ -873,6 +895,24 @@ mod tests {
         complete(&mut s, House::Row(0));
         win(&mut s);
         assert_eq!(animating(&s), []);
+    }
+
+    /// The clock stops while the window is too small to show the board, and
+    /// starts again when it shows, unless the game is paused.
+    #[test]
+    fn the_clock_stops_while_the_board_cant_be_seen() {
+        let mut s = session();
+        advance(2);
+        s.set_shown(false);
+        advance(30);
+        s.set_shown(true);
+        advance(1);
+        assert_eq!(s.game.elapsed(now()), secs(3));
+        type_keys(&mut s, "p");
+        s.set_shown(false);
+        s.set_shown(true);
+        advance(10);
+        assert_eq!(s.game.elapsed(now()), secs(3), "paused stays paused");
     }
 
     /// Each hint opened counts once, however many rungs it is climbed.
@@ -1372,6 +1412,22 @@ mod tests {
 
     /// From the pause menu, the main menu offers Continue, which goes back
     /// to the same game.
+    /// After a win Esc opens the pause menu, so another level or the
+    /// settings are in reach; Resume goes back to the won board with the
+    /// clock still stopped.
+    #[test]
+    fn esc_after_a_win_opens_the_menu_and_resume_keeps_the_clock_stopped() {
+        let mut app = app_with(fixtures::game());
+        advance(4);
+        win(game_of(&mut app));
+        press_keys(&mut app, &[KeyCode::Esc]);
+        assert_eq!(menu_kind(&app), Some(Kind::Pause));
+        press_keys(&mut app, &[KeyCode::Enter]);
+        assert_eq!(app.screen, Screen::Game);
+        advance(50);
+        assert_eq!(game_of(&mut app).game.elapsed(now()), secs(4));
+    }
+
     #[test]
     fn the_main_menu_continues_the_game_in_progress() {
         let mut app = app_with(fixtures::game());
@@ -1571,6 +1627,19 @@ mod tests {
         let (x, y) = middle_of(areas.pad_button(4));
         app.handle(click(x, y), true);
         assert_eq!(rung(game_of(&mut app)), None);
+    }
+
+    /// A click on nothing, a line between cells here, ends the prompt after
+    /// `f` as any key would.
+    #[test]
+    fn a_click_on_nothing_ends_the_filter_prompt() {
+        let (mut app, areas) = clickable();
+        type_keys(game_of(&mut app), "f");
+        let cell = areas.cell(40);
+        app.handle(click(cell.x - 1, cell.y + 1), true);
+        assert!(!game_of(&mut app).view.awaiting_filter);
+        type_keys(game_of(&mut app), "3");
+        assert_eq!(game_of(&mut app).view.filter, None);
     }
 
     #[test]
