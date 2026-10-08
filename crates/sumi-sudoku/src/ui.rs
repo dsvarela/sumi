@@ -196,6 +196,7 @@ impl Widget for Board<'_> {
             Constraint::Length(BOARD_HEIGHT),
         );
         self.render_lines(area, buf);
+        self.render_numbers(area, buf);
         let conflicts = self.game.board().conflicts();
         for (cell, &conflict) in conflicts.iter().enumerate() {
             self.render_cell(cell, conflict, area, buf);
@@ -228,6 +229,40 @@ impl Board<'_> {
                     c.set_symbol(symbol).set_fg(colour);
                 }
             }
+        }
+    }
+
+    /// Writes each column's number into the board's top line and each row's
+    /// into its left line, in the middle of the cell they belong to. Those
+    /// lines are drawn anyway, so the numbers cost no room. The cursor's row
+    /// and column stand out.
+    fn render_numbers(&self, area: Rect, buf: &mut Buffer) {
+        let cursor = self.game.cursor();
+        let style = |here: bool| {
+            if here {
+                Style::new()
+                    .fg(self.theme.accent)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::new().fg(self.theme.dimmed)
+            }
+        };
+        for i in 0..9 {
+            let number = (i + 1).to_string();
+            let offset = 1 + i as u16 * (CELL_WIDTH + 1);
+            buf.set_string(
+                area.x + offset + CELL_WIDTH / 2,
+                area.y,
+                &number,
+                style(col(cursor) == i),
+            );
+            let offset = 1 + i as u16 * (CELL_HEIGHT + 1);
+            buf.set_string(
+                area.x,
+                area.y + offset + CELL_HEIGHT / 2,
+                &number,
+                style(row(cursor) == i),
+            );
         }
     }
 
@@ -428,6 +463,28 @@ mod tests {
         let backend = render(&game, &View::default());
         assert_eq!(backend.buffer()[middle(2)].fg, theme.digit);
         assert_eq!(backend.buffer()[middle(0)].fg, theme.clue);
+    }
+
+    /// The board's top line carries the column numbers and its left line the
+    /// row numbers, so a hint can say r2c3 and be found. The cursor's own
+    /// row and column are in the accent colour.
+    #[test]
+    fn the_board_edges_number_rows_and_columns() {
+        let theme = Theme::tokyo_night_amoled();
+        let mut game = game();
+        go(&mut game, 2 * 9 + 5); // r3c6
+        let backend = render(&game, &View::default());
+        let b = backend.buffer();
+        for i in 0..9u16 {
+            let (top, left) = (&b[(5 + 8 * i, 1)], &b[(1, 3 + 4 * i)]);
+            let expected = char::from(b'1' + i as u8).to_string();
+            assert_eq!((top.symbol(), left.symbol()), (&*expected, &*expected));
+            assert_eq!(top.fg, if i == 5 { theme.accent } else { theme.dimmed });
+            assert_eq!(left.fg, if i == 2 { theme.accent } else { theme.dimmed });
+        }
+        // The line between the numbers is still there.
+        assert_eq!(b[(6, 1)].symbol(), "━");
+        assert_eq!(b[(1, 5)].symbol(), "┠");
     }
 
     #[test]
