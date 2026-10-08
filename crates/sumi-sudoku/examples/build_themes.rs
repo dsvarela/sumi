@@ -22,7 +22,9 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::{env, fs};
 
-use colour::{Cvd, Rgb, SURFACES, TEXT, contrast, luminance, too_close};
+use colour::{
+    Cvd, GRAPHIC_FLOOR, MARGIN, Rgb, SURFACES, TEXT, TEXT_FLOOR, contrast, luminance, too_close,
+};
 
 const LIFT: f64 = 8.0;
 
@@ -236,7 +238,13 @@ fn build(s: &Source) -> BTreeMap<&'static str, Rgb> {
     for role in TEXT {
         c.insert(role, lift(c[role], bg, LIFT));
     }
-    for (role, floor) in [("line", 3.05), ("frame", 3.6), ("box_line", 4.5)] {
+    // The frame sits between the two kinds of line, and box lines at 4.5:1
+    // lead cell lines by well over BOX_LINE_LEAD, which the tests check.
+    for (role, floor) in [
+        ("line", GRAPHIC_FLOOR + MARGIN),
+        ("frame", 3.6),
+        ("box_line", 4.5),
+    ] {
         let mut t = 0.0;
         while contrast(mix(bg, text, t), bg) < floor {
             t += 0.005;
@@ -249,8 +257,11 @@ fn build(s: &Source) -> BTreeMap<&'static str, Rgb> {
         while t < 1.0 {
             t += 0.005;
             let colour = mix(bg, source, t);
-            let unreadable = TEXT.iter().any(|x| contrast(c[x], colour) < 4.55);
-            let cursor_marks = role == "cursor" && contrast(c["accent"], colour) < 3.05;
+            let unreadable = TEXT
+                .iter()
+                .any(|x| contrast(c[x], colour) < TEXT_FLOOR + MARGIN);
+            let cursor_marks =
+                role == "cursor" && contrast(c["accent"], colour) < GRAPHIC_FLOOR + MARGIN;
             if unreadable || cursor_marks {
                 break;
             }

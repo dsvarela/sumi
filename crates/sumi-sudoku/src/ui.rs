@@ -17,7 +17,7 @@ use crate::animation::{Animation, Light};
 use crate::config::Config;
 use crate::config::Highlights;
 use crate::game::{CandidatesFromMarks, Game, Mode};
-use crate::input::{Action, key_label, left_right_label, up_down_label};
+use crate::input::{Action, FilterKey, filter_label, key_label, left_right_label, up_down_label};
 use crate::menu::{Item, Menu};
 use crate::settings::{GROUPS, Page, Setting};
 use crate::theme::Theme;
@@ -618,9 +618,9 @@ fn keys(game: &Game, view: &View) -> Vec<(&'static str, &'static str)> {
     if view.awaiting_filter {
         // The key after f is read by `input::filter_key`, not `input::action`.
         return vec![
-            ("1-9", "digit"),
-            ("b", "pairs"),
-            ("0", "off"),
+            (filter_label(FilterKey::Digit(1)), "digit"),
+            (filter_label(FilterKey::TwoCandidates), "pairs"),
+            (filter_label(FilterKey::Off), "off"),
             ("other", "cancel"),
         ];
     }
@@ -2542,6 +2542,14 @@ mod tests {
                 },
             ),
             ("won", won_game(), View::default()),
+            (
+                "paused",
+                game(),
+                View {
+                    paused: true,
+                    ..View::default()
+                },
+            ),
         ]
     }
 
@@ -2582,6 +2590,7 @@ mod tests {
         has("key list", ("Esc", "close"));
         has("won", ("Enter", "new game"));
         has("won", ("Esc", "menu"));
+        has("paused", ("p", "carry on"));
     }
 
     /// The full layout's key bar is one line in the frame's bottom edge;

@@ -1,8 +1,27 @@
 //! Colour arithmetic shared by the theme tests and `examples/build_themes.rs`:
-//! WCAG contrast, OKLab distance, and simulated colour blindness. Both use
-//! these floors, so the themes are built to what the tests check.
+//! WCAG contrast, OKLab distance, simulated colour blindness, and the
+//! floors. The generator builds to these floors and the tests check them,
+//! so the two can't disagree about what a theme must meet.
 
 pub type Rgb = [u8; 3];
+
+/// WCAG 2.2: text needs 4.5:1 on what it sits on (1.4.3); lines, the frame
+/// and the cursor's marks need 3:1 (1.4.11).
+pub const TEXT_FLOOR: f64 = 4.5;
+pub const GRAPHIC_FLOOR: f64 = 3.0;
+
+/// How far above a floor the generator aims, so that rounding a colour to
+/// whole RGB values can't take it under.
+#[allow(dead_code, reason = "only the generator aims above a floor")]
+pub const MARGIN: f64 = 0.05;
+
+/// Box lines stand out from the lines between cells by at least this much
+/// contrast against the background.
+pub const BOX_LINE_LEAD: f64 = 0.5;
+
+/// Highlights stay under this against the background: any more and the
+/// text drawn on them could not keep its own floor.
+pub const HIGHLIGHT_CEILING: f64 = 3.0;
 
 /// Roles drawn as text, and the surfaces text sits on.
 pub const TEXT: [&str; 11] = [
@@ -29,11 +48,13 @@ pub const SURFACES: [&str; 7] = [
 ];
 
 /// Pairs that must look different, and the least OKLab distance between
-/// them. The cursor has its own shape, so it is held apart only from the
-/// background; peer shading is meant to be faint. The text pairs also
+/// them. Peer shading is meant to be faint. The text pairs also
 /// differ by weight or a mark, so colour is a second cue for them.
 pub const APART: &[(&str, &str, f64)] = &[
     ("background", "cursor", 0.04),
+    // The cursor has its own marks, but a cursor that looked like the
+    // same-digit highlight would still mislead.
+    ("cursor", "same_digit", 0.02),
     ("background", "hint_cell", 0.04),
     ("background", "same_digit", 0.03),
     ("background", "filter", 0.03),

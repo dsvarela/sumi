@@ -14,7 +14,7 @@ use ratatui::crossterm::event::{
 use ratatui::crossterm::execute;
 use ratatui::layout::Rect;
 use sumi_core::bank;
-use sumi_core::generate::{LevelGenerator, generate_solvable};
+use sumi_core::generate::LevelGenerator;
 use sumi_core::grid::House;
 use sumi_core::hint::Hint;
 use sumi_core::technique::Level;
@@ -214,8 +214,9 @@ struct App {
     screen: Screen,
     session: Option<Session>,
     rng: Xoshiro256PlusPlus,
-    /// The level new games are of; `None` is any level sumi can finish.
-    level: Option<Level>,
+    /// The level Enter starts after a win: the last one asked for, Medium
+    /// until one is.
+    level: Level,
     config: Config,
     setup: Setup,
     /// The theme drawn with: the config's, unless the terminal overrides it.
@@ -250,7 +251,7 @@ impl App {
             screen: Screen::Menu(Menu::new(Kind::Main)),
             session: None,
             rng,
-            level,
+            level: level.unwrap_or(Level::Medium),
             config,
             setup,
             theme,
@@ -259,7 +260,7 @@ impl App {
             warnings: Vec::new(),
             save_error: None,
         };
-        if level.is_some() {
+        if let Some(level) = level {
             app.start(level);
         }
         app
@@ -324,7 +325,7 @@ impl App {
 
     /// Starts a game of `level`. Hidden candidates carry over from the last
     /// game; the rest of its view doesn't.
-    fn start(&mut self, level: Option<Level>) {
+    fn start(&mut self, level: Level) {
         self.level = level;
         let notes_hidden = self.session.as_ref().is_some_and(|s| s.view.notes_hidden);
         let game = new_game(&mut self.rng, level);
@@ -416,7 +417,7 @@ impl App {
                             let from_pause = kind == Kind::Pause;
                             self.screen = Screen::Menu(Menu::new(Kind::Levels { from_pause }));
                         }
-                        Item::Level(level) => self.start(Some(level)),
+                        Item::Level(level) => self.start(level),
                         Item::MainMenu => self.screen = Screen::Menu(Menu::new(Kind::Main)),
                         Item::Settings => {
                             self.screen = Screen::Settings(Page::new(kind == Kind::Pause));
@@ -781,20 +782,15 @@ impl Session {
     }
 }
 
-/// A game of `level`, or of any level sumi can finish, with its rating.
-/// Easy and Medium puzzles are generated on the spot; Hard and Expert ones
-/// come from the bank, which says why.
-fn new_game(rng: &mut Xoshiro256PlusPlus, level: Option<Level>) -> Game {
-    let (puzzle, level) = match level {
-        None => {
-            let (puzzle, grade) = generate_solvable(rng);
-            (puzzle, grade.level)
+/// A game of `level`, with its rating. Easy and Medium puzzles are
+/// generated on the spot; Hard and Expert ones come from the bank, which
+/// says why.
+fn new_game(rng: &mut Xoshiro256PlusPlus, level: Level) -> Game {
+    let puzzle = match level {
+        Level::Hard | Level::Expert => {
+            bank::pick(rng, level).expect("the bank holds Hard and Expert puzzles")
         }
-        Some(level @ (Level::Hard | Level::Expert)) => {
-            let puzzle = bank::pick(rng, level).expect("the bank holds Hard and Expert puzzles");
-            (puzzle, level)
-        }
-        Some(level) => (LevelGenerator::new(level).next(rng).0, level),
+        _ => LevelGenerator::new(level).next(rng).0,
     };
     Game::new(puzzle).rated(level)
 }
@@ -1329,15 +1325,13 @@ mod tests {
     }
 
     #[test]
-    fn after_a_win_only_enter_and_quit_act_and_hiding_notes_carries_over() {
+    fn after_a_win_keys_meant_for_the_board_do_nothing() {
         let mut s = session();
-        type_keys(&mut s, "v");
         win(&mut s);
-
-        type_keys(&mut s, "uhf3");
+        let before = (s.game.revision(), s.game.cursor(), s.view.clone());
+        type_keys(&mut s, "uhf3vn?");
         assert!(s.game.is_won());
-        assert_eq!(s.view.filter, None);
-
+        assert_eq!((s.game.revision(), s.game.cursor(), s.view.clone()), before);
         assert_eq!(s.handle(key(KeyCode::Enter), true), Flow::NewGame);
     }
 
@@ -1431,6 +1425,15 @@ mod tests {
         );
         assert_eq!(app.screen, Screen::Game);
         assert_eq!(game_of(&mut app).game.level(), Some(Level::Easy));
+        let mut app = App::new(
+            Xoshiro256PlusPlus::seed_from_u64(3),
+            None,
+            Config::default(),
+            setup(),
+            now,
+        );
+        press_keys(&mut app, &[KeyCode::Enter, KeyCode::Enter]);
+        assert_eq!(game_of(&mut app).game.level(), Some(Level::Medium));
     }
 
     /// Esc with nothing open opens the pause menu and stops the clock; Esc
@@ -1760,10 +1763,27 @@ mod tests {
 
     #[test]
     fn q_quits_from_any_menu_and_keys_do_nothing_in_a_window_too_small() {
-        let mut app = app_with(fixtures::game());
-        press_keys(&mut app, &[KeyCode::Esc]);
-        assert_eq!(app.handle(key(KeyCode::Enter), false), Flow::Continue);
-        assert_eq!(menu_kind(&app), Some(Kind::Pause));
-        assert_eq!(press_keys(&mut app, &[KeyCode::Char('q')]), Flow::Quit);
+        // Each list of keys reaches a screen: the pause menu, the level
+        // list, the settings, the main menu.
+        let screens: [&[KeyCode]; 4] = [
+            &[KeyCode::Esc],
+            &[KeyCode::Esc, KeyCode::Char('j'), KeyCode::Enter],
+            &[
+                KeyCode::Esc,
+                KeyCode::Char('k'),
+                KeyCode::Char('k'),
+                KeyCode::Enter,
+            ],
+            &[KeyCode::Esc, KeyCode::Char('k'), KeyCode::Enter],
+        ];
+        for keys in screens {
+            let mut app = app_with(fixtures::game());
+            press_keys(&mut app, keys);
+            assert_ne!(app.screen, Screen::Game);
+            let screen = app.screen.clone();
+            assert_eq!(app.handle(key(KeyCode::Enter), false), Flow::Continue);
+            assert_eq!(app.screen, screen, "nothing acts in a window too small");
+            assert_eq!(press_keys(&mut app, &[KeyCode::Char('q')]), Flow::Quit);
+        }
     }
 }

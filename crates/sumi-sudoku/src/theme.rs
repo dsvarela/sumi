@@ -357,7 +357,7 @@ mod tests {
                 contrast(t.box_line, t.background),
             );
             assert!(
-                box_line > line + 0.5,
+                box_line > line + colour::BOX_LINE_LEAD,
                 "{id}: {box_line:.2} against {line:.2}"
             );
         }
@@ -378,7 +378,10 @@ mod tests {
             for surface in SURFACES {
                 for text in TEXT {
                     let ratio = contrast(role(text), role(surface));
-                    assert!(ratio >= 4.5, "{id}: {text} on {surface}: {ratio:.2}");
+                    assert!(
+                        ratio >= colour::TEXT_FLOOR,
+                        "{id}: {text} on {surface}: {ratio:.2}"
+                    );
                 }
             }
             let graphics = [
@@ -389,7 +392,14 @@ mod tests {
             ];
             for (name, fg, bg) in graphics {
                 let ratio = contrast(fg, bg);
-                assert!(ratio >= 3.0, "{id}: {name}: {ratio:.2}");
+                assert!(ratio >= colour::GRAPHIC_FLOOR, "{id}: {name}: {ratio:.2}");
+            }
+            for surface in &SURFACES[1..] {
+                let ratio = contrast(role(surface), t.background);
+                assert!(
+                    ratio < colour::HIGHLIGHT_CEILING,
+                    "{id}: {surface} against the background: {ratio:.2}"
+                );
             }
         }
     }

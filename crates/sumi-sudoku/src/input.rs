@@ -194,6 +194,16 @@ pub fn key_label(action: Action) -> &'static str {
     }
 }
 
+/// The key text for what the key after `f` asks for. The tests check each
+/// label against [`filter_key`].
+pub fn filter_label(key: FilterKey) -> &'static str {
+    match key {
+        FilterKey::Digit(_) => "1-9",
+        FilterKey::TwoCandidates => "b",
+        FilterKey::Off => "0",
+    }
+}
+
 /// The keys that move up and down a list, for a menu's key bar.
 pub fn up_down_label() -> &'static str {
     "jk"
@@ -324,6 +334,24 @@ mod tests {
             action(key(KeyCode::Char(label[1]))),
             Some(Action::Step(Direction::Right))
         );
+    }
+
+    #[test]
+    fn every_filter_label_names_keys_that_ask_for_it() {
+        for wanted in [
+            FilterKey::Digit(1),
+            FilterKey::TwoCandidates,
+            FilterKey::Off,
+        ] {
+            for k in keys_of(filter_label(wanted)) {
+                let got = filter_key(k).unwrap_or_else(|| panic!("{k:?} does nothing"));
+                assert_eq!(
+                    std::mem::discriminant(&got),
+                    std::mem::discriminant(&wanted),
+                    "{k:?}"
+                );
+            }
+        }
     }
 
     #[test]
