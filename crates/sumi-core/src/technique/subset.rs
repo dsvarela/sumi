@@ -51,11 +51,16 @@ impl<const N: usize> Technique for NakedSubset<N> {
 
     fn explain(&self, step: &Step) -> Explanation {
         let house = words::house(step.houses[0]);
-        let digits = words::digits(step.digits);
+        // A digit of the subset that is a candidate nowhere else in the
+        // house is not removed, so the effect names what is.
+        let removed = step
+            .removals
+            .iter()
+            .fold(Digits::NONE, |all, &(_, d)| all.union(d));
         Explanation {
             area: format!("{}.", words::capital(&house)),
             area_houses: step.houses.clone(),
-            effect: format!("Remove {digits} elsewhere in {house}."),
+            effect: format!("Remove {} elsewhere in {house}.", words::digits(removed)),
             reason: format!(
                 "{} must hold these digits, so the rest of {house} can't.",
                 words::cells(&step.cells)

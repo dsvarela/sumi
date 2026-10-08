@@ -1,5 +1,5 @@
-//! How hint texts write cells, houses, digits and lists. The plan's Wording
-//! section decides the forms: `r2c3`, "rows 2 and 7", "1, 4 and 6".
+//! How hint texts write cells, houses, digits and lists, in the forms
+//! research/hint-wording.md settles: `r2c3`, "rows 2 and 7", "1, 4 and 6".
 
 use crate::digits::Digits;
 use crate::grid::{Cell, House, box_of, col, row};
@@ -104,9 +104,10 @@ pub fn digits(digits: Digits) -> String {
     list(&digits.iter().map(|d| d.to_string()).collect::<Vec<_>>())
 }
 
-/// "Remove 4 from r5c3 and r9c8." Cells that lose different digits are only
-/// counted. Past two cells they are counted too, which keeps the effect and its reason
-/// within four lines of the panel; the board shows the cells.
+/// "Remove 4 from r5c3 and r9c8." Past two cells the cells are only counted
+/// ("3 cells in row 1"), and cells that lose different digits are counted
+/// together ("Remove 4 candidates from r1c1 and r1c2."). The board shows
+/// which, and the effect and its reason stay within four lines of the panel.
 pub fn removing(removals: &[(Cell, Digits)]) -> String {
     let mut groups: Vec<(Digits, Vec<Cell>)> = Vec::new();
     for &(c, d) in removals {

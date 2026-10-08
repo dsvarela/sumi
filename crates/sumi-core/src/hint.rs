@@ -2,7 +2,9 @@
 //!
 //! A wrong digit comes first, then a candidate the player struck out that is
 //! the cell's answer, then the first technique in [`ORDER`] that finds a step
-//! from the player's candidates. A hint never shows a cell's answer.
+//! from the player's candidates. A mistake is only ever located, as a box
+//! and then a cell; a step's digit shows on its last rung, once the
+//! technique has been named and its cells marked.
 
 use crate::digits::Digits;
 use crate::grid::{CELLS, Cell, Grid, House, box_of};
@@ -86,19 +88,42 @@ pub fn find(board: &Grid, solution: &Grid, notes: &[Option<Digits>; CELLS], uniq
 /// What a step does: the digit it places, or the candidates it removes.
 type Effect = (Option<(Cell, u8)>, Vec<(Cell, Digits)>);
 
-/// How many different things can be done at `level`: a digit that two
-/// techniques can place counts once, as do identical removals.
+/// How many different things can be done at `level`. A digit that two
+/// techniques can place counts once, and so does a step whose removals another
+/// step also makes: once that one is applied, nothing is left of it.
 fn steps_at(p: &Position, level: Level) -> usize {
-    let mut effects: Vec<Effect> = Vec::new();
-    for technique in ORDER.iter().filter(|t| t.level() == level) {
-        for step in technique.all(p) {
-            let effect = (step.placement, step.removals);
-            if !effects.contains(&effect) {
-                effects.push(effect);
-            }
+    let effects = ORDER
+        .iter()
+        .filter(|t| t.level() == level)
+        .flat_map(|t| t.all(p))
+        .map(|step| (step.placement, step.removals))
+        .collect();
+    count_distinct(effects)
+}
+
+fn count_distinct(effects: Vec<Effect>) -> usize {
+    let contains = |big: &Effect, small: &Effect| {
+        big.0 == small.0
+            && small.1.iter().all(|&(cell, digits)| {
+                big.1
+                    .iter()
+                    .any(|&(c, d)| c == cell && digits.without(d).is_empty())
+            })
+    };
+    let mut distinct: Vec<&Effect> = Vec::new();
+    for effect in &effects {
+        if !distinct.contains(&effect) {
+            distinct.push(effect);
         }
     }
-    effects.len()
+    distinct
+        .iter()
+        .filter(|small| {
+            !distinct
+                .iter()
+                .any(|big| big != *small && contains(big, small))
+        })
+        .count()
 }
 
 impl Hint {
@@ -289,7 +314,8 @@ mod tests {
         (&XYZ_WING_2, "XYZ-Wing"),
     ];
 
-    /// The panel is about 30 columns wide.
+    /// The panel's text is 30 columns wide: `PANEL_WIDTH` in the ui is 34,
+    /// less two border columns and two of padding.
     const WIDTH: usize = 30;
 
     fn wrapped_lines(text: &str) -> usize {
@@ -337,7 +363,7 @@ mod tests {
     /// The five rungs of the first step each technique finds on each of the
     /// plan's examples, shown with the same wording the board uses.
     #[test]
-    fn every_rung_of_every_technique_fits_four_lines_and_uses_the_plans_words() {
+    fn every_rung_of_every_technique_fits_four_lines_and_avoids_banned_words() {
         let banned = [
             "note", "pencil", "unit", "region", "block", "obvious", "simply", "just", "easy ",
         ];
@@ -392,7 +418,7 @@ mod tests {
     }
 
     #[test]
-    fn rungs_read_as_the_research_wrote_them() {
+    fn a_pointing_pair_is_worded_from_its_fields() {
         let p = POINTING_1.position().known_unique();
         let step = ORDER[3]
             .all(&p)
@@ -568,6 +594,99 @@ mod tests {
             hard.difficulty(),
             "A Hard step is available (1 step at that level). Nothing easier."
         );
+    }
+
+    #[test]
+    fn a_step_another_contains_is_not_counted_apart() {
+        let one: Digits = [1].into_iter().collect();
+        let one_seven: Digits = [1, 7].into_iter().collect();
+        let small: Effect = (None, vec![(5, one), (9, one)]);
+        let big: Effect = (None, vec![(5, one_seven), (9, one)]);
+        let apart: Effect = (None, vec![(30, one)]);
+        assert_eq!(count_distinct(vec![small.clone(), big.clone()]), 1);
+        assert_eq!(count_distinct(vec![big.clone(), small.clone()]), 1);
+        assert_eq!(count_distinct(vec![small.clone(), big, apart.clone()]), 2);
+        assert_eq!(count_distinct(vec![small.clone(), small]), 1);
+        let place: Effect = (Some((4, 2)), vec![]);
+        assert_eq!(count_distinct(vec![place.clone(), apart, place]), 2);
+    }
+
+    /// Every digit the effect line names is one the step removes. Naked
+    /// subsets once named all the subset's digits, though a digit that is a
+    /// candidate nowhere else in the house is not removed.
+    #[test]
+    fn the_effect_line_names_only_digits_the_step_removes() {
+        let mut checked = 0;
+        for seed in 0..12 {
+            let mut rng = Xoshiro256PlusPlus::seed_from_u64(seed);
+            let level = if seed % 2 == 0 {
+                Level::Hard
+            } else {
+                Level::Expert
+            };
+            let puzzle = crate::bank::pick(&mut rng, level).unwrap();
+            for step in &solving_steps(&puzzle.clues) {
+                let effect = step.technique.explain(step).effect;
+                // "Remove 2, 7 and 9 elsewhere in row 1." or "Remove 4 from
+                // r5c3 and r9c8.": the digits come before the place.
+                if !effect.starts_with("Remove ") || effect.contains("candidates") {
+                    continue;
+                }
+                let head = effect.split(" from ").next().unwrap();
+                let head = head.split(" elsewhere").next().unwrap();
+                let removed = step
+                    .removals
+                    .iter()
+                    .fold(Digits::NONE, |all, &(_, d)| all.union(d));
+                for digit in head
+                    .split(|c: char| !c.is_ascii_digit())
+                    .filter_map(|t| t.parse::<u8>().ok())
+                {
+                    assert!(removed.contains(digit), "{effect}: removes {removed:?}");
+                }
+                checked += 1;
+            }
+        }
+        assert!(checked > 40, "{checked}");
+    }
+
+    /// The steps hints would give from the clues to the solution, each
+    /// applied to the candidates in full.
+    fn solving_steps(clues: &Grid) -> Vec<Step> {
+        let mut p = Position::new(clues).known_unique();
+        let mut steps = Vec::new();
+        while let Some(step) = ORDER.iter().find_map(|t| t.find(&p)) {
+            p.apply(&step);
+            steps.push(step);
+        }
+        steps
+    }
+
+    #[test]
+    fn a_naked_single_does_not_claim_the_grid_alone_rules_out_the_rest() {
+        let mut candidates = [Digits::ALL; CELLS];
+        candidates[40] = [7].into_iter().collect(); // the player's notes, not the grid
+        let p = Position::with_candidates(&Grid::EMPTY, candidates);
+        let step = ORDER[2].find(&p).unwrap();
+        assert_eq!(step.technique.name(), "Naked single");
+        let reason = step.technique.explain(&step).reason;
+        assert!(!reason.contains("row, column and box"), "{reason}");
+    }
+
+    #[test]
+    fn a_struck_out_answer_is_found_in_three_rungs_without_the_digit() {
+        let hint = Hint::StruckOut(40);
+        assert_eq!(hint.rungs(), 3);
+        assert_eq!(hint.rung(1).text, "There's a mistake in your candidates.");
+        assert_eq!(hint.rung(2).text, "The mistake is in box 5.");
+        assert_eq!(
+            hint.rung(3).text,
+            "The mistake is in r5c5: it no longer lists its answer."
+        );
+        assert_eq!(hint.rung(0), hint.rung(1));
+        assert_eq!(hint.rung(9), hint.rung(3));
+        assert_eq!(Hint::Mistake(40).rung(9), Hint::Mistake(40).rung(3));
+        assert_eq!(Hint::Stuck.rung(5), Hint::Stuck.rung(1));
     }
 
     #[test]

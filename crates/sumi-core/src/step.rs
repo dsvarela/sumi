@@ -7,8 +7,8 @@ use crate::grid::{Cell, House};
 use crate::position::Position;
 use crate::technique::Technique;
 
-/// These are the fields the hint ladder is to reveal one rung at a time; its
-/// wording is made from them rather than stored here.
+/// What a technique found. The hint ladder reveals these fields one rung at a
+/// time, and each technique's `explain` words them; no text is stored here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Step {
     pub technique: &'static dyn Technique,

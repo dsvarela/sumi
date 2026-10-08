@@ -31,7 +31,7 @@ impl Technique for NakedSingle {
             area: format!("{}: its row, column and box.", words::cell(cell)),
             area_houses: step.houses.clone(),
             effect: format!("Place {digit} in {}.", words::cell(cell)),
-            reason: "Its row, column and box rule out every other digit.".into(),
+            reason: "Every other digit is ruled out in it.".into(),
             second_group: Vec::new(),
         }
     }

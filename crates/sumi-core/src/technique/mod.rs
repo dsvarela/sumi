@@ -124,7 +124,7 @@ pub enum Level {
 pub const ORDER_VERSION: u32 = 1;
 
 /// Easiest first. Grading takes the first technique that finds a step, and
-/// hints are to do the same.
+/// hints do the same, so a change to the list changes both.
 pub static ORDER: &[&dyn Technique] = &[
     &FullHouse,
     &HiddenSingle,
