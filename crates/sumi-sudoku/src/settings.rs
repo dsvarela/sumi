@@ -129,10 +129,14 @@ impl Setting {
             Setting::CompleteDigits => h.complete_digits = !h.complete_digits,
             Setting::NoteClashes => h.note_clashes = !h.note_clashes,
             Setting::Theme => {
+                // No theme, or one that didn't load, means the default is
+                // the one showing, so the cycle starts from it.
+                let position = |id: &str| themes.iter().position(|t| t == id);
                 let at = config
                     .theme
-                    .as_ref()
-                    .and_then(|id| themes.iter().position(|t| t == id))
+                    .as_deref()
+                    .and_then(position)
+                    .or_else(|| position(crate::theme::DEFAULT))
                     .unwrap_or(0);
                 let n = themes.len();
                 let next = if forward {
@@ -259,6 +263,21 @@ mod tests {
         assert_eq!(seen, [2, 3, 4, 5, 1]);
         Setting::HintStart.change(&mut config, &[], false);
         assert_eq!(config.hint_start, 5);
+    }
+
+    /// With no theme set, or one that didn't load, the default is showing,
+    /// so the cycle starts from it wherever it sits in the list.
+    #[test]
+    fn the_theme_cycle_starts_from_the_default() {
+        let themes = ["a", crate::theme::DEFAULT, "c"].map(String::from);
+        for start in [None, Some("missing".to_string())] {
+            let mut config = Config {
+                theme: start,
+                ..Config::default()
+            };
+            Setting::Theme.change(&mut config, &themes, true);
+            assert_eq!(config.theme.as_deref(), Some("c"));
+        }
     }
 
     #[test]
