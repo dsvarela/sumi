@@ -1512,12 +1512,23 @@ fn settings_message(page: &SettingsPage, theme: &Theme) -> Paragraph<'static> {
     Paragraph::new(line).wrap(Wrap { trim: true })
 }
 
-/// The smallest window the settings page fits in: its widest row (a label
-/// and the longest theme name), its rows, the frame, and the keys.
-const SETTINGS_NEEDED: (u16, u16) = (54, 30);
+/// The settings page's width: its widest row, a label and the longest
+/// built-in theme name, in the frame.
+const SETTINGS_WIDTH: u16 = 54;
+
+/// The smallest window the settings page fits in: its width, and its rows
+/// with the two kept for a save error, the frame, and the keys.
+fn settings_needed() -> (u16, u16) {
+    let key_rows = key_rows(&settings_keys(), usize::from(SETTINGS_WIDTH)).len() as u16;
+    (
+        SETTINGS_WIDTH,
+        settings_rows().len() as u16 + 2 + 4 + key_rows,
+    )
+}
 
 pub fn settings_fit(area: Rect) -> bool {
-    area.width >= SETTINGS_NEEDED.0 && area.height >= SETTINGS_NEEDED.1
+    let (width, height) = settings_needed();
+    area.width >= width && area.height >= height
 }
 
 fn settings_keys() -> Vec<(&'static str, &'static str)> {
@@ -1534,7 +1545,7 @@ fn settings_keys() -> Vec<(&'static str, &'static str)> {
 fn settings_areas(area: Rect) -> (Rect, Rect, Rect) {
     let rows = settings_rows().len() as u16 + 2;
     let key_rows = key_rows(&settings_keys(), usize::from(area.width)).len() as u16;
-    let width = SETTINGS_NEEDED.0 - 2;
+    let width = SETTINGS_WIDTH - 2;
     let height = rows + 4;
     let [boxed, keys] =
         Layout::vertical([Constraint::Length(height), Constraint::Length(key_rows)]).areas(
@@ -1572,7 +1583,7 @@ pub fn draw_settings(frame: &mut Frame, page: &SettingsPage, theme: &Theme) {
     let area = frame.area();
     frame.render_widget(Block::new().style(Style::new().bg(theme.background)), area);
     if !settings_fit(area) {
-        too_small(frame, theme, SETTINGS_NEEDED);
+        too_small(frame, theme, settings_needed());
         return;
     }
     let lines = settings_lines(page, theme);
@@ -3029,7 +3040,11 @@ mod tests {
     #[test]
     fn the_settings_page() {
         let page = Page::new(true);
-        insta::assert_snapshot!(render_settings(&page, &Config::default(), SETTINGS_NEEDED));
+        insta::assert_snapshot!(render_settings(
+            &page,
+            &Config::default(),
+            settings_needed()
+        ));
     }
 
     /// The settings page's widest row fits the width it asks for.
@@ -3040,7 +3055,8 @@ mod tests {
             marks_to_candidates: crate::config::MarksToCandidates::Merge,
             ..Config::default()
         };
-        let (_, inner, _) = settings_areas(Rect::new(0, 0, SETTINGS_NEEDED.0, SETTINGS_NEEDED.1));
+        let (_, inner, _) =
+            settings_areas(Rect::new(0, 0, settings_needed().0, settings_needed().1));
         for name in ["Tokyo Night AMOLED", "A user theme with a very long name"] {
             for selected in 0..crate::settings::Setting::all().len() {
                 let page = Page {
@@ -3311,7 +3327,7 @@ mod tests {
                 note,
             };
             let mut terminal =
-                Terminal::new(TestBackend::new(SETTINGS_NEEDED.0, SETTINGS_NEEDED.1)).unwrap();
+                Terminal::new(TestBackend::new(settings_needed().0, settings_needed().1)).unwrap();
             terminal
                 .draw(|frame| draw_settings(frame, &shown, &theme))
                 .unwrap();
@@ -3339,7 +3355,7 @@ mod tests {
     /// for.
     #[test]
     fn the_settings_page_fits_the_size_it_asks_for() {
-        let area = Rect::new(0, 0, SETTINGS_NEEDED.0, SETTINGS_NEEDED.1);
+        let area = Rect::new(0, 0, settings_needed().0, settings_needed().1);
         let (boxed, inner, keys) = settings_areas(area);
         assert_eq!(inner.height as usize, settings_rows().len() + 2);
         assert!(boxed.bottom() <= keys.y && keys.bottom() <= area.bottom());
@@ -3399,8 +3415,8 @@ mod tests {
     #[test]
     fn a_click_on_a_setting_lands_on_it() {
         let page = Page::new(false);
-        let backend = render_settings(&page, &Config::default(), SETTINGS_NEEDED);
-        let area = Rect::new(0, 0, SETTINGS_NEEDED.0, SETTINGS_NEEDED.1);
+        let backend = render_settings(&page, &Config::default(), settings_needed());
+        let area = Rect::new(0, 0, settings_needed().0, settings_needed().1);
         for (i, setting) in Setting::all().into_iter().enumerate() {
             let label = setting.label();
             let spot = find(&backend, &label[..1])
