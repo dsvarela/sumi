@@ -21,7 +21,7 @@ use sumi_core::bank;
 use sumi_core::generate::LevelGenerator;
 use sumi_core::grid::{CELLS, Grid, House};
 use sumi_core::hint::Hint;
-use sumi_core::technique::Level;
+use sumi_core::technique::{Level, ORDER};
 use sumi_core::transform::Transform;
 
 use crate::animation::{Animation, Kind as AnimationKind, complete_houses};
@@ -29,6 +29,7 @@ use crate::config::{Config, MarksToCandidates};
 use crate::entry::{Entry, Outcome};
 use crate::game::{CandidatesFromMarks, Game, Mode};
 use crate::input::{Action, FilterKey, action, filter_key};
+use crate::learn::{self, Learning, Next};
 use crate::menu::{Choice, Context, Item, Kind, Menu, Progress};
 use crate::settings::{Choice as SettingsChoice, Page, Setting};
 use crate::stats::Stats;
@@ -215,6 +216,9 @@ fn play(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
             session.view.time = session.time();
             session.tick(Instant::now());
         }
+        if let Some((session, learning)) = &mut app.learning {
+            session.view.lesson = Some(learning.panel());
+        }
         let mut shown = true;
         terminal.draw(|frame| {
             app.area = frame.area();
@@ -237,6 +241,10 @@ fn play(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                 }
                 (Screen::Entry(entry), _) => ui::draw_entry(frame, entry, theme),
                 (Screen::Stats, _) => ui::draw_stats(frame, &app.setup.stats, theme),
+                (Screen::Learn, _) => {
+                    let (session, _) = app.learning.as_ref().expect("Learn shows a board");
+                    ui::draw(frame, &session.game, &session.view, theme);
+                }
                 (Screen::Game, Some(session)) => {
                     ui::draw(frame, &session.game, &session.view, theme);
                 }
@@ -302,6 +310,8 @@ enum Screen {
     /// Typing in a puzzle.
     Entry(Entry),
     Stats,
+    /// A lesson or a drill.
+    Learn,
 }
 
 /// The screen showing, the game in progress if there is one, and where new
@@ -334,6 +344,11 @@ struct App {
     generators: HashMap<Level, LevelGenerator>,
     /// The new game "Replace the saved game?" is asking about.
     pending: Option<Pending>,
+    /// A lesson or drill under way, on a board of its own: the game in
+    /// progress is left as it is.
+    learning: Option<(Session, Learning)>,
+    /// The technique Learn was opened on, to go back to in its list.
+    learning_from: usize,
 }
 
 /// A new game asked for while one is in progress, and where it was asked
@@ -397,6 +412,8 @@ impl App {
             slot: Slot::default(),
             generators: HashMap::new(),
             pending: None,
+            learning: None,
+            learning_from: 0,
         };
         if let Some(game) = saved {
             let mut session = Session::new(game, &app.config, clock);
@@ -486,6 +503,10 @@ impl App {
             Screen::Settings(_) => ui::settings_fit(area),
             Screen::Entry(entry) => ui::entry_fits(area, entry),
             Screen::Stats => ui::stats_fit(area, &self.setup.stats),
+            Screen::Learn => {
+                let (session, _) = self.learning.as_ref().expect("Learn shows a board");
+                ui::fits(area, session.view.pad_hidden)
+            }
         }
     }
 
@@ -637,6 +658,9 @@ impl App {
                 Flow::Continue
             };
         }
+        if self.screen == Screen::Learn {
+            return self.learn_key(event, shown);
+        }
         if self.screen == Screen::Game {
             let session = self.session.as_mut().expect("the game screen shows a game");
             return match session.handle(event, shown) {
@@ -674,7 +698,8 @@ impl App {
     fn menu_action(&mut self, action: Action) -> Flow {
         let context = self.menu_context();
         match &mut self.screen {
-            Screen::Game => {}
+            // Keys on the board go to the session, or the lesson.
+            Screen::Game | Screen::Learn => {}
             Screen::Stats => {
                 if action == Action::Close {
                     self.back_to_menu(false);
@@ -706,6 +731,13 @@ impl App {
                         Kind::Replace => self.keep(),
                         Kind::Pause => self.resume(),
                         Kind::Bookmarks => self.back_to_menu(true),
+                        Kind::Learn => self.back_to_menu(false),
+                        Kind::Technique(index) => {
+                            self.screen = Screen::Menu(Menu {
+                                kind: Kind::Learn,
+                                selected: index,
+                            })
+                        }
                         Kind::Main => {}
                     },
                     Some(Choice::Chosen(item)) => match item {
@@ -727,6 +759,15 @@ impl App {
                         },
                         Item::CustomPuzzle => self.screen = Screen::Entry(Entry::new()),
                         Item::Stats => self.screen = Screen::Stats,
+                        Item::Learn => self.screen = Screen::Menu(Menu::new(Kind::Learn)),
+                        Item::Technique(index) => {
+                            self.screen = Screen::Menu(Menu::new(Kind::Technique(index)))
+                        }
+                        Item::Lesson | Item::Drill => {
+                            if let Kind::Technique(index) = kind {
+                                self.learn(index, item);
+                            }
+                        }
                         Item::MainMenu => self.screen = Screen::Menu(Menu::new(Kind::Main)),
                         Item::Settings => {
                             self.screen = Screen::Settings(Page::new(kind == Kind::Pause));
@@ -745,6 +786,65 @@ impl App {
             }
         }
         Flow::Continue
+    }
+
+    /// A key in a lesson or drill. Enter and Esc are the lesson's while no
+    /// hint is open; other keys reach the board when the lesson lets them,
+    /// and a digit placed is checked at once.
+    fn learn_key(&mut self, event: Event, shown: bool) -> Flow {
+        let Some((session, learning)) = &mut self.learning else {
+            return Flow::Continue;
+        };
+        let Some(key) = press(event.clone()) else {
+            return Flow::Continue;
+        };
+        if is_ctrl_c(key) {
+            return Flow::Quit;
+        }
+        let action = action(key);
+        let view = &session.view;
+        let own = shown && view.hint.is_none() && !view.help && !view.paused;
+        match action {
+            Some(Action::Close) if own => self.leave_learning(),
+            Some(Action::Confirm) if own => match learning.confirm(&mut session.game) {
+                Next::Stay => {}
+                Next::Board(game) => *session = Session::new(*game, &self.config, self.clock),
+                Next::Done => self.leave_learning(),
+            },
+            Some(action) if own && !learning.lets(action) => {}
+            _ => {
+                if session.handle(event, shown) == Flow::Quit {
+                    return Flow::Quit;
+                }
+                learning.after(&mut session.game);
+            }
+        }
+        Flow::Continue
+    }
+
+    /// Starts the lesson or drill of the technique at `index`.
+    fn learn(&mut self, index: usize, item: Item) {
+        let technique = ORDER[index];
+        let (learning, game) = match (item, learn::lesson(technique)) {
+            (Item::Lesson, Some(lesson)) => Learning::lesson(lesson),
+            _ => {
+                let boards = learn::drill(&mut self.rng, technique, learn::DRILL_BOARDS);
+                Learning::drill(technique, boards)
+            }
+        };
+        let session = Session::new(game, &self.config, self.clock);
+        self.learning = Some((session, learning));
+        self.learning_from = index;
+        self.screen = Screen::Learn;
+    }
+
+    /// Back to the Learn list, at the technique learned.
+    fn leave_learning(&mut self) {
+        self.learning = None;
+        self.screen = Screen::Menu(Menu {
+            kind: Kind::Learn,
+            selected: self.learning_from,
+        });
     }
 
     /// Asks whether `pending` should replace the game in progress.
@@ -796,6 +896,18 @@ impl App {
             }
             // Typing in a puzzle is done with keys, and the stats take none.
             Screen::Entry(_) | Screen::Stats => Flow::Continue,
+            Screen::Learn => {
+                let Some((session, learning)) = &mut self.learning else {
+                    return Flow::Continue;
+                };
+                // Only looking around, until the lesson lets the board change.
+                let target = ui::hit(self.area, &session.view, x, y);
+                if learning.lets(Action::Digit(1)) || matches!(target, Some(ui::Target::Cell(_))) {
+                    session.click(target);
+                    learning.after(&mut session.game);
+                }
+                Flow::Continue
+            }
             Screen::Settings(page) => match ui::settings_hit(self.area, x, y) {
                 Some(i) => {
                     page.selected = i;
@@ -1816,7 +1928,7 @@ mod tests {
             setup(),
             now,
         );
-        press_keys(&mut app, &[KeyCode::Down, KeyCode::Enter]);
+        choose(&mut app, "Custom puzzle");
         assert!(matches!(app.screen, Screen::Entry(_)));
         app.handle(Event::Paste(fixtures::CLUES.into()), true);
         press_keys(&mut app, &[KeyCode::Enter, KeyCode::Right, KeyCode::Right]);
@@ -1831,7 +1943,7 @@ mod tests {
             &mut app,
             &[KeyCode::Esc, KeyCode::Esc, KeyCode::Up, KeyCode::Enter],
         );
-        press_keys(&mut app, &[KeyCode::Down, KeyCode::Down, KeyCode::Enter]);
+        choose(&mut app, "Custom puzzle");
         assert!(
             matches!(app.screen, Screen::Entry(_)),
             "Main menu, Custom puzzle"
@@ -1899,11 +2011,87 @@ mod tests {
         };
         assert!(!items(&open(false)).contains(&Item::Stats));
         let mut app = open(true);
-        assert_eq!(items(&app)[2], Item::Stats);
-        press_keys(&mut app, &[KeyCode::Down, KeyCode::Down, KeyCode::Enter]);
+        assert!(items(&app).contains(&Item::Stats));
+        choose(&mut app, "Stats");
         assert_eq!(app.screen, Screen::Stats);
         press_keys(&mut app, &[KeyCode::Esc]);
         assert_eq!(menu_kind(&app), Some(Kind::Main));
+    }
+
+    /// Learn lists the techniques; one with a lesson offers it and a
+    /// drill, one without only a drill. A lesson runs on its own board:
+    /// Enter goes through the frames, Esc goes back to the list at that
+    /// technique, and the game in progress and its save are untouched.
+    #[test]
+    fn a_lesson_leaves_the_game_in_progress_alone() {
+        let dir = scratch("learn");
+        let mut app = app_with(fixtures::game());
+        app.setup.data = Some(dir.clone());
+        press_keys(
+            &mut app,
+            &[KeyCode::Char('l'), KeyCode::Char('l'), KeyCode::Char('4')],
+        );
+        let saved = std::fs::read_to_string(dir.join("game.json")).unwrap();
+        press_keys(&mut app, &[KeyCode::Esc]);
+        choose(&mut app, "Main menu");
+        choose(&mut app, "Learn");
+        choose(&mut app, "Swordfish");
+        let Screen::Menu(menu) = &app.screen else {
+            panic!("a menu")
+        };
+        assert_eq!(menu.items(&app.menu_context()), [Item::Drill]);
+        press_keys(&mut app, &[KeyCode::Esc]);
+        choose(&mut app, "Pointing pair");
+        choose(&mut app, "Lesson");
+        assert_eq!(app.screen, Screen::Learn);
+        press_keys(&mut app, &[KeyCode::Char('X'), KeyCode::Enter]);
+        let (session, _) = app.learning.as_ref().unwrap();
+        assert_eq!(session.game.revision(), 0, "See it changes nothing");
+        press_keys(&mut app, &[KeyCode::Esc]);
+        let Screen::Menu(menu) = &app.screen else {
+            panic!("the Learn list")
+        };
+        assert_eq!((menu.kind, menu.selected), (Kind::Learn, 3));
+        assert!(app.learning.is_none());
+        assert_eq!(game_of(&mut app).game.board().get(2), Some(4));
+        assert_eq!(
+            std::fs::read_to_string(dir.join("game.json")).unwrap(),
+            saved
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A drill's board takes the answer through the keys, and Enter
+    /// brings the next board.
+    #[test]
+    fn a_drill_takes_answers_through_the_keys() {
+        let mut app = App::new(
+            Xoshiro256PlusPlus::seed_from_u64(4),
+            Start::Menu,
+            None,
+            Config::default(),
+            setup(),
+            now,
+        );
+        choose(&mut app, "Learn");
+        choose(&mut app, "Full house");
+        choose(&mut app, "Drill");
+        let panel = |app: &App| app.learning.as_ref().unwrap().1.panel();
+        assert_eq!(panel(&app).heading, "Full house · 1 of 5");
+        let (session, learning) = app.learning.as_mut().unwrap();
+        let (cell, digit) = learning.answer().placement.unwrap();
+        session.game.move_to(cell);
+        press_keys(&mut app, &[KeyCode::Char(char::from(b'0' + digit))]);
+        assert!(
+            panel(&app).text.starts_with("Right."),
+            "{}",
+            panel(&app).text
+        );
+        let first = app.learning.as_ref().unwrap().0.game.board().to_string();
+        press_keys(&mut app, &[KeyCode::Enter]);
+        assert_eq!(panel(&app).heading, "Full house · 2 of 5");
+        let next = app.learning.as_ref().unwrap().0.game.board().to_string();
+        assert_ne!(next, first, "the next board");
     }
 
     fn scratch(name: &str) -> PathBuf {
@@ -2113,10 +2301,31 @@ mod tests {
         Flow::Continue
     }
 
+    /// Chooses the item whose label starts with `label` in the menu
+    /// showing, as Enter on it does.
+    fn choose(app: &mut App, label: &str) {
+        let items = match &app.screen {
+            Screen::Menu(menu) => menu.items(&app.menu_context()),
+            _ => panic!("no menu"),
+        };
+        let index = items
+            .iter()
+            .position(|item| item.label().starts_with(label))
+            .unwrap_or_else(|| panic!("{label} in {items:?}"));
+        if let Screen::Menu(menu) = &mut app.screen {
+            menu.selected = index;
+        }
+        press_keys(app, &[KeyCode::Enter]);
+    }
+
     fn menu_kind(app: &App) -> Option<Kind> {
         match &app.screen {
             Screen::Menu(menu) => Some(menu.kind),
-            Screen::Game | Screen::Settings(_) | Screen::Entry(_) | Screen::Stats => None,
+            Screen::Game
+            | Screen::Settings(_)
+            | Screen::Entry(_)
+            | Screen::Stats
+            | Screen::Learn => None,
         }
     }
 
@@ -2284,10 +2493,7 @@ mod tests {
             setup(),
             now,
         );
-        press_keys(
-            &mut app,
-            &[KeyCode::Char('j'), KeyCode::Char('j'), KeyCode::Enter],
-        );
+        choose(&mut app, "Settings");
         assert_eq!(app.screen, Screen::Settings(Page::new(false)));
         press_keys(&mut app, &[KeyCode::Esc]);
         assert_eq!(menu_kind(&app), Some(Kind::Main));

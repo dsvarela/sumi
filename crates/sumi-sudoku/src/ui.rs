@@ -19,6 +19,7 @@ use crate::config::Highlights;
 use crate::entry::{Entry, Stage, Verdict};
 use crate::game::{CandidatesFromMarks, Game, Mode};
 use crate::input::{Action, FilterKey, filter_label, key_label, left_right_label, up_down_label};
+use crate::learn::Panel;
 use crate::menu::{Item, Menu};
 use crate::settings::{GROUPS, Page, Setting};
 use crate::stats::Stats;
@@ -136,6 +137,9 @@ pub struct View {
     pub pad_hidden: bool,
     /// Animations running, oldest first.
     pub animations: Vec<Animation>,
+    /// A lesson or drill under way on this board, which the panel, the
+    /// board's highlights and the key bar show when no hint is open.
+    pub lesson: Option<Panel>,
 }
 
 impl View {
@@ -354,7 +358,11 @@ pub fn draw(frame: &mut Frame, game: &Game, view: &View, theme: &Theme) {
         too_small(frame, theme, Density::Dense.needed(view.pad_hidden));
         return;
     };
-    let rung = view.shown_hint().map(|open| open.hint.rung(open.rung));
+    let rung = match (view.shown_hint(), &view.lesson) {
+        (Some(open), _) => Some(open.hint.rung(open.rung)),
+        (None, Some(lesson)) if !view.paused => lesson.highlight.clone(),
+        _ => None,
+    };
     let board = Board {
         game,
         view,
@@ -409,7 +417,12 @@ pub fn draw(frame: &mut Frame, game: &Game, view: &View, theme: &Theme) {
     );
     match areas.density {
         Density::Full => {
-            let mut block = panel_block(theme, if game.is_won() { "Solved" } else { "Hint" });
+            let title = match (&view.lesson, &view.hint) {
+                _ if game.is_won() => "Solved",
+                (Some(lesson), None) => lesson.title,
+                _ => "Hint",
+            };
+            let mut block = panel_block(theme, title);
             if view.shown_hint().is_some() {
                 block = block
                     .title_top(Line::from(vec![" ".into(), close, " ".into()]).right_aligned());
@@ -486,10 +499,22 @@ fn hint_text(game: &Game, view: &View, theme: &Theme) -> Paragraph<'static> {
                 Line::from(Span::styled(rung.text, Style::new().fg(theme.text))),
             ]
         }
-        None => vec![Line::from(Span::styled(
-            format!("{} for a hint", key_label(Action::Hint)),
-            Style::new().fg(theme.dimmed),
-        ))],
+        None => match &view.lesson {
+            Some(lesson) => vec![
+                Line::from(Span::styled(
+                    lesson.heading.clone(),
+                    Style::new().fg(theme.dimmed),
+                )),
+                Line::from(Span::styled(
+                    lesson.text.clone(),
+                    Style::new().fg(theme.text),
+                )),
+            ],
+            None => vec![Line::from(Span::styled(
+                format!("{} for a hint", key_label(Action::Hint)),
+                Style::new().fg(theme.dimmed),
+            ))],
+        },
     };
     Paragraph::new(text).wrap(Wrap { trim: true })
 }
@@ -660,6 +685,8 @@ fn keys(game: &Game, view: &View) -> Vec<(&'static str, &'static str)> {
         keys.push((Action::Step(crate::game::Direction::Up), "look around"));
         keys.push((Action::Close, "close"));
         keys
+    } else if let Some(lesson) = &view.lesson {
+        lesson.keys.clone()
     } else if game.is_won() {
         vec![(Action::Confirm, "new game"), (Action::Close, "menu")]
     } else if game.at_dead_end() && !game.bookmarks().is_empty() {
@@ -3481,6 +3508,38 @@ mod tests {
         for smaller in [(width - 1, height), (width, height - 1)] {
             let text = text_of(&backend(&stats, smaller));
             assert!(text.contains(&format!("{width}×{height}")), "{text}");
+        }
+    }
+
+    /// Every text a lesson shows fits the full panel and the dense hint
+    /// area, under its heading.
+    #[test]
+    fn every_lesson_text_fits_the_panel() {
+        let theme = Theme::tokyo_night_amoled();
+        let layouts = [
+            (FRAME_WIDTH - 4, PANEL_HEIGHT - 2),
+            (DENSE.0, DENSE_PANEL_HEIGHT),
+        ];
+        for text in crate::learn::every_lesson_text() {
+            let view = View {
+                lesson: Some(Panel {
+                    title: "Lesson",
+                    heading: "Find it · 3 of 3".to_string(),
+                    text: text.clone(),
+                    highlight: None,
+                    keys: Vec::new(),
+                }),
+                ..View::default()
+            };
+            for (width, rows) in layouts {
+                let area = Rect::new(0, 0, width, rows + 1);
+                let mut buffer = Buffer::empty(area);
+                hint_text(&game(), &view, &theme).render(area, &mut buffer);
+                let used = (0..area.height)
+                    .filter(|&y| (0..area.width).any(|x| buffer[(x, y)].symbol() != " "))
+                    .count();
+                assert!(used <= usize::from(rows), "{width} columns: {text}");
+            }
         }
     }
 

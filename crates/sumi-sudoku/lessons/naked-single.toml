@@ -1,0 +1,24 @@
+technique = "Naked single"
+goal = "Place the digit a naked single gives."
+close = "A naked single: a cell its row, column and box leave one digit for takes it."
+
+[see]
+board = "...3.7.2.7.4..........569.7....791..2.......4..518....4.896..........5.6.3...1..."
+frames = [
+  { text = "Take one empty cell and the digits in its row, column and box.", show = "nothing" },
+  { text = "{cells}", show = "pattern" },
+  { text = "Between them they hold eight different digits.", show = "pattern" },
+  { text = "{result}", show = "result" },
+]
+
+[finish]
+board = "...6....5..9....71....384....83.4....7.8...1....5.19....398....89...32..6....2..."
+
+[[find]]
+board = "5..3...8..149...36.3..1.......2..45.....9.....71..4.......2..9.6....932..8...7..5"
+
+[[find]]
+board = "1...4.63.....1..2..8.3...1.4.....7...1.7.9.8...5.....3.3...6.5..5..8.....42.9...6"
+
+[[find]]
+board = "..7.2..4.2..7........8.4.2...1....68.8.946.7.6.....4...9.5.1........2..5.1..3.6.."

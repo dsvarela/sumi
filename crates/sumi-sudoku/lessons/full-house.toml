@@ -1,0 +1,28 @@
+# A lesson: See it shows the frames on its board, Finish it shows the
+# pattern and asks for the step, Find it asks for it on each board. Boards
+# are 81 cells, . for an empty one, and the technique must be the easiest
+# step on each; the lesson test checks every file.
+technique = "Full house"
+goal = "Place the digit a full house gives."
+close = "A full house: a row, column or box with one empty cell takes the digit it's missing."
+
+[see]
+board = ".89....7..3..5..696...........6495.....127.....45.8...........782..1..9..4....63."
+frames = [
+  { text = "Every row, column and box holds each digit once.", show = "nothing" },
+  { text = "{area}", show = "area" },
+  { text = "Eight cells there hold a digit. {cells}", show = "pattern" },
+  { text = "{result}", show = "result" },
+]
+
+[finish]
+board = "28379451.4......89............4.93....4.8.1....12.5............89......5...8.32.1"
+
+[[find]]
+board = "9....6.4....89....5......2.61892547............731.69..2......5....78....3.4....7"
+
+[[find]]
+board = "2...1....61..8..4...4965....6..41..7.........1..27..8....8943...3..2..74....3...1"
+
+[[find]]
+board = ".....1....31.8..9...8...14.6..542....5.8.3.7....967..1.24...7...6..9.28....2....."

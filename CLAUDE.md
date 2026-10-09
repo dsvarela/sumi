@@ -37,8 +37,9 @@ and resolve a thread before deleting the text it is anchored to.
   generate, position, puzzle, step, technique, hint, grade, bank and
   transform). `data/bank.txt` is the built-in puzzle bank, built by `examples/build_bank.rs`.
 - `crates/sumi-sudoku`: the `sumi` program (app, game, ui, menu, settings,
-  animation, theme, config, input, cli, store, entry and stats so far;
-  learn to come).
+  animation, theme, config, input, cli, store, entry, stats and learn).
+  `lessons/` holds the lesson files, whose boards come from
+  `sumi-core/examples/find_lesson_boards.rs`.
   `themes/` holds the built-in themes, built by `examples/build_themes.rs`,
   which shares `src/colour.rs` (contrast, OKLab, the floors) with the theme
   tests.

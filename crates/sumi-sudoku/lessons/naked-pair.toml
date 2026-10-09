@@ -1,0 +1,26 @@
+technique = "Naked pair"
+goal = "Strike what a naked pair rules out, then Enter."
+close = "A naked pair: two cells of a house with the same two candidates take those digits from the rest of it."
+
+[see]
+board = "943..78.....4......17..8.9.4....6.3...2...6...8.1....5.7.6..51......5.....48..276"
+frames = [
+  { text = "Two cells of a row, column or box can have the same two candidates and no others.", show = "nothing" },
+  { text = "{area}", show = "area" },
+  { text = "{cells}", show = "pattern" },
+  { text = "Those two digits go in those two cells, so no other cell there holds them.", show = "pattern" },
+  { text = "{result}", show = "result" },
+  { text = "It works only with every candidate written in.", show = "result" },
+]
+
+[finish]
+board = "....7....7.9..368.63..4.7.5.9..6.1..46.....271.5....6.2...8..41.815.4276....1...."
+
+[[find]]
+board = "51.4..3....4..7..97..6..8..3..8.64.........3...73.4..2..57.1..39.15..7...739.2561"
+
+[[find]]
+board = "7...86..55..927....9.....72679.5.3.1.4..9.56.8.5.6..4.35.649.1......8...9..27...6"
+
+[[find]]
+board = "79....4.8..8..9671.16....9..8...6.....19845.....7..81..2..9.76..6.4..98.8.9...1.2"

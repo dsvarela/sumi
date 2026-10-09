@@ -30,6 +30,13 @@ pub fn pick<R: Rng + ?Sized>(rng: &mut R, level: Level, played: &HashSet<Grid>) 
     Some(Puzzle::new(clues).expect("the bank test checks every puzzle has one solution"))
 }
 
+/// Every bank puzzle's clues, with the name of its hardest technique.
+pub fn puzzles() -> Vec<(Grid, &'static str)> {
+    lines()
+        .map(|(clues, _, grade)| (clues, grade.splitn(4, ' ').nth(3).unwrap_or("")))
+        .collect()
+}
+
 /// How many positions along the solving path `steps` have a hidden single
 /// in a row or column and none in a box: where a player who scans only
 /// boxes is stuck. Every bank puzzle has one.
@@ -284,6 +291,18 @@ mod tests {
             let steps = grade(&clues).unwrap().steps;
             assert_eq!(needs_lines(&clues, &steps), positions, "{puzzle}");
         }
+    }
+
+    /// Each puzzle's hardest technique is named as its grade names it,
+    /// 2-String Kite included.
+    #[test]
+    fn puzzles_name_their_hardest_technique() {
+        let all = puzzles();
+        assert_eq!(all.len(), 1000);
+        for (clues, hardest) in all.iter().take(1000).step_by(97) {
+            assert_eq!(grade(clues).unwrap().hardest.unwrap().name(), *hardest);
+        }
+        assert!(all.iter().any(|(_, h)| *h == "2-String Kite"));
     }
 
     #[test]

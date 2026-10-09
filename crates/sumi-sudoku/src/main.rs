@@ -9,6 +9,7 @@ mod entry;
 mod fixtures;
 mod game;
 mod input;
+mod learn;
 mod menu;
 mod settings;
 mod stats;

@@ -1,0 +1,26 @@
+technique = "Pointing pair"
+goal = "Strike what a pointing pair rules out, then Enter."
+close = "A pointing pair: a digit held to one row or column of a box can't go elsewhere in that line."
+
+[see]
+board = "5..3...8..149...36.3..1.......2..45.....9.....71..4.6.....2..9.6....932..8...7..5"
+frames = [
+  { text = "In a box, a digit's candidates sometimes all sit in one row or column.", show = "nothing" },
+  { text = "{area}", show = "area" },
+  { text = "{cells}", show = "pattern" },
+  { text = "The digit goes in one of them, so the rest of that line can't hold it.", show = "pattern" },
+  { text = "{result}", show = "result" },
+  { text = "It works only with every candidate written in.", show = "result" },
+]
+
+[finish]
+board = "..1..7....82......57.82...13..4.5.7.....3.....6.1.8..49...56.13......25....3..6.."
+
+[[find]]
+board = "8....5..2...6...4.....7.95.3....2.76.8.71..2.27.5....4.49.5.....3...7...5..3....1"
+
+[[find]]
+board = "..52...96.....3...91..8....128.3..45.........53..2.718....4..67...1.....78...62.."
+
+[[find]]
+board = "8...912..217..3....5.8...1.....1.6..4.......5..2.7.....6...9.8....1..5.3..5.8...7"

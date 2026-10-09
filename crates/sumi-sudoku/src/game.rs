@@ -156,6 +156,17 @@ impl Game {
         self
     }
 
+    /// The game with `notes` as the candidates of every empty cell, as if
+    /// written before it started.
+    pub fn with_notes(mut self, notes: &[Digits; CELLS]) -> Game {
+        for (cell, &notes) in notes.iter().enumerate() {
+            if self.board.get(cell).is_none() {
+                self.candidates[cell] = Some(notes);
+            }
+        }
+        self
+    }
+
     /// The game with its puzzle's rating.
     pub fn rated(self, level: Level) -> Game {
         Game {
@@ -461,6 +472,11 @@ impl Game {
                 g.candidates[cell] = Some(listed.without(digits));
             }
         });
+    }
+
+    /// The digit `cell` holds in the solution.
+    pub fn solution_digit(&self, cell: Cell) -> Option<u8> {
+        self.puzzle.solution().get(cell)
     }
 
     /// The player's digits that differ from the solution, in cell order.

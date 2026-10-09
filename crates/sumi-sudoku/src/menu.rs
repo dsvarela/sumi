@@ -1,10 +1,11 @@
 //! The menus: what each one lists and how keys move through it. Drawing is
 //! in `ui`.
 
-use sumi_core::technique::Level;
+use sumi_core::technique::{Level, ORDER};
 
 use crate::game::Direction;
 use crate::input::Action;
+use crate::learn;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Item {
@@ -13,7 +14,12 @@ pub enum Item {
     NewGame,
     /// Type in a puzzle, from the main menu.
     CustomPuzzle,
+    Learn,
     Stats,
+    /// A technique in the Learn list, by its place in sumi's order.
+    Technique(usize),
+    Lesson,
+    Drill,
     Level(Level),
     /// Back to the game, from the pause menu.
     Resume,
@@ -56,6 +62,14 @@ pub struct Progress {
 impl Item {
     pub fn label(self) -> String {
         match self {
+            Item::Technique(index) => {
+                let technique = ORDER[index];
+                format!(
+                    "{} · {}",
+                    technique.name(),
+                    Item::Level(technique.level()).name()
+                )
+            }
             Item::Continue(Progress {
                 level: Some(level),
                 left,
@@ -71,7 +85,11 @@ impl Item {
             Item::Continue(_) => "Continue",
             Item::NewGame => "New game",
             Item::CustomPuzzle => "Custom puzzle",
+            Item::Learn => "Learn",
             Item::Stats => "Stats",
+            Item::Technique(_) => "Technique",
+            Item::Lesson => "Lesson",
+            Item::Drill => "Drill",
             Item::Level(Level::Easy) => "Easy",
             Item::Level(Level::Medium) => "Medium",
             Item::Level(Level::Hard) => "Hard",
@@ -102,6 +120,11 @@ pub enum Kind {
     Replace,
     /// The game's bookmarks, newest first.
     Bookmarks,
+    /// Every technique, to learn.
+    Learn,
+    /// What there is to learn of the technique at this place in sumi's
+    /// order: its lesson, if it has one, and its drill.
+    Technique(usize),
 }
 
 /// What a key in a menu asks for.
@@ -126,7 +149,12 @@ impl Menu {
             // Medium: a middle ground for someone who hasn't said.
             Kind::Levels { .. } => 1,
             // Keeping is first: Enter pressed in a hurry loses nothing.
-            Kind::Main | Kind::Pause | Kind::Replace | Kind::Bookmarks => 0,
+            Kind::Main
+            | Kind::Pause
+            | Kind::Replace
+            | Kind::Bookmarks
+            | Kind::Learn
+            | Kind::Technique(_) => 0,
         };
         Menu { kind, selected }
     }
@@ -140,7 +168,7 @@ impl Menu {
                 if let Some(progress) = context.progress {
                     items.push(Item::Continue(progress));
                 }
-                items.extend([Item::NewGame, Item::CustomPuzzle]);
+                items.extend([Item::NewGame, Item::CustomPuzzle, Item::Learn]);
                 if context.stats {
                     items.push(Item::Stats);
                 }
@@ -161,6 +189,15 @@ impl Menu {
                 .collect(),
             Kind::Levels { .. } => LEVELS.map(Item::Level).to_vec(),
             Kind::Replace => vec![Item::Keep, Item::Replace],
+            Kind::Learn => (0..ORDER.len()).map(Item::Technique).collect(),
+            Kind::Technique(index) => {
+                let mut items = Vec::new();
+                if learn::lesson(ORDER[index]).is_some() {
+                    items.push(Item::Lesson);
+                }
+                items.push(Item::Drill);
+                items
+            }
         }
     }
 
@@ -221,6 +258,7 @@ mod tests {
             [
                 Item::NewGame,
                 Item::CustomPuzzle,
+                Item::Learn,
                 Item::Settings,
                 Item::Quit
             ]
@@ -231,6 +269,7 @@ mod tests {
                 Item::Continue(PROGRESS.unwrap()),
                 Item::NewGame,
                 Item::CustomPuzzle,
+                Item::Learn,
                 Item::Settings,
                 Item::Quit
             ]
