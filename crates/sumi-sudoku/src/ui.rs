@@ -1234,11 +1234,12 @@ fn logo(scale: usize) -> Vec<String> {
 }
 
 /// The smallest window a menu with `items` can be drawn in: the frame
-/// around the name in plain text and the items, and under it the key bar
+/// around the name in plain text, or the menu's question, and the items, and under it the key bar
 /// in as many rows as it takes.
 fn menu_needed(menu: &Menu, items: &[Item]) -> (u16, u16) {
     let keys = menu_keys(menu);
-    let width = MenuAreas::column(&["sumi".to_string()], items) + 6;
+    let heading = menu.question().unwrap_or("sumi").to_string();
+    let width = MenuAreas::column(&[heading], items) + 6;
     let key_rows = key_rows(&keys, usize::from(width)).len() as u16;
     (width, MenuAreas::height(1, items) + key_rows)
 }
@@ -1280,10 +1281,13 @@ impl MenuAreas {
             let width = logo.iter().map(|l| l.chars().count()).max().unwrap_or(0) as u16;
             area.width >= width + 6 && area.height >= logo.len() as u16 + 1 + rows + around
         };
-        let logo = [logo(2), logo(1)]
-            .into_iter()
-            .find(|logo| fits(logo))
-            .unwrap_or_else(|| vec!["sumi".to_string()]);
+        let logo = match menu.question() {
+            Some(question) => vec![question.to_string()],
+            None => [logo(2), logo(1)]
+                .into_iter()
+                .find(|logo| fits(logo))
+                .unwrap_or_else(|| vec!["sumi".to_string()]),
+        };
         let column = MenuAreas::column(&logo, items);
         let height = MenuAreas::height(logo.len() as u16, items);
         let [boxed, keys] =
@@ -2951,7 +2955,15 @@ mod tests {
     #[test]
     fn a_menu_is_as_big_as_its_items() {
         use crate::menu::Kind;
-        let kinds = [Kind::Main, Kind::Pause, Kind::Levels { from_pause: false }];
+        let kinds = [
+            Kind::Main,
+            Kind::Pause,
+            Kind::Levels { from_pause: false },
+            Kind::Replace {
+                level: Level::Hard,
+                from_pause: false,
+            },
+        ];
         for kind in kinds {
             for progress in [None, PROGRESS] {
                 let menu = Menu::new(kind);
@@ -2960,6 +2972,8 @@ mod tests {
                 let text = text_of(&render_menu(&menu, progress, (width, height)));
                 let rows: Vec<&str> = text.lines().collect();
                 let boxed = MenuAreas::of(Rect::new(0, 0, width, height), &menu, &items).boxed;
+                let heading = menu.question().unwrap_or("sumi");
+                assert!(text.contains(heading), "{kind:?}: {text}");
                 for item in &items {
                     let y = rows.iter().position(|r| r.contains(&item.label()));
                     let y = y.unwrap_or_else(|| panic!("{kind:?}: {text}")) as u16;

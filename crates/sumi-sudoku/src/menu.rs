@@ -17,6 +17,10 @@ pub enum Item {
     MainMenu,
     Settings,
     Quit,
+    /// Keep the saved game rather than start a new one.
+    Keep,
+    /// Start the new game, replacing the saved one.
+    Replace,
 }
 
 /// How far the game in progress is: its level, when it is rated, and the
@@ -52,6 +56,8 @@ impl Item {
             Item::MainMenu => "Main menu",
             Item::Settings => "Settings",
             Item::Quit => "Quit",
+            Item::Keep => "Keep it",
+            Item::Replace => "Replace it",
         }
     }
 }
@@ -62,7 +68,14 @@ impl Item {
 pub enum Kind {
     Main,
     Pause,
-    Levels { from_pause: bool },
+    Levels {
+        from_pause: bool,
+    },
+    /// A game of `level` was asked for while a game is saved.
+    Replace {
+        level: Level,
+        from_pause: bool,
+    },
 }
 
 /// What a key in a menu asks for.
@@ -86,7 +99,8 @@ impl Menu {
         let selected = match kind {
             // Medium: a middle ground for someone who hasn't said.
             Kind::Levels { .. } => 1,
-            Kind::Main | Kind::Pause => 0,
+            // Keeping is first: Enter pressed in a hurry loses nothing.
+            Kind::Main | Kind::Pause | Kind::Replace { .. } => 0,
         };
         Menu { kind, selected }
     }
@@ -105,6 +119,16 @@ impl Menu {
             }
             Kind::Pause => vec![Item::Resume, Item::NewGame, Item::Settings, Item::MainMenu],
             Kind::Levels { .. } => LEVELS.map(Item::Level).to_vec(),
+            Kind::Replace { .. } => vec![Item::Keep, Item::Replace],
+        }
+    }
+
+    /// The words over the items, in place of the logo, for a menu that
+    /// asks a question.
+    pub fn question(&self) -> Option<&'static str> {
+        match self.kind {
+            Kind::Replace { .. } => Some("Replace the saved game?"),
+            _ => None,
         }
     }
 

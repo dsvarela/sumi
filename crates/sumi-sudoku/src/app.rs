@@ -355,6 +355,13 @@ impl App {
         }
         match start {
             Start::Menu => {}
+            Start::Level(level) if app.progress().is_some() => {
+                let replace = Kind::Replace {
+                    level,
+                    from_pause: false,
+                };
+                app.screen = Screen::Menu(Menu::new(replace));
+            }
             Start::Level(level) => app.start(level),
             Start::Continue => app.resume(),
         }
@@ -537,10 +544,7 @@ impl App {
                 match page.handle(action) {
                     None => {}
                     Some(SettingsChoice::Change(setting, forward)) => self.change(setting, forward),
-                    Some(SettingsChoice::Back) => {
-                        let kind = if from_pause { Kind::Pause } else { Kind::Main };
-                        self.screen = Screen::Menu(Menu::new(kind));
-                    }
+                    Some(SettingsChoice::Back) => self.back_to_menu(from_pause),
                 }
             }
             Screen::Menu(menu) => {
@@ -548,11 +552,8 @@ impl App {
                 match menu.handle(action, progress) {
                     None => {}
                     Some(Choice::Back) => match kind {
-                        Kind::Levels { from_pause: true } => {
-                            self.screen = Screen::Menu(Menu::new(Kind::Pause))
-                        }
-                        Kind::Levels { from_pause: false } => {
-                            self.screen = Screen::Menu(Menu::new(Kind::Main))
+                        Kind::Levels { from_pause } | Kind::Replace { from_pause, .. } => {
+                            self.back_to_menu(from_pause)
                         }
                         Kind::Pause => self.resume(),
                         Kind::Main => {}
@@ -563,7 +564,22 @@ impl App {
                             let from_pause = kind == Kind::Pause;
                             self.screen = Screen::Menu(Menu::new(Kind::Levels { from_pause }));
                         }
+                        Item::Level(level) if progress.is_some() => {
+                            let from_pause = kind == Kind::Levels { from_pause: true };
+                            let replace = Kind::Replace { level, from_pause };
+                            self.screen = Screen::Menu(Menu::new(replace));
+                        }
                         Item::Level(level) => self.start(level),
+                        Item::Keep => {
+                            if let Kind::Replace { from_pause, .. } = kind {
+                                self.back_to_menu(from_pause);
+                            }
+                        }
+                        Item::Replace => {
+                            if let Kind::Replace { level, .. } = kind {
+                                self.start(level);
+                            }
+                        }
                         Item::MainMenu => self.screen = Screen::Menu(Menu::new(Kind::Main)),
                         Item::Settings => {
                             self.screen = Screen::Settings(Page::new(kind == Kind::Pause));
@@ -574,6 +590,12 @@ impl App {
             }
         }
         Flow::Continue
+    }
+
+    /// The pause menu, or the main menu.
+    fn back_to_menu(&mut self, from_pause: bool) {
+        let kind = if from_pause { Kind::Pause } else { Kind::Main };
+        self.screen = Screen::Menu(Menu::new(kind));
     }
 
     /// A left click or tap acts on what is drawn under it: on a menu or the
@@ -1476,6 +1498,48 @@ mod tests {
     }
 
     /// Fills in the fixture puzzle's solution with keys.
+    /// With a game in progress, a level chosen asks first; keeping it
+    /// goes back where the level list came from, with the game untouched,
+    /// and Esc keeps it too. Replacing starts the new game.
+    #[test]
+    fn a_new_game_asks_before_replacing_the_one_in_progress() {
+        let mut app = app_with(fixtures::game());
+        let before = game_of(&mut app).game.board().to_string();
+        let replace = |from_pause| {
+            Some(Kind::Replace {
+                level: Level::Medium,
+                from_pause,
+            })
+        };
+        // Esc, then New game and Medium from the pause menu.
+        press_keys(&mut app, &[KeyCode::Esc, KeyCode::Down, KeyCode::Enter]);
+        press_keys(&mut app, &[KeyCode::Enter]);
+        assert_eq!(menu_kind(&app), replace(true));
+        press_keys(&mut app, &[KeyCode::Enter]);
+        assert_eq!(menu_kind(&app), Some(Kind::Pause), "Keep it is first");
+        press_keys(&mut app, &[KeyCode::Down, KeyCode::Enter, KeyCode::Enter]);
+        press_keys(&mut app, &[KeyCode::Esc]);
+        assert_eq!(menu_kind(&app), Some(Kind::Pause));
+        assert_eq!(game_of(&mut app).game.board().to_string(), before);
+        press_keys(&mut app, &[KeyCode::Down, KeyCode::Enter, KeyCode::Enter]);
+        press_keys(&mut app, &[KeyCode::Down, KeyCode::Enter]);
+        assert_eq!(app.screen, Screen::Game);
+        assert_ne!(game_of(&mut app).game.board().to_string(), before);
+
+        // sumi new with a saved game asks too.
+        let mut app = App::new(
+            Xoshiro256PlusPlus::seed_from_u64(1),
+            Start::Level(Level::Medium),
+            Some(fixtures::game()),
+            Config::default(),
+            setup(),
+            now,
+        );
+        assert_eq!(menu_kind(&app), replace(false));
+        press_keys(&mut app, &[KeyCode::Esc]);
+        assert_eq!(menu_kind(&app), Some(Kind::Main));
+    }
+
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("sumi-app-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
