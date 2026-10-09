@@ -1481,13 +1481,20 @@ enum SettingsForm {
 }
 
 impl SettingsForm {
-    /// The window the page needs in this form: its widest row inside the
-    /// margins (which hold the frame) and a column either side, and its
-    /// rows with the two kept for a save error, the margins and the keys.
+    /// The smallest window the page fits in this form.
     fn needs(self) -> (u16, u16) {
+        self.needs_at(0)
+    }
+
+    /// The window the page needs in this form when the window is `width`
+    /// wide: its widest row inside the margins (which hold the frame) and
+    /// a column either side, and its rows with the two kept for a save
+    /// error, the margins and the key bar, which wraps to fewer rows in a
+    /// wider window.
+    fn needs_at(self, width: u16) -> (u16, u16) {
         let label = 2 + label_width();
         let value = 2 + VALUE_WIDTH + 2;
-        let rows = match self {
+        let setting = match self {
             SettingsForm::Wide => label + 2 + value,
             SettingsForm::Narrow => label.max(4 + value),
         };
@@ -1498,11 +1505,11 @@ impl SettingsForm {
                 SettingsRow::NoSettings => Some(no_settings_text().chars().count()),
                 _ => None,
             })
-            .fold(rows, usize::max);
-        let width = widest as u16 + 2 * SETTINGS_MARGIN.horizontal + 2;
-        let key_rows = key_rows(&settings_keys(), usize::from(width)).len() as u16;
+            .fold(setting, usize::max);
+        let least = widest as u16 + 2 * SETTINGS_MARGIN.horizontal + 2;
+        let key_rows = key_rows(&settings_keys(), usize::from(width.max(least))).len() as u16;
         let height = settings_rows(self).len() as u16 + 2 + 2 * SETTINGS_MARGIN.vertical;
-        (width, height + key_rows)
+        (least, height + key_rows)
     }
 
     /// The form the page takes in `area`: wide when it fits, else narrow,
@@ -1511,9 +1518,26 @@ impl SettingsForm {
         [SettingsForm::Wide, SettingsForm::Narrow]
             .into_iter()
             .find(|form| {
-                let (width, height) = form.needs();
+                let (width, height) = form.needs_at(area.width);
                 area.width >= width && area.height >= height
             })
+    }
+
+    /// The size to ask a window too small for the page to grow to: that of
+    /// the form it is fewest rows and columns short of, wide on a tie, at
+    /// the window's own width when that is wide enough.
+    fn nearest(area: Rect) -> (u16, u16) {
+        let short = |(width, height): (u16, u16)| {
+            width.saturating_sub(area.width) + height.saturating_sub(area.height)
+        };
+        [SettingsForm::Wide, SettingsForm::Narrow]
+            .into_iter()
+            .map(|form| {
+                let (width, height) = form.needs_at(area.width);
+                (width.max(area.width), height)
+            })
+            .min_by_key(|&needs| short(needs))
+            .expect("two forms")
     }
 }
 
@@ -1610,8 +1634,8 @@ fn settings_lines(page: &SettingsPage, theme: &Theme, form: SettingsForm) -> Vec
         .collect()
 }
 
-/// The widest value a setting row has room for beside its label; a longer
-/// one, such as a user theme's name, is shortened.
+/// The widest value a setting has room for, beside its label or under it;
+/// a longer one, such as a user theme's name, is shortened.
 const VALUE_WIDTH: usize = 18;
 
 /// `text`, cut to `width` characters with … as the last when it is longer.
@@ -1627,11 +1651,12 @@ fn shorten(text: &str, width: usize) -> String {
 /// the theme chosen isn't the one drawn.
 fn settings_message(page: &SettingsPage, theme: &Theme) -> Paragraph<'static> {
     let line = match (page.error, page.note) {
-        // The page always saves to config.toml, so its path (named on stderr)
-        // gives way to the reason, and a long error to its first line.
+        // The page always saves to config.toml, so its name and path (both
+        // on stderr) give way to the reason, which then fits the narrow
+        // form's two rows, and a long error gives way to its first line.
         (Some(error), _) => Line::from(Span::styled(
             format!(
-                "config.toml not saved: {}",
+                "Not saved: {}",
                 error
                     .split_once(": ")
                     .map_or(error, |(_, reason)| reason)
@@ -1703,7 +1728,7 @@ pub fn draw_settings(frame: &mut Frame, page: &SettingsPage, theme: &Theme) {
     let area = frame.area();
     frame.render_widget(Block::new().style(Style::new().bg(theme.background)), area);
     let Some(form) = SettingsForm::of(area) else {
-        too_small(frame, theme, SettingsForm::Narrow.needs());
+        too_small(frame, theme, SettingsForm::nearest(area));
         return;
     };
     let lines = settings_lines(page, theme, form);
@@ -4031,7 +4056,7 @@ mod tests {
         let page = Page::new(false);
         let config = Config::default();
         let error = "/home/someone/.config/sumi/config.toml: Permission denied (os error 13)";
-        let text = |error, note| {
+        let text = |error, note, (width, height): (u16, u16)| {
             let shown = SettingsPage {
                 page: &page,
                 config: &config,
@@ -4039,11 +4064,7 @@ mod tests {
                 error,
                 note,
             };
-            let mut terminal = Terminal::new(TestBackend::new(
-                SettingsForm::Wide.needs().0,
-                SettingsForm::Wide.needs().1,
-            ))
-            .unwrap();
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
             terminal
                 .draw(|frame| draw_settings(frame, &shown, &theme))
                 .unwrap();
@@ -4062,9 +4083,17 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join(" ")
         };
-        let shown = text(Some(error), None);
-        assert!(shown.contains("Permission denied"), "{shown}");
-        assert!(text(None, Some("This terminal shows 16 colours.")).contains("16 colours"));
+        let read_only =
+            "/home/someone/.config/sumi/config.toml: Read-only file system (os error 30)";
+        for size in [SettingsForm::Wide.needs(), SettingsForm::Narrow.needs()] {
+            // Whole, to the error's number.
+            let shown = text(Some(error), None, size);
+            assert!(shown.contains("Permission denied (os error 13)"), "{shown}");
+            let shown = text(Some(read_only), None, size);
+            assert!(shown.contains("(os error 30)"), "{shown}");
+            let shown = text(None, Some("This terminal shows 16 colours."), size);
+            assert!(shown.contains("16 colours."), "{shown}");
+        }
     }
 
     /// The page's rows, the frame and the key bar fit the height it asks
@@ -4090,13 +4119,40 @@ mod tests {
     /// can be reached wherever a game can be played.
     #[test]
     fn the_narrow_settings_fit_where_the_dense_board_does() {
-        let (width, height) = SettingsForm::Narrow.needs();
-        let dense = Density::Dense.needed(false);
-        assert!(width <= dense.0 && height <= dense.1, "{width}×{height}");
-        assert_eq!(
-            SettingsForm::of(Rect::new(0, 0, dense.0, dense.1)),
-            Some(SettingsForm::Narrow)
-        );
+        for pad_hidden in [false, true] {
+            let (width, height) = Density::Dense.needed(pad_hidden);
+            assert_eq!(
+                SettingsForm::of(Rect::new(0, 0, width, height)),
+                Some(SettingsForm::Narrow),
+                "{width}×{height}"
+            );
+        }
+    }
+
+    /// The page is wide wherever it fits, however much room there is.
+    #[test]
+    fn the_settings_page_is_wide_where_it_fits() {
+        for (width, height) in [SettingsForm::Wide.needs(), (80, 50), (200, 60)] {
+            assert_eq!(
+                SettingsForm::of(Rect::new(0, 0, width, height)),
+                Some(SettingsForm::Wide)
+            );
+        }
+    }
+
+    /// A window too small for the page is told the size of the form it is
+    /// nearest to, at its own width.
+    #[test]
+    fn too_small_names_the_nearest_form() {
+        let wide = SettingsForm::Wide.needs();
+        let at = |width, height| SettingsForm::nearest(Rect::new(0, 0, width, height));
+        assert_eq!(at(wide.0, wide.1 - 1), wide);
+        assert_eq!(at(wide.0 - 1, wide.1), wide);
+        assert_eq!(at(38, 44), (38, 45));
+        assert_eq!(at(20, 20), SettingsForm::Narrow.needs());
+        let page = render_settings(&Page::new(false), &Config::default(), (wide.0, wide.1 - 1));
+        let asked = format!("at least {}×{}", wide.0, wide.1);
+        assert!(page.to_string().contains(&asked), "{page}");
     }
 
     /// In the wide form every value starts in the same column, however
@@ -4189,6 +4245,10 @@ mod tests {
             }
             let heading = find(&backend, "G")[0];
             assert_eq!(settings_hit(area, heading.0, heading.1), None, "Gameplay");
+            let timer = spot_of(&backend, "Timer");
+            for x in [0, 1, width - 2, width - 1] {
+                assert_eq!(settings_hit(area, x, timer.1), None, "beside the box");
+            }
         }
     }
 
