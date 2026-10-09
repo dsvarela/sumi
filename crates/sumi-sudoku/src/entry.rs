@@ -32,11 +32,14 @@ pub enum Stage {
 pub enum Verdict {
     NoSolution,
     Several,
-    /// Pasted text held this many cells, not 81, or a character that
-    /// isn't a digit, `0` or `.`.
-    NotAGrid(usize),
+    /// Pasted text held this many cells, not 81.
+    WrongCount(usize),
+    /// Pasted text held this, which is no cell and no border.
+    BadCharacter(char),
     /// Pasted digits that differ from a clue.
     ChangesAClue,
+    /// The clues and digits fill the board: there is nothing to play.
+    AlreadySolved,
 }
 
 /// What a key on the entry screen asks of the app.
@@ -48,7 +51,34 @@ pub enum Outcome {
     Play(Box<Game>),
 }
 
+/// The 81 cells `text` holds, passing over spaces, lines and box borders.
+fn read_cells(text: &str) -> Result<Grid, Verdict> {
+    let border = |c: char| c.is_whitespace() || "|+-=:".contains(c) || ('─'..='╿').contains(&c);
+    let mut cells = String::new();
+    for c in text.chars().filter(|&c| !border(c)) {
+        match c {
+            '0'..='9' | '.' => cells.push(c),
+            _ => return Err(Verdict::BadCharacter(c)),
+        }
+    }
+    match cells.len() {
+        CELLS => Ok(cells.parse().expect("81 digits and dots")),
+        n => Err(Verdict::WrongCount(n)),
+    }
+}
+
 impl Entry {
+    /// The clues and the digits together.
+    pub fn board(&self) -> Grid {
+        let mut board = self.clues;
+        for cell in 0..CELLS {
+            if let Some(digit) = self.digits.get(cell) {
+                board.set(cell, Some(digit));
+            }
+        }
+        board
+    }
+
     pub fn new() -> Entry {
         Entry {
             clues: Grid::EMPTY,
@@ -63,8 +93,15 @@ impl Entry {
         match action {
             Action::Step(direction) => self.cursor = moved(self.cursor, direction, 1),
             Action::Jump(direction) => self.cursor = moved(self.cursor, direction, 3),
-            Action::Digit(digit) => self.write(Some(digit)),
-            Action::Clear => self.write(None),
+            Action::Digit(digit) => {
+                // Typing moves on in reading order, as on paper.
+                if self.write(Some(digit)) {
+                    self.cursor = (self.cursor + 1) % CELLS;
+                }
+            }
+            Action::Clear => {
+                self.write(None);
+            }
             Action::Confirm => return self.confirm(),
             Action::Close => match self.stage {
                 Stage::Clues => return Outcome::Back,
@@ -80,13 +117,13 @@ impl Entry {
 
     /// Reads pasted text as 81 cells, `0` or `.` for an empty one, as the
     /// clues or, in the second stage, the player's digits; there the clues
-    /// may be pasted along with them.
+    /// may be pasted along with them. Spaces, lines and the borders other
+    /// programs draw between boxes are passed over.
     pub fn paste(&mut self, text: &str) {
-        let grid: Grid = match text.parse() {
+        let grid = match read_cells(text) {
             Ok(grid) => grid,
-            Err(_) => {
-                let cells = text.chars().filter(|c| !c.is_whitespace()).count();
-                self.verdict = Some(Verdict::NotAGrid(cells));
+            Err(verdict) => {
+                self.verdict = Some(verdict);
                 return;
             }
         };
@@ -114,17 +151,23 @@ impl Entry {
         }
     }
 
-    /// Writes at the cursor: a clue, or a digit in a cell without one.
-    /// A changed clue makes the clues unchecked again.
-    fn write(&mut self, digit: Option<u8>) {
-        match self.stage {
-            Stage::Clues => self.clues.set(self.cursor, digit),
-            Stage::Digits(_) if self.clues.get(self.cursor).is_none() => {
-                self.digits.set(self.cursor, digit)
-            }
-            Stage::Digits(_) => {}
-        }
+    /// Writes at the cursor: a clue, which takes the place of any digit
+    /// there, or a digit in a cell without a clue. A changed clue makes
+    /// the clues unchecked again. Says whether anything was written.
+    fn write(&mut self, digit: Option<u8>) -> bool {
         self.verdict = None;
+        match self.stage {
+            Stage::Clues => {
+                self.clues.set(self.cursor, digit);
+                self.digits.set(self.cursor, None);
+                true
+            }
+            Stage::Digits(_) if self.clues.get(self.cursor).is_none() => {
+                self.digits.set(self.cursor, digit);
+                true
+            }
+            Stage::Digits(_) => false,
+        }
     }
 
     /// Checks the clues, moving on to the digits if they make a puzzle,
@@ -146,6 +189,10 @@ impl Entry {
                 let level = grade(puzzle.clues()).expect("one solution").level;
                 self.stage = Stage::Digits(level);
                 self.verdict = None;
+                Outcome::Stay
+            }
+            Stage::Digits(_) if (0..CELLS).all(|c| self.board().get(c).is_some()) => {
+                self.verdict = Some(Verdict::AlreadySolved);
                 Outcome::Stay
             }
             Stage::Digits(level) => Outcome::Play(Box::new(
@@ -198,12 +245,14 @@ mod tests {
     fn keys_type_clues_then_digits() {
         let mut entry = Entry::new();
         entry.handle(Action::Digit(5));
-        entry.handle(Action::Step(Direction::Right));
         entry.handle(Action::Digit(3));
+        assert_eq!(entry.cursor, 2, "typing moves on");
+        entry.handle(Action::Clear);
+        assert_eq!(entry.cursor, 2, "clearing doesn't");
         entry.handle(Action::Jump(Direction::Down));
         entry.handle(Action::Digit(9));
         let at = |cell| entry.clues.get(cell);
-        assert_eq!((at(0), at(1), at(28)), (Some(5), Some(3), Some(9)));
+        assert_eq!((at(0), at(1), at(29)), (Some(5), Some(3), Some(9)));
         let mut entry = typed(CLUES);
         entry.handle(Action::Confirm);
         entry.handle(Action::Digit(4)); // r1c1 is a clue
@@ -214,6 +263,9 @@ mod tests {
         assert_eq!(entry.digits.get(2), Some(4));
         assert!(matches!(entry.handle(Action::Close), Outcome::Stay));
         assert_eq!(entry.stage, Stage::Clues);
+        entry.cursor = 2;
+        entry.handle(Action::Digit(7));
+        assert_eq!(entry.digits.get(2), None, "a clue takes the digit's place");
         assert!(matches!(entry.handle(Action::Close), Outcome::Back));
     }
 
@@ -242,16 +294,32 @@ mod tests {
     fn pasted_text_fills_the_board() {
         let entry = typed(&format!("{CLUES}\n"));
         assert_eq!(entry.clues.to_string(), CLUES);
-        assert_eq!(typed("53..7").verdict, Some(Verdict::NotAGrid(5)));
+        assert_eq!(typed("53..7").verdict, Some(Verdict::WrongCount(5)));
         assert_eq!(
             typed(&CLUES.replacen('.', "x", 1)).verdict,
-            Some(Verdict::NotAGrid(81))
+            Some(Verdict::BadCharacter('x'))
         );
+        let bordered: String = CLUES
+            .as_bytes()
+            .chunks(9)
+            .map(|row| {
+                let row = std::str::from_utf8(row).unwrap();
+                format!("|{}|{}|{}|\n", &row[..3], &row[3..6], &row[6..])
+            })
+            .collect();
+        let pasted = typed(&format!("+---+---+---+\n{bordered}"));
+        assert_eq!(pasted.clues.to_string(), CLUES);
         let mut entry = typed(CLUES);
         entry.handle(Action::Confirm);
         entry.paste(SOLUTION);
         assert_eq!(entry.digits.filled(), 81 - entry.clues.filled());
         assert_eq!(entry.digits.get(0), None, "no digit on a clue");
+        assert!(matches!(entry.handle(Action::Confirm), Outcome::Stay));
+        assert_eq!(
+            entry.verdict,
+            Some(Verdict::AlreadySolved),
+            "nothing to play"
+        );
         entry.paste(&format!("4{}", &SOLUTION[1..]));
         assert_eq!(entry.verdict, Some(Verdict::ChangesAClue));
         entry.handle(Action::Close);

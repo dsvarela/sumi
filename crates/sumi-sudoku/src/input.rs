@@ -135,7 +135,8 @@ pub fn action(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('K') => Action::Jump(Direction::Up),
         KeyCode::Char('L') => Action::Jump(Direction::Right),
         KeyCode::Char(c @ '1'..='9') => Action::Digit(c as u8 - b'0'),
-        KeyCode::Char('0') | KeyCode::Backspace | KeyCode::Delete => Action::Clear,
+        // . is an empty cell in the 81-character form puzzles are pasted in.
+        KeyCode::Char('0' | '.') | KeyCode::Backspace | KeyCode::Delete => Action::Clear,
         KeyCode::Char('n') => Action::NextMode,
         KeyCode::Char('a') => Action::FillCandidates,
         KeyCode::Char('A') => Action::RefillCandidates,
@@ -240,6 +241,7 @@ mod tests {
         assert_eq!(action(key(KeyCode::Char('7'))), Some(Action::Digit(7)));
         assert_eq!(action(key(KeyCode::Char('0'))), Some(Action::Clear));
         assert_eq!(action(key(KeyCode::Backspace)), Some(Action::Clear));
+        assert_eq!(action(key(KeyCode::Char('.'))), Some(Action::Clear));
     }
 
     #[test]

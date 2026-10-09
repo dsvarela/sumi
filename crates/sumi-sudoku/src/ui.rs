@@ -1835,8 +1835,10 @@ fn entry_words(entry: &Entry) -> (&'static str, String, bool) {
     let found = match (entry.verdict, entry.stage) {
         (Some(Verdict::NoSolution), _) => ("These clues have no solution.".to_string(), true),
         (Some(Verdict::Several), _) => ("More than one solution.".to_string(), true),
-        (Some(Verdict::NotAGrid(cells)), _) => (format!("Pasted {cells} cells, not 81."), true),
+        (Some(Verdict::WrongCount(cells)), _) => (format!("Pasted {cells} cells, not 81."), true),
+        (Some(Verdict::BadCharacter(c)), _) => (format!("Pasted {c:?}: not a cell."), true),
         (Some(Verdict::ChangesAClue), _) => ("That changes a clue.".to_string(), true),
+        (Some(Verdict::AlreadySolved), _) => ("That fills the whole board.".to_string(), true),
         (None, Stage::Digits(level)) => (format!("One solution · {}.", level_name(level)), false),
         (None, Stage::Clues) => (String::new(), false),
     };
@@ -1874,13 +1876,14 @@ pub fn draw_entry(frame: &mut Frame, entry: &Entry, theme: &Theme) {
         let y = board.y + 4 * band - 1;
         buf.set_string(board.x, y, "───────┼───────┼───────", lines);
     }
-    for cell in 0..81 {
+    let clashes = entry.board().conflicts();
+    for (cell, &clash) in clashes.iter().enumerate() {
         let (dx, dy) = entry_spot(cell);
         let (x, y) = (board.x + dx, board.y + dy);
         if col(cell) % 3 == 2 && col(cell) != 8 {
             buf.set_string(x + 2, y, "│", lines);
         }
-        let (text, style) = match (entry.clues.get(cell), entry.digits.get(cell)) {
+        let (text, mut style) = match (entry.clues.get(cell), entry.digits.get(cell)) {
             (Some(d), _) => (
                 d.to_string(),
                 Style::new().fg(theme.clue).add_modifier(Modifier::BOLD),
@@ -1888,6 +1891,10 @@ pub fn draw_entry(frame: &mut Frame, entry: &Entry, theme: &Theme) {
             (None, Some(d)) => (d.to_string(), Style::new().fg(theme.digit)),
             (None, None) => ("·".to_string(), Style::new().fg(theme.dimmed)),
         };
+        // Clashes as the game draws them: red, and reversed besides.
+        if clash {
+            style = style.fg(theme.conflict).add_modifier(Modifier::REVERSED);
+        }
         if cell == entry.cursor {
             // The brackets mark the cursor without relying on colour.
             let mark = Style::new().fg(theme.accent).add_modifier(Modifier::BOLD);
@@ -3432,6 +3439,32 @@ mod tests {
         insta::assert_snapshot!(render_entry(&entry, entry_needed(&entry)));
     }
 
+    /// Clues that clash are drawn as the game draws a clash, red and
+    /// reversed; the rest aren't.
+    #[test]
+    fn the_entry_screen_marks_clashing_clues() {
+        let theme = Theme::tokyo_night_amoled();
+        let mut entry = Entry::new();
+        entry.paste(&format!("55{}", ".".repeat(79)));
+        entry.clues.set(80, Some(9));
+        let backend = render_entry(&entry, entry_needed(&entry));
+        let area = backend.buffer().area;
+        let board = Rect::new(0, 0, area.width, area.height)
+            .inner(ratatui::layout::Margin::new(3, 2))
+            .centered_horizontally(Constraint::Length(ENTRY_BOARD.0));
+        let at = |cell| {
+            let (dx, dy) = entry_spot(cell);
+            backend.buffer()[(board.x + dx, board.y + dy)].clone()
+        };
+        for cell in [0, 1] {
+            let shown = at(cell);
+            assert_eq!(shown.symbol(), "5");
+            assert_eq!(shown.fg, theme.conflict);
+            assert!(shown.modifier.contains(Modifier::REVERSED));
+        }
+        assert!(!at(80).modifier.contains(Modifier::REVERSED));
+    }
+
     /// Each stage and every verdict fits the box, keys whole, and a window
     /// a column or a row smaller is told the size.
     #[test]
@@ -3441,8 +3474,10 @@ mod tests {
             None,
             Some(Verdict::NoSolution),
             Some(Verdict::Several),
-            Some(Verdict::NotAGrid(100)),
+            Some(Verdict::WrongCount(100)),
+            Some(Verdict::BadCharacter('x')),
             Some(Verdict::ChangesAClue),
+            Some(Verdict::AlreadySolved),
         ];
         for stage in [Stage::Clues, Stage::Digits(Level::Expert)] {
             for verdict in verdicts {
