@@ -2,6 +2,7 @@
 //! directory, and the one way it writes a file: whole, or not at all.
 
 use std::collections::HashSet;
+use std::ffi::OsString;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -40,8 +41,9 @@ pub fn dir() -> Option<PathBuf> {
     Base::Data.dir()
 }
 
-/// An XDG base directory sumi keeps a folder in. macOS follows the same
-/// rule, so config and saves stay apart there too.
+/// A base directory sumi keeps a folder in: an XDG one, or where Windows
+/// keeps the same kind of file. macOS follows the XDG rule, so config and
+/// saves stay apart there too.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Base {
     Config,
@@ -49,29 +51,41 @@ pub enum Base {
 }
 
 impl Base {
-    /// sumi's folder in this base directory: under the path its variable
-    /// holds, or else under its place in the home directory. A relative
-    /// path is passed over, as the XDG spec asks, and a relative home too,
-    /// which would put the files wherever sumi was started.
+    /// sumi's folder in this base directory.
     pub fn dir(self) -> Option<PathBuf> {
-        let (var, fallback) = match self {
-            Base::Config => ("XDG_CONFIG_HOME", ".config"),
-            Base::Data => ("XDG_DATA_HOME", ".local/share"),
-        };
-        under_base(
-            std::env::var_os(var).map(PathBuf::from),
+        self.in_env(
+            |var| std::env::var_os(var),
             std::env::home_dir(),
-            fallback,
+            cfg!(windows),
         )
     }
-}
 
-fn under_base(base: Option<PathBuf>, home: Option<PathBuf>, fallback: &str) -> Option<PathBuf> {
-    let base = match base {
-        Some(base) if base.is_absolute() => base,
-        _ => home.filter(|home| home.is_absolute())?.join(fallback),
-    };
-    Some(base.join("sumi"))
+    /// sumi's folder under the path the XDG variable holds, or else under
+    /// the base's place in `home`, or on Windows the folder its own
+    /// variable names. A relative path is passed over, as the XDG spec
+    /// asks, and a relative home too, which would put the files wherever
+    /// sumi was started.
+    fn in_env(
+        self,
+        var: impl Fn(&str) -> Option<OsString>,
+        home: Option<PathBuf>,
+        windows: bool,
+    ) -> Option<PathBuf> {
+        let (xdg, fallback, own) = match self {
+            Base::Config => ("XDG_CONFIG_HOME", ".config", "APPDATA"),
+            Base::Data => ("XDG_DATA_HOME", ".local/share", "LOCALAPPDATA"),
+        };
+        let default = if windows {
+            var(own).map(PathBuf::from)
+        } else {
+            home.map(|home| home.join(fallback))
+        };
+        [var(xdg).map(PathBuf::from), default]
+            .into_iter()
+            .flatten()
+            .find(|base| base.is_absolute())
+            .map(|base| base.join("sumi"))
+    }
 }
 
 /// Makes `dir` and any folder above it that is missing, readable by their
@@ -329,35 +343,75 @@ fn write_synced(path: &Path, text: &str, like: &Path) -> std::io::Result<()> {
 mod tests {
     use super::*;
 
+    /// sumi's folder in a base directory, from `vars` and `home`, on
+    /// Unix and on Windows.
+    fn base_dirs(base: Base, vars: &[(&str, &Path)], home: Option<&Path>) -> [Option<PathBuf>; 2] {
+        let var = |name: &str| {
+            vars.iter()
+                .find(|(var, _)| *var == name)
+                .map(|(_, path)| path.as_os_str().to_owned())
+        };
+        [false, true].map(|windows| base.in_env(var, home.map(Path::to_path_buf), windows))
+    }
+
     #[test]
     fn a_base_directory_is_used_only_when_absolute() {
-        let home = Some(PathBuf::from("/home/p"));
-        let under = |base: Option<&str>, home: Option<PathBuf>| {
-            under_base(base.map(PathBuf::from), home, ".local/share")
-        };
-        assert_eq!(
-            under(Some("/x/data"), home.clone()),
-            Some(PathBuf::from("/x/data/sumi"))
-        );
-        assert_eq!(
-            under(Some("x/data"), home.clone()),
-            Some(PathBuf::from("/home/p/.local/share/sumi"))
-        );
-        assert_eq!(
-            under(Some(""), home.clone()),
-            Some(PathBuf::from("/home/p/.local/share/sumi"))
-        );
-        assert_eq!(
-            under(None, home),
-            Some(PathBuf::from("/home/p/.local/share/sumi"))
-        );
-        assert_eq!(
-            under(Some("/x/data"), None),
-            Some(PathBuf::from("/x/data/sumi"))
-        );
-        assert_eq!(under(None, None), None);
+        let root = std::env::temp_dir();
+        let home = root.join("home");
+        let xdg = root.join("xdg");
+        let local = root.join("local");
+        let data = |vars: &[(&str, &Path)], home: Option<&Path>| base_dirs(Base::Data, vars, home);
+        let shared = Some(home.join(".local/share/sumi"));
+        let windows = Some(local.join("sumi"));
+        let both = |path: &Path| [Some(path.join("sumi")), Some(path.join("sumi"))];
+        // The XDG variable wins anywhere, when it is absolute.
+        assert_eq!(data(&[("XDG_DATA_HOME", &xdg)], Some(&home)), both(&xdg));
+        for relative in ["x/data", ""] {
+            assert_eq!(
+                data(
+                    &[
+                        ("XDG_DATA_HOME", Path::new(relative)),
+                        ("LOCALAPPDATA", &local)
+                    ],
+                    Some(&home)
+                ),
+                [shared.clone(), windows.clone()]
+            );
+        }
+        assert_eq!(data(&[("XDG_DATA_HOME", &xdg)], None), both(&xdg));
+        assert_eq!(data(&[], None), [None, None]);
         // A relative home would put the files wherever sumi was started.
-        assert_eq!(under(None, Some(PathBuf::from("rel"))), None);
+        assert_eq!(data(&[], Some(Path::new("rel"))), [None, None]);
+        assert_eq!(
+            data(&[("LOCALAPPDATA", Path::new("rel"))], Some(&home)),
+            [shared, None]
+        );
+    }
+
+    /// Config roams with a Windows profile; the saves stay on the machine.
+    #[test]
+    fn windows_keeps_config_and_saves_in_its_own_folders() {
+        let root = std::env::temp_dir();
+        let vars = [
+            ("APPDATA", root.join("roaming")),
+            ("LOCALAPPDATA", root.join("local")),
+        ];
+        let vars: Vec<(&str, &Path)> = vars.iter().map(|(v, p)| (*v, p.as_path())).collect();
+        let home = root.join("home");
+        assert_eq!(
+            base_dirs(Base::Config, &vars, Some(&home)),
+            [
+                Some(home.join(".config/sumi")),
+                Some(root.join("roaming").join("sumi"))
+            ]
+        );
+        assert_eq!(
+            base_dirs(Base::Data, &vars, Some(&home)),
+            [
+                Some(home.join(".local/share/sumi")),
+                Some(root.join("local").join("sumi"))
+            ]
+        );
     }
 
     /// sumi's folders, and any base directory above them it makes, are
