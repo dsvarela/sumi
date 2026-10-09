@@ -328,23 +328,24 @@ impl Game {
         self.cursor = cell;
     }
 
-    /// The last move kept in the undo history: where the cursor was, and
-    /// the cells whose digit it changed or, for a move of notes only, the
-    /// cells whose notes it changed.
-    pub fn last_move(&self) -> Option<(Cell, Vec<Cell>)> {
-        let step = self.undo.last()?;
+    /// The last move kept in the undo history: the cells whose digit it
+    /// changed or, for a move of notes only, the cells whose notes it
+    /// changed. Empty with no move kept.
+    pub fn last_move(&self) -> Vec<Cell> {
+        let Some(step) = self.undo.last() else {
+            return Vec::new();
+        };
         let digits: Vec<Cell> = step
             .cells
             .iter()
             .filter(|(_, before, after)| before.digit != after.digit)
             .map(|&(cell, _, _)| cell)
             .collect();
-        let cells = if digits.is_empty() {
+        if digits.is_empty() {
             step.cells.iter().map(|&(cell, _, _)| cell).collect()
         } else {
             digits
-        };
-        Some((step.cursor, cells))
+        }
     }
 
     /// Moves to the same spot in the next box, wrapping around the board.
@@ -826,13 +827,13 @@ mod tests {
     #[test]
     fn the_last_move_is_the_cells_it_wrote_in() {
         let mut g = at(R1C3);
-        assert_eq!(g.last_move(), None);
+        assert!(g.last_move().is_empty());
         g.fill_candidates();
-        let (_, filled) = g.last_move().unwrap();
+        let filled = g.last_move();
         assert!(filled.len() > 40, "{filled:?}");
         g.move_to(R1C8);
         g.press(1);
-        assert_eq!(g.last_move(), Some((R1C8, vec![R1C8])));
+        assert_eq!(g.last_move(), [R1C8]);
     }
 
     #[test]

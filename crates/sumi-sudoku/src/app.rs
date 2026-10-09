@@ -412,6 +412,7 @@ impl App {
             level: saved
                 .as_ref()
                 .and_then(Game::level)
+                .filter(|&l| l != Level::Beyond)
                 .unwrap_or(Level::Medium),
             config,
             setup,
@@ -463,9 +464,11 @@ impl App {
     fn menu_context(&self) -> Context {
         Context {
             progress: self.progress(),
+            // A won game stays won: no bookmark takes it back.
             bookmarks: self
                 .session
                 .as_ref()
+                .filter(|s| !s.game.is_won())
                 .map_or(Vec::new(), |s| s.game.bookmarks()),
             stats: self.config.stats,
         }
@@ -584,6 +587,11 @@ impl App {
     /// rest of its view doesn't. Digits the game starts with that differ
     /// from the solution are marked, as `c` marks them, before any hint.
     fn play(&mut self, game: Game) {
+        // Enter after a win starts another of this level, unless no
+        // puzzle of it can be made, as for a typed-in Beyond one.
+        if let Some(level) = game.level().filter(|&l| l != Level::Beyond) {
+            self.level = level;
+        }
         let notes_hidden = self.session.as_ref().is_some_and(|s| s.view.notes_hidden);
         let mut session = Session::new(game, &self.config, self.clock);
         session.view.notes_hidden = notes_hidden;
@@ -726,12 +734,12 @@ impl App {
             Screen::Game | Screen::Learn => {}
             Screen::Stats => {
                 if action == Action::Close {
-                    self.back_to_menu(false);
+                    self.back_to_menu(false, Item::Stats);
                 }
             }
             Screen::Entry(entry) => match entry.handle(action) {
                 Outcome::Stay => {}
-                Outcome::Back => self.back_to_menu(false),
+                Outcome::Back => self.back_to_menu(false, Item::CustomPuzzle),
                 Outcome::Play(game) if context.progress.is_some() => {
                     let entry = entry.clone();
                     self.ask_to_replace(Pending::Custom { game, entry });
@@ -743,7 +751,7 @@ impl App {
                 match page.handle(action) {
                     None => {}
                     Some(SettingsChoice::Change(setting, forward)) => self.change(setting, forward),
-                    Some(SettingsChoice::Back) => self.back_to_menu(from_pause),
+                    Some(SettingsChoice::Back) => self.back_to_menu(from_pause, Item::Settings),
                 }
             }
             Screen::Menu(menu) => {
@@ -751,11 +759,11 @@ impl App {
                 match menu.handle(action, &context) {
                     None => {}
                     Some(Choice::Back) => match kind {
-                        Kind::Levels { from_pause } => self.back_to_menu(from_pause),
+                        Kind::Levels { from_pause } => self.back_to_menu(from_pause, Item::NewGame),
                         Kind::Replace => self.keep(),
                         Kind::Pause => self.resume(),
-                        Kind::Bookmarks => self.back_to_menu(true),
-                        Kind::Learn => self.back_to_menu(false),
+                        Kind::Bookmarks => self.back_to_menu(true, Item::Bookmarks),
+                        Kind::Learn => self.back_to_menu(false, Item::Learn),
                         Kind::Technique(index) => {
                             self.screen = Screen::Menu(Menu {
                                 kind: Kind::Learn,
@@ -779,7 +787,7 @@ impl App {
                         Item::Replace => match self.pending.take() {
                             Some(Pending::Level { level, .. }) => self.start(level),
                             Some(Pending::Custom { game, .. }) => self.play(*game),
-                            None => self.back_to_menu(false),
+                            None => self.back_to_menu(false, Item::NewGame),
                         },
                         Item::CustomPuzzle => self.screen = Screen::Entry(Entry::new()),
                         Item::Stats => self.screen = Screen::Stats,
@@ -802,6 +810,7 @@ impl App {
                             if let Some(session) = &mut self.session {
                                 session.game.go_to_bookmark(index);
                                 session.settle();
+                                session.view.notice = Some("back to a bookmark");
                             }
                             self.resume();
                         }
@@ -827,7 +836,8 @@ impl App {
         }
         let action = action(key);
         let view = &session.view;
-        let own = shown && view.hint.is_none() && !view.help && !view.paused;
+        let own =
+            shown && view.hint.is_none() && !view.help && !view.paused && !view.awaiting_filter;
         match action {
             Some(Action::Close) if own => self.leave_learning(),
             Some(Action::Confirm) if own => match learning.confirm(&mut session.game) {
@@ -881,16 +891,20 @@ impl App {
     /// for.
     fn keep(&mut self) {
         match self.pending.take() {
-            Some(Pending::Level { from_pause, .. }) => self.back_to_menu(from_pause),
+            Some(Pending::Level { from_pause, .. }) => self.back_to_menu(from_pause, Item::NewGame),
             Some(Pending::Custom { entry, .. }) => self.screen = Screen::Entry(entry),
-            None => self.back_to_menu(false),
+            None => self.back_to_menu(false, Item::NewGame),
         }
     }
 
     /// The pause menu, or the main menu.
-    fn back_to_menu(&mut self, from_pause: bool) {
+    /// The pause menu, or the main menu, at `from`, the item left by.
+    fn back_to_menu(&mut self, from_pause: bool, from: Item) {
         let kind = if from_pause { Kind::Pause } else { Kind::Main };
-        self.screen = Screen::Menu(Menu::new(kind));
+        let mut menu = Menu::new(kind);
+        let items = menu.items(&self.menu_context());
+        menu.selected = items.iter().position(|&i| i == from).unwrap_or(0);
+        self.screen = Screen::Menu(menu);
     }
 
     /// A left click or tap acts on what is drawn under it: on a menu or the
@@ -1024,13 +1038,11 @@ impl Session {
         self.view.animations.retain(|a| !a.done());
     }
 
-    /// Puts the cursor on the last move and shades the cells it changed,
-    /// until the next key or click.
+    /// Shades the cells the last move changed, until the next key or
+    /// click. The cursor stays where the player left it, so the shading
+    /// shows unless the cursor is on the move.
     fn show_last_move(&mut self) {
-        if let Some((cursor, cells)) = self.game.last_move() {
-            self.game.move_to(cursor);
-            self.view.last_move = cells;
-        }
+        self.view.last_move = self.game.last_move();
     }
 
     fn saved(&self) -> Saved {
@@ -1811,7 +1823,6 @@ mod tests {
         assert_eq!(s.game.cursor(), 0);
     }
 
-    /// Fills in the fixture puzzle's solution with keys.
     /// With a game in progress, a level chosen asks first; keeping it
     /// goes back where the level list came from, with the game untouched,
     /// and Esc keeps it too. Replacing starts the new game.
@@ -1820,17 +1831,20 @@ mod tests {
         let mut app = app_with(fixtures::game());
         let before = game_of(&mut app).game.board().to_string();
         // Esc, then New game and Medium from the pause menu.
-        press_keys(&mut app, &[KeyCode::Esc, KeyCode::Down, KeyCode::Enter]);
-        press_keys(&mut app, &[KeyCode::Enter]);
+        press_keys(&mut app, &[KeyCode::Esc]);
+        choose(&mut app, "New game");
+        choose(&mut app, "Medium");
         assert_eq!(menu_kind(&app), Some(Kind::Replace));
         press_keys(&mut app, &[KeyCode::Enter]);
         assert_eq!(menu_kind(&app), Some(Kind::Pause), "Keep it is first");
-        press_keys(&mut app, &[KeyCode::Down, KeyCode::Enter, KeyCode::Enter]);
+        choose(&mut app, "New game");
+        choose(&mut app, "Medium");
         press_keys(&mut app, &[KeyCode::Esc]);
         assert_eq!(menu_kind(&app), Some(Kind::Pause));
         assert_eq!(game_of(&mut app).game.board().to_string(), before);
-        press_keys(&mut app, &[KeyCode::Down, KeyCode::Enter, KeyCode::Enter]);
-        press_keys(&mut app, &[KeyCode::Down, KeyCode::Enter]);
+        choose(&mut app, "New game");
+        choose(&mut app, "Medium");
+        choose(&mut app, "Replace it");
         assert_eq!(app.screen, Screen::Game);
         assert_ne!(game_of(&mut app).game.board().to_string(), before);
 
@@ -1920,17 +1934,24 @@ mod tests {
             &[KeyCode::Char('4'), KeyCode::Char('b'), KeyCode::Char('a')],
         );
         assert_eq!(marked(&mut app), [51, 50]);
-        press_keys(&mut app, &[KeyCode::Esc, KeyCode::Down, KeyCode::Enter]);
+        press_keys(&mut app, &[KeyCode::Esc]);
+        choose(&mut app, "Bookmarks");
         assert_eq!(menu_kind(&app), Some(Kind::Bookmarks));
         press_keys(&mut app, &[KeyCode::Esc]);
-        assert_eq!(menu_kind(&app), Some(Kind::Pause));
-        press_keys(
-            &mut app,
-            &[KeyCode::Down, KeyCode::Enter, KeyCode::Down, KeyCode::Enter],
+        let Screen::Menu(pause) = &app.screen else {
+            panic!("the pause menu")
+        };
+        assert_eq!(
+            (pause.kind, pause.selected),
+            (Kind::Pause, 1),
+            "at Bookmarks"
         );
+        choose(&mut app, "Bookmarks");
+        choose(&mut app, "Bookmark 1");
         assert_eq!(app.screen, Screen::Game);
         assert!(game_of(&mut app).game.clock_is_running());
         assert_eq!(marked(&mut app), [51], "the newer one is dropped");
+        assert_eq!(game_of(&mut app).view.notice, Some("back to a bookmark"));
         assert_eq!(
             game_of(&mut app).game.board().get(2),
             None,
@@ -2167,6 +2188,68 @@ mod tests {
         assert_eq!(moved, Some(dir));
     }
 
+    /// Enter after a win starts another of the game's level: a typed-in
+    /// Hard game's is Hard; a Beyond game's, which can't be made, is the
+    /// last level asked for.
+    #[test]
+    fn enter_after_a_win_starts_a_level_that_can_be_made() {
+        for (level, next) in [(Level::Beyond, Level::Medium), (Level::Hard, Level::Hard)] {
+            let mut app = App::new(
+                Xoshiro256PlusPlus::seed_from_u64(1),
+                Start::Continue,
+                Some(fixtures::game().rated(level)),
+                Config::default(),
+                setup(),
+                now,
+            );
+            win(game_of(&mut app));
+            press_keys(&mut app, &[KeyCode::Enter]);
+            assert_eq!(game_of(&mut app).game.level(), Some(next), "{level:?}");
+        }
+        let mut app = app_with(fixtures::game());
+        app.play(fixtures::game().rated(Level::Expert));
+        win(game_of(&mut app));
+        press_keys(&mut app, &[KeyCode::Enter]);
+        assert_eq!(
+            game_of(&mut app).game.level(),
+            Some(Level::Expert),
+            "typed in"
+        );
+    }
+
+    /// A won game's pause menu offers no bookmark to go back to.
+    #[test]
+    fn a_won_game_keeps_its_win() {
+        let mut app = app_with(fixtures::game());
+        press_keys(&mut app, &[KeyCode::Char('b')]);
+        win(game_of(&mut app));
+        press_keys(&mut app, &[KeyCode::Esc]);
+        let Screen::Menu(menu) = &app.screen else {
+            panic!("the pause menu")
+        };
+        assert!(!menu.items(&app.menu_context()).contains(&Item::Bookmarks));
+    }
+
+    /// In a lesson, f then Esc cancels the filter's prompt, as in a game,
+    /// rather than leaving the lesson.
+    #[test]
+    fn the_filter_prompt_takes_its_key_in_a_lesson() {
+        let mut app = app_with(fixtures::game());
+        app.learn(1, Item::Lesson);
+        press_keys(
+            &mut app,
+            &[
+                KeyCode::Enter,
+                KeyCode::Enter,
+                KeyCode::Enter,
+                KeyCode::Enter,
+            ],
+        );
+        press_keys(&mut app, &[KeyCode::Char('f'), KeyCode::Esc]);
+        assert_eq!(app.screen, Screen::Learn);
+        assert!(!app.learning.as_ref().unwrap().0.view.awaiting_filter);
+    }
+
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("sumi-app-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -2247,9 +2330,10 @@ mod tests {
             app.slot.lock().unwrap().is_none(),
             "the file holds it all, so a signal writes nothing"
         );
-        // The last move, 1 in r1c3, is shown until the first key.
+        // The last move, 1 in r1c3, is shown until the first key, and the
+        // cursor is where it was left.
         assert_eq!(game_of(&mut app).view.last_move, [2]);
-        assert_eq!(game_of(&mut app).game.cursor(), 2);
+        assert_eq!(game_of(&mut app).game.cursor(), 80);
         assert!(!game_of(&mut app).game.clock_is_running());
         press_keys(&mut app, &[KeyCode::Enter]);
         assert_eq!(app.screen, Screen::Game);
