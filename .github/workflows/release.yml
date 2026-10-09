@@ -48,6 +48,12 @@ jobs:
           - target: x86_64-apple-darwin
             name: x86_64-macos
             os: macos-latest
+          # The C runtime linked in, so it runs without the Visual C++
+          # redistributable.
+          - target: x86_64-pc-windows-msvc
+            name: x86_64-windows
+            os: windows-latest
+            rustflags: -C target-feature=+crt-static
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -58,19 +64,28 @@ jobs:
         env:
           RUSTFLAGS: ${{ matrix.rustflags }}
         run: cargo build --release --locked -p sumi-sudoku --target ${{ matrix.target }}
+      # A .zip for Windows, which opens it without other tools.
       - name: Package
+        shell: bash
         env:
           # Keeps macOS tar from adding ._ files for extended attributes.
           COPYFILE_DISABLE: 1
         run: |
           name="sumi-$GITHUB_REF_NAME-${{ matrix.name }}"
           mkdir "$name"
-          cp "target/${{ matrix.target }}/release/sumi" LICENSE README.md "$name/"
-          tar czf "$name.tar.gz" "$name"
+          if [ "$RUNNER_OS" = Windows ]; then
+            cp "target/${{ matrix.target }}/release/sumi.exe" LICENSE README.md "$name/"
+            7z a "$name.zip" "$name"
+          else
+            cp "target/${{ matrix.target }}/release/sumi" LICENSE README.md "$name/"
+            tar czf "$name.tar.gz" "$name"
+          fi
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}
-          path: sumi-*.tar.gz
+          path: |
+            sumi-*.tar.gz
+            sumi-*.zip
           if-no-files-found: error
 
   release:
@@ -82,7 +97,7 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           merge-multiple: true
-      - run: sha256sum sumi-*.tar.gz > SHA256SUMS
+      - run: sha256sum sumi-*.tar.gz sumi-*.zip > SHA256SUMS
       # A run done again replaces the files of the draft it made before.
       - name: Draft the release
         env:
@@ -91,4 +106,4 @@ jobs:
         run: |
           gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 ||
             gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "sumi $GITHUB_REF_NAME"
-          gh release upload "$GITHUB_REF_NAME" --clobber sumi-*.tar.gz SHA256SUMS
+          gh release upload "$GITHUB_REF_NAME" --clobber sumi-*.tar.gz sumi-*.zip SHA256SUMS
