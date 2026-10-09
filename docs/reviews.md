@@ -5,6 +5,106 @@ its mechanism, what was fixed and where, what was closed by decision and why,
 and where deferred items went. The class register at the end names the
 defect shapes this codebase repeats; hunt them by name in later reviews.
 
+## 2026-10-09: milestone 7 (e089339..1d4e620)
+
+Four read-only lanes: the live terminal, driven in tmux with scratch data
+and config directories (it found that tmux can send raw SGR mouse
+sequences, so taps were tried too); what is written to and read from
+disk, with fixtures and mutants in a copy of the workspace; the logic in
+app, game, learn, entry, menu and ui and the call sites of the changed
+core modules; and the record and the comments. They reported about 90
+findings, about 70 distinct once overlaps were merged (a typed clue over
+a paper digit, the false "nothing shows it yet" and the Beyond level
+after a win were each found by two or three lanes). No lane came back
+clean. Drills started in under 0.1 s for every technique tried; lessons
+and drills left the saved game and the stats untouched, under signals too.
+
+**Prediction against result.** Predicted 35 to 60 findings; about 70
+came. Predicted, and found: the signal thread's edges (the cursor left
+hidden, a handler set up after the terminal changed), clicks reaching a
+lesson's board, the plan's stale sizes and module lists, tests whose
+fixtures can't fail. Predicted, and wrong: torn writes between the signal
+thread and the loop (the lock held), the saved-game key missing fields.
+Not predicted, and the most serious: a save or stats file that couldn't
+be read as text was overwritten by the next write, an unreadable
+played.json always was; two sumis undid each other's stats, puzzles
+played and moves; a transform could leave an Expert puzzle needing one
+Expert step; and a lesson told players a right digit "nothing on the
+board shows" when another technique did.
+
+### Fixed
+
+| Class | Finding and mechanism | Fix |
+| --- | --- | --- |
+| Process edges | A file that couldn't be read as text (a stray byte, no permission) was left in place and overwritten by the next write; an unreadable played.json was never moved aside; a second unreadable file replaced the first one moved aside | Every load goes through one `load`: any failure moves the file aside under a new name, and if it can't be moved nothing is written that run (structural, c95368c) |
+| Process edges | Two sumis: each wrote back its whole stats and played set, and quitting rewrote a game with nothing changed over the other's moves | Stats and played puzzles are added to what the file holds; a game unchanged with its clock stopped isn't written, on quitting or on a signal (c95368c) |
+| Process edges | A signal during a stats or played write could stop sumi with a temporary file left; the cursor stayed hidden after a signal; a failure setting up the handler left raw mode on, and without a data directory no handler ran | One process-wide write lock the signal thread holds to the end (structural); the cursor is shown; the handler is set up before the terminal changes and always runs (c95368c) |
+| Process edges | A save's mode was copied even when it left the file unreadable; a dangling symlink was replaced; a won save loaded as a game to continue; a newer save named a field rather than its version; counts in a hand-edited file overflowed; a stop between writing the stats and removing the save could count a win twice | Owner read and write kept, links followed to a file not made yet, the directory synced, a won save refused, the version read first, counts saturate, the save removed before the win is counted (c95368c) |
+| Two things must agree | Enter after a win panicked for a saved Beyond game and started the last level asked for after a typed-in one | Enter starts the game's level when one can be made (ac205e2) |
+| Input from where the player isn't looking | A won game's pause menu offered bookmarks, which un-won it; f then Esc in a lesson left the lesson; r answered a placing lesson; a tap on a note's spot during See it did nothing | No bookmarks after a win; the prompt has its keys; r, b and B don't reach a lesson's board; a tap there is a tap on the cell (ac205e2, 1c6fff5) |
+| Two things must agree | The cursor's colour hid the last move's shading on resume; going back from a screen reset the menu to its first item | The cursor stays where it was left; back lands on the item opened (ac205e2) |
+| No instrument | A lesson said "nothing on the board shows it yet" or "nothing rules out" for a step another technique makes | Answers are judged against every technique: another's step is right, named, and not a miss (structural, 1c6fff5) |
+| Two things must agree | Lesson boards never animated (the loop ticked only the game's session); a drill board that was its puzzle's last cell showed "Solved" instead of the lesson; feedback stayed after the board changed; key names were typed by hand in lesson words; "house" was on screen | One `board_session` for the loop (structural); the lesson outranks the win in the panel; feedback clears on a change; `{enter}` and `key_label`; a test keeps the banned words out of every lesson (structural, 1c6fff5) |
+| Two meanings, one value | `NotAGrid(n)` meant a wrong count and a bad character ("Pasted 81 cells, not 81.") | Two verdicts; borders other programs draw are passed over (structural, a04f9db) |
+| Two things must agree | A clue typed over a paper digit hid it; pasted digits that fill the board started a game won at 0:00 and counted in the stats | A clue takes the digit's place; a full board is refused; typing moves on, . clears, clashing clues are marked (a04f9db) |
+| Two things must agree | At a dead end B was offered when it would do nothing, check marks lost their Esc, 1-9 said place in a note mode; only the newest bookmark was checked for duplicates | `can_go_back`; Esc kept; toggle; any bookmark (2a47e49) |
+| No instrument | Transforms kept the level but could change the grader's path: 118 of 1,500 transformed Expert bank puzzles needed one Expert step; the comments said "rating" | The rule is `Grade::offers_as`, used by the generator, the bank builder and the app (structural); the app re-grades what it shows (7ea421e) |
+| Small | Stats needed 43 columns, so the phone's menu opened the too-small screen; a long name or count could break the table | 37 columns: Won, Best, Average, Hints; times from 10 h in hours; columns held (d812675) |
+| Two meanings, one value | `sumi rate` called a Beyond puzzle no technique starts on "no step needed", as for a solved board | Says no technique finds a first step (0e63aa5) |
+| A test that cannot fail | The store's write test passed with a plain `fs::write`; permission copying, step and bookmark cursors, short arrays, the recorded time and the menu-size test (which left out Learn and a technique's menu) were unchecked; my own tests navigated menus by counting keys | Each checks what its name says, watched failing under the lane's mutation; a `choose` helper picks items by label (c95368c, ac205e2, afb7dc4) |
+| Record | The data README's rebuild no longer reproduced the bank (ca9d849 changed the generator) and said sumi never generates Hard; comments on the bank, menus, game fields, the saved game's checks, `proven`, the app's level; a stacked test doc; an empty impl; CLAUDE.md's module list | Corrected; the README names the commit its files came from (afb7dc4) |
+| Record | The plan's Learn, Bookmarks and Controls text, the architecture tables (entry, stats, learn, store, cli, transform), where files live, main libraries, the Hint core signature, the Algorithms note on typed-in puzzles, sizes in milestone 6's notes, the Principles' panel, the Y-Wing lesson | Corrected in the plan the same day |
+
+### Closed by decision
+
+- **A hint applied with Enter answers a lesson or drill, and the drill's
+  last line doesn't tell found from shown.** Hints are help, not a
+  penalty; the plan leaves out scores.
+- **Strikes from two instances of the technique count as one answer.**
+  Each struck candidate is justified, which is the research's rule 2.
+- **The key list in a lesson is the game's whole list.** r, b and B no
+  longer act there; the list says what keys do in a game.
+- **q on the entry screen quits and drops the typed clues.** q quits from
+  every screen.
+- **"Replace the saved game?" doesn't name the game, and Esc goes back to
+  where the request came from.** Continue in the main menu names it; going
+  back where asked is the plan's rule.
+- **Unreadable files are named only on stderr after quitting.** Each is
+  moved aside, so nothing is lost, and the warning says where.
+- **A win in one sumi removes the save another sumi is playing.** That
+  sumi writes it again on its next key.
+- **Stats key techniques by their names.** The names are the techniques'
+  identity in bank.txt too.
+- **played.json keeps clues the bank no longer holds.** They are never
+  dealt, so they cost a few bytes.
+- **The last move on resume is the last step kept, not the last undone.**
+  Undo is a choice to drop that move.
+- **"Continue · 1 left" counts a wrong digit as filled.** It counts cells
+  to fill.
+- **Pasting into a game does nothing.** Bracketed paste is there so a
+  paste can't become keys.
+- **The stage after Find it is "Close" in the plan and "Done" on screen;
+  lessons say "strike" where hints say "remove".** The plan chose both.
+- **App's `Saved` key restates what `to_json` writes that a key can
+  change.** The round-trip test holds the save; the key only decides when
+  to write.
+
+### Deferred
+
+| Item | Goes to |
+| --- | --- |
+| The settings page needs 54 columns, so on a 38-column phone its new switches (Digit pad, Stats) can't be reached | Daniel's Termux check, with the phone work it asks for |
+| The save is flushed to the disk on every key that changes the game, which may be slow on the phone's storage | Daniel's Termux check, measured there |
+| The settings group and the key list's heading say "Notes", a word the hint wording keeps off the screen | Question to Daniel, in the plan's milestone 7 notes |
+| On macOS the saved game, played puzzles and stats share ~/Library/Application Support/sumi with config | Milestone 8, with the macOS build (the row from milestone 6, now with three files) |
+
+The milestone 6 and earlier rows naming milestone 7 are closed: menus
+sized by their items (51a001d), the pad switch (202262a), loaders proving
+one solution (f7a6008), stats not counting c and r (c20dcf7), near-
+duplicate Hard puzzles (ca9d849, by exact grid), repeated bank puzzles
+(82f6ef8), hidden notes saved (77b13eb), signals and q saving (3d1dfbe,
+77b13eb).
+
 ## 2026-10-08: milestone 6 (9ae2633..2cc6503)
 
 Four read-only lanes on the milestone's own commits (the milestone-5
@@ -317,9 +417,9 @@ test, and the shared-screen helpers. None described the pre-rewrite API.
 
 | Class | Seen | Hunt for |
 | --- | --- | --- |
-| Two things must agree, nothing makes them agree | 20 (settings page width vs its rows, hint_start shown vs used, status drop order vs the plan, a won game's keys vs the key list, a clock rule stated twice, the faint pulse vs the shading under it, hand-typed filter labels, the plan's sizes; before: a list of keys vs what changes the board, status line vs title, effect line vs removals, count vs containment, fill vs hint removal; before: key bar, board shown vs input, plan vs code, placement records vs notes, one step per house, stale candidates, comments vs measurements) | Text, sizes or rules stated in two files; a record of a change that later changes don't update |
-| Two meanings, one value | 6 (config defaults as "unset" and "failed to load", `Option<Level>` as "menu" and "any level"; before: empty notes, complete digit, a grade for an invalid grid, Beyond's step count) | An empty set, zero or `None` standing for more than one state |
-| Input from where the player isn't looking | 7 (a paused hint's ×, a click on nothing leaving a prompt open; before: hidden board, paste, modifiers, view changing under a hidden board, marks across games) | Any path from an event to a game change that skips what is on screen |
-| A test that cannot fail | 25 | Tests whose fixture can't tell the order or the branch apart; a loop that stops checking early; mutate the line the name claims |
-| No instrument | 6 (unknown config and theme keys, a separation claimed and unchecked, floors written twice; before: contrast, outside grader, panel fit) | A rule in the plan or CLAUDE.md that no test checks |
-| Process edges | 3 (a panic leaving terminal modes on, a half-written config file, drawing into a redirected stdout; before: closed pipes and no terminal) | What the terminal, the disk or the pipe is left holding when sumi stops early or isn't where it expects |
+| Two things must agree, nothing makes them agree | 30 (a level after a win, the last move under the cursor, the menu item after going back, a lesson's frozen animations and stale feedback, hand-typed keys in lessons, a clue over a paper digit, B offered when it can't act, the data README's rebuild; before: settings page width vs its rows, hint_start shown vs used, status drop order vs the plan, a won game's keys vs the key list, a clock rule stated twice, the faint pulse vs the shading under it, hand-typed filter labels, the plan's sizes; before: a list of keys vs what changes the board, status line vs title, effect line vs removals, count vs containment, fill vs hint removal; before: key bar, board shown vs input, plan vs code, placement records vs notes, one step per house, stale candidates, comments vs measurements) | Text, sizes or rules stated in two files; a record of a change that later changes don't update |
+| Two meanings, one value | 8 (a paste verdict for a count and a character, no step for solved and stuck; before: config defaults as "unset" and "failed to load", `Option<Level>` as "menu" and "any level"; before: empty notes, complete digit, a grade for an invalid grid, Beyond's step count) | An empty set, zero or `None` standing for more than one state |
+| Input from where the player isn't looking | 11 (bookmarks un-winning a game, a lesson taking the filter's keys, r in a lesson, a tap in See it; before: a paused hint's ×, a click on nothing leaving a prompt open; before: hidden board, paste, modifiers, view changing under a hidden board, marks across games) | Any path from an event to a game change that skips what is on screen |
+| A test that cannot fail | 37 | Tests whose fixture can't tell the order or the branch apart; a loop that stops checking early; mutate the line the name claims |
+| No instrument | 9 (a lesson's claim nothing shows a step, the transform's rating, banned words in lessons; before: unknown config and theme keys, a separation claimed and unchecked, floors written twice; before: contrast, outside grader, panel fit) | A rule in the plan or CLAUDE.md that no test checks |
+| Process edges | 9 (a file unreadable as text overwritten, two sumis undoing each other, a stop mid-write, the cursor after a signal, a handler set up too late, a won save continued; before: a panic leaving terminal modes on, a half-written config file, drawing into a redirected stdout; before: closed pipes and no terminal) | What the terminal, the disk or the pipe is left holding when sumi stops early or isn't where it expects |
