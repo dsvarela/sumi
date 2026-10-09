@@ -1,7 +1,8 @@
 //! Graded Hard and Expert puzzles built into the program. Hard ones are
-//! about 1 in 300 random puzzles, too rare to generate while a player waits.
-//! Expert ones generate in tens of milliseconds on a laptop; they come from
-//! here too, chosen so they spread over the Expert techniques, which
+//! about 1 in 300 random puzzles, too rare to generate while a player
+//! waits, so they are generated only once the bank's are all played.
+//! Expert ones generate in tens of milliseconds on a laptop; they come
+//! from here too, chosen so they spread over the Expert techniques, which
 //! generation does not do. `data/README.md` says where the puzzles come
 //! from and the rule they are chosen by.
 
@@ -293,13 +294,13 @@ mod tests {
         }
     }
 
-    /// Each puzzle's hardest technique is named as its grade names it,
-    /// 2-String Kite included.
+    /// Every puzzle comes with its hardest technique, named as its grade
+    /// names it, 2-String Kite included; checked on every 97th.
     #[test]
     fn puzzles_name_their_hardest_technique() {
         let all = puzzles();
         assert_eq!(all.len(), 1000);
-        for (clues, hardest) in all.iter().take(1000).step_by(97) {
+        for (clues, hardest) in all.iter().step_by(97) {
             assert_eq!(grade(clues).unwrap().hardest.unwrap().name(), *hardest);
         }
         assert!(all.iter().any(|(_, h)| *h == "2-String Kite"));

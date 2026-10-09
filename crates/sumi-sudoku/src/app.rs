@@ -329,8 +329,8 @@ struct App {
     screen: Screen,
     session: Option<Session>,
     rng: Xoshiro256PlusPlus,
-    /// The level Enter starts after a win: the last one asked for, Medium
-    /// until one is.
+    /// The level Enter starts after a win: the last game's, unless no
+    /// puzzle of it can be made; Medium until there is one.
     level: Level,
     config: Config,
     setup: Setup,
@@ -740,7 +740,8 @@ impl App {
         self.menu_action(action)
     }
 
-    /// A key on a menu or the settings page.
+    /// A key on a screen without a board: a menu, the settings page, the
+    /// entry screen or the stats.
     fn menu_action(&mut self, action: Action) -> Flow {
         let context = self.menu_context();
         match &mut self.screen {
@@ -2572,8 +2573,6 @@ mod tests {
         assert_eq!(game_of(&mut app).game.elapsed(now()), secs(6));
     }
 
-    /// From the pause menu, the main menu offers Continue, which goes back
-    /// to the same game.
     /// After a win Esc opens the pause menu, so another level or the
     /// settings are in reach; Resume goes back to the won board with the
     /// clock still stopped.
@@ -2590,6 +2589,8 @@ mod tests {
         assert_eq!(game_of(&mut app).game.elapsed(now()), secs(4));
     }
 
+    /// From the pause menu, the main menu offers Continue, which goes back
+    /// to the same game.
     #[test]
     fn the_main_menu_continues_the_game_in_progress() {
         let mut app = app_with(fixtures::game());

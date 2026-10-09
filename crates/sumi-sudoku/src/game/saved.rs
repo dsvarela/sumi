@@ -4,8 +4,10 @@
 //! saved game comes back paused.
 //!
 //! A saved game is read as untrusted text. Its clues must prove one
-//! solution again, and no cell, digit or step may break what a game holds,
-//! such as a step that changes a clue.
+//! solution again; every cell, digit and mode must be one; no board, step
+//! or bookmark may change a clue; and a won game isn't one to continue.
+//! A step's before-state isn't checked against the board: a bad history
+//! makes undo odd, not the game wrong.
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};

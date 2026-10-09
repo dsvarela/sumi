@@ -106,8 +106,6 @@ const fn pad_height(hidden: bool) -> u16 {
     if hidden { 0 } else { PAD_HEIGHT }
 }
 
-impl Density {}
-
 /// What the screen shows besides the game itself. None of it is undoable.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct View {
@@ -843,7 +841,7 @@ fn help_words(action: Action) -> &'static str {
         Action::Undo => "undo",
         Action::Redo => "redo",
         Action::Bookmark => "bookmark the board",
-        Action::BackToBookmark => "back to the last bookmark",
+        Action::BackToBookmark => "back to a bookmark",
         Action::Help => "this list",
         Action::Pause => "pause, or carry on (Space)",
         Action::Quit => "quit",
@@ -3415,6 +3413,9 @@ mod tests {
             Kind::Levels { from_pause: false },
             Kind::Replace,
             Kind::Bookmarks,
+            Kind::Learn,
+            Kind::Technique(3),
+            Kind::Technique(9),
         ];
         for kind in kinds {
             for context in [Context::default(), playing()] {
@@ -3437,7 +3438,11 @@ mod tests {
                     rows.iter().all(|r| !r.trim().is_empty()),
                     "{kind:?}: {text}"
                 );
-                let widest = rows.iter().map(|r| r.trim().chars().count()).max().unwrap();
+                let widest = rows[usize::from(boxed.bottom())..]
+                    .iter()
+                    .map(|r| r.trim().chars().count())
+                    .max()
+                    .unwrap();
                 assert!(
                     boxed.width == width || widest as u16 + 2 == width,
                     "{kind:?}: {text}"

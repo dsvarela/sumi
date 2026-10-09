@@ -1,6 +1,7 @@
 //! One game in progress: the puzzle and its rating, the player's digits
-//! and notes, the cursor, the input mode, the undo history, the hints and
-//! reveals used, and the time played.
+//! and notes, the cursor, the input mode, the undo history, the bookmarks,
+//! the hints and reveals used and the techniques the hints took, and the
+//! time played.
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
@@ -36,9 +37,11 @@ pub struct Game {
     revision: u64,
     /// The puzzle's rating, when it is known.
     level: Option<Level>,
-    /// Hint ladders opened, and cells `r` changed.
+    /// Hint ladders opened.
     hints_used: u32,
+    /// How many hints opened took each technique, by its name.
     hint_techniques: BTreeMap<String, u32>,
+    /// Cells `r` changed.
     revealed: u32,
     /// Time played before the clock last started, and when that was, if it
     /// is running.

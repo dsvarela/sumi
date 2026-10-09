@@ -148,7 +148,8 @@ impl Menu {
         let selected = match kind {
             // Medium: a middle ground for someone who hasn't said.
             Kind::Levels { .. } => 1,
-            // Keeping is first: Enter pressed in a hurry loses nothing.
+            // Replace's first item keeps the game: Enter pressed in a hurry
+            // loses nothing.
             Kind::Main
             | Kind::Pause
             | Kind::Replace
@@ -160,7 +161,8 @@ impl Menu {
     }
 
     /// The items in order. Continue is there only while a game is in
-    /// progress, and Bookmarks only while it has some.
+    /// progress, Bookmarks only while it has some, Stats only when turned
+    /// on, and Lesson only for a technique with one.
     pub fn items(&self, context: &Context) -> Vec<Item> {
         match self.kind {
             Kind::Main => {

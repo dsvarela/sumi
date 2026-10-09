@@ -1,8 +1,9 @@
 # Data
 
 `bank.txt` is built into sumi: 500 Hard and 500 Expert puzzles, which sumi
-plays instead of generating them. Edit it only by rebuilding it, since a test
-re-grades every line and fails on any difference.
+deals before generating any of those levels, each shown relabelled and
+moved. Edit it only by rebuilding it, since a test re-grades every line and
+fails on any difference.
 
 The first line names the technique order the grades were made with, and the
 second names the columns. Each line after them is a puzzle and its grade, as
@@ -94,6 +95,13 @@ for seed in (seq 101 112)
 end > /tmp/bank/gen-hard.txt
 cargo run --release -p sumi-core --example build_bank -- /tmp/bank/hard.txt /tmp/bank/diabolical.txt /tmp/bank/gen-hard.txt > crates/sumi-core/data/bank.txt
 ```
+
+The generated files came from sumi as of commit ea54080 (feat(core): spread
+the bank over each level's techniques, 2026-10-08). Since commit ca9d849
+(fix(core): make at most three puzzles with one solution, 2026-10-09),
+`sumi gen --level hard` keeps to 3 puzzles per solution, so the same seeds
+give other files and another bank: build sumi at ea54080 for the `gen` step
+to get this one back.
 
 The twelve `sumi gen` runs took about two hours on a 12-thread laptop, and
 the builder about three minutes. The builder prints the counts above on

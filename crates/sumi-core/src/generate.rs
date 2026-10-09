@@ -57,8 +57,8 @@ pub struct LevelGenerator {
 /// Tries per seed, since the puzzles one seed leads to look alike.
 const TRIES_PER_SEED: u32 = 50;
 
-/// Puzzles made with one solution, since those from one seed differ by a
-/// few clues.
+/// The most puzzles made with one solution, since those from one seed
+/// differ by a few clues.
 const PER_SOLUTION: usize = 3;
 
 impl LevelGenerator {
