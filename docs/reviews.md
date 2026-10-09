@@ -5,6 +5,85 @@ its mechanism, what was fixed and where, what was closed by decision and why,
 and where deferred items went. The class register at the end names the
 defect shapes this codebase repeats; hunt them by name in later reviews.
 
+## 2026-10-09: milestone 8, phases 1 to 4 (6fda4de..bebc14a)
+
+Run before anything is published, since a crates.io version can't be
+taken back. Four read-only lanes: the live terminal in tmux with scratch
+folders (every settings size from 33 to 60 columns and 30 to 48 rows,
+taps on every kind of row, the word "note" on every screen); what gets
+published and written (both packaged crates unpacked and tested, the two
+Linux release builds, the action versions, XDG edge cases under strace);
+the settings and folder logic and its callers, with mutations in a copy
+of the workspace; and the record and comments. They reported 73
+findings, about 45 distinct: the pad-hidden settings dead end was found
+by three lanes, the too-small size and the marks clash by two. No lane
+came back clean. The workflows have never run: nothing is pushed.
+
+**Prediction against result.** Predicted 15 to 30 findings; about 45
+came. Predicted, and found: the narrow form's edges (the dead end, the
+too-small size), README claims wrong in detail (the bank, the theme's
+name, "a smaller window"), workflow gaps (an untested tag, a version
+mismatch). Predicted, and wrong: "note" surviving on other screens (none
+did). Not predicted: the rename's "marks" taking a second meaning, the
+longer status form pushing the timer off the dense line, and a relative
+HOME putting saves wherever sumi was started.
+
+### Fixed
+
+| Class | Finding and mechanism | Fix |
+| --- | --- | --- |
+| Two things must agree | The narrow settings form counted its key bar at 34 columns, where it wraps, so it asked for 46 rows; at 38×45, where a game with the pad hidden plays, settings opened on the too-small screen, where only q works. Its test checked the pad shown only | One `needs_at(width)` sizes the form for fitting and for the too-small message alike, the key bar counted at the window's width (structural); the test covers the pad hidden (1f7cdca) |
+| A test that cannot fail | Nothing failed with the forms' order reversed, the too-small size swapped, or clicks beside the box landing on a setting; the too-small screen named the narrow size one row short of the wide form | Tests for wide first, the nearest form at the window's width, and clicks beside the box, each watched failing under its mutation (1f7cdca) |
+| Small | The save error lost its error number in the narrow form's two rows | "Not saved: reason", tested in both forms (1f7cdca) |
+| Two meanings, one value | After the rename "marks" meant box marks and c's check marks on one screen; "both hidden (v)" named nothing on the status line; x said "clear in this mode", but clears candidates in digit mode | Check marks read "checks", the short form "hidden (v)", x "clear candidates or marks" (ca3f28a) |
+| Two things must agree | The longer short form pushed the timer the player turned on off the dense status line (32 characters for 30) | "hidden (v)" fits beside the time; a test holds them together (ca3f28a) |
+| A test that cannot fail | `no_screen_says_note` rendered the wide settings and one mode's key bar only | It renders both settings forms and every mode's key bar (ca3f28a) |
+| Process edges | A relative HOME was used while a relative XDG path was refused, so saves followed the working directory; folders were made with the umask's mode, not 0700 as the XDG spec asks | A relative home is passed over; one `make_dir` makes every folder 0700 (structural, 44b6952) |
+| Two things must agree | Each XDG variable and its fallback were two loose strings at two call sites | `Base::{Config, Data}` holds each pair (structural, 44b6952) |
+| No instrument | A tag on an untested commit, or naming another version than the crates, drafted a release; running it again made a second draft; macOS tar could add `._` files | A check job tests and compares the tag with every crate's version; the draft's files are replaced; `COPYFILE_DISABLE` (structural, 7da4fe1) |
+| Two things must agree | The MSRV job's toolchain was typed apart from `rust-version` | It reads `rust-version` from Cargo.toml (structural, 7da4fe1) |
+| Record | The README: the bank never hands over to generation, "a smaller window" switches to dense, "Okabe-Ito" (the screen says "Colour-blind safe"), the menu's items, Esc, `cargo install` without `--locked`, macOS quarantine, tmux behind the screenshots, XDG paths counting only when absolute; sumi-core's README: an eliminating hint places no digit | Corrected (1dabb4c) |
+| Record | Comments: `VALUE_WIDTH` beside its label only, `Config::dir` and `store::dir` "if the system has a home directory", store's module scope, a doubled line in `back_to_menu`; the plan's 54×30 and "notes hidden" read as current | Corrected (1f7cdca, 44b6952, 24013a8); the plan the same day |
+
+### Closed by decision
+
+- **"Candidates that clash" also reverses clashing box marks.** The
+  label names the common case; a longer one widens every setting row.
+- **The status line drops "hidden (v)" behind a filter or a hint in the
+  dense layout, and shows "(v)" while paused.** The plan's priority order
+  puts what the player asked for last above it; v works once resumed.
+- **Code says "notes" where the screen says candidates and marks.** It
+  is the code's word for both layers, and never shown.
+- **The saves sit under XDG_DATA_HOME, not XDG_STATE_HOME.** One folder
+  for what sumi keeps; the README names it.
+- **macOS config and saves in ~/Library/Application Support are not
+  moved.** Nothing was released that wrote there.
+- **The release archive's README shows no images offline.** It links the
+  repository, where they are.
+- **The MSRV job checks without tests and examples; clippy runs on a
+  moving stable.** The promise is for `cargo install`; a new lint is
+  fixed when it comes.
+- **Running sumi-core's tests from its crate in debug grades the bank
+  slowly.** The workspace profile isn't published; `--release` takes 7 s.
+- **Commit bd5beb4 says the page's width comes from the longest label;
+  aa71eed says the MSRV job builds.** The width also takes the value's
+  room, and the job checks; history isn't rewritten for it.
+
+### Deferred
+
+| Item | Goes to |
+| --- | --- |
+| Neither workflow has run, so the macOS builds and tests are unchecked | Phase 6, the first push, before the tag |
+| The repository is private, so the README's images and links, and crates.io's, fail for everyone else | Phase 6: made public before anything is published |
+| `shorten` counts characters, not columns, so a user theme named in wide characters overruns its row | Later, with user themes |
+| "t on box marks" types its key by hand | Later, with key remapping |
+| "1.88" is also typed in the README | Kept: the README is read where Cargo.toml isn't |
+
+The milestone 7 rows naming the settings page's 54 columns, the "Notes"
+wording and macOS's shared folder are closed by bd5beb4, 37696cb and
+2691412; the row on syncing the save on the phone stays with Daniel's
+Termux check, which is best effort (decided 9 October 2026).
+
 ## 2026-10-09: milestone 7 (e089339..1d4e620)
 
 Four read-only lanes: the live terminal, driven in tmux with scratch data
@@ -417,9 +496,9 @@ test, and the shared-screen helpers. None described the pre-rewrite API.
 
 | Class | Seen | Hunt for |
 | --- | --- | --- |
-| Two things must agree, nothing makes them agree | 30 (a level after a win, the last move under the cursor, the menu item after going back, a lesson's frozen animations and stale feedback, hand-typed keys in lessons, a clue over a paper digit, B offered when it can't act, the data README's rebuild; before: settings page width vs its rows, hint_start shown vs used, status drop order vs the plan, a won game's keys vs the key list, a clock rule stated twice, the faint pulse vs the shading under it, hand-typed filter labels, the plan's sizes; before: a list of keys vs what changes the board, status line vs title, effect line vs removals, count vs containment, fill vs hint removal; before: key bar, board shown vs input, plan vs code, placement records vs notes, one step per house, stale candidates, comments vs measurements) | Text, sizes or rules stated in two files; a record of a change that later changes don't update |
-| Two meanings, one value | 8 (a paste verdict for a count and a character, no step for solved and stuck; before: config defaults as "unset" and "failed to load", `Option<Level>` as "menu" and "any level"; before: empty notes, complete digit, a grade for an invalid grid, Beyond's step count) | An empty set, zero or `None` standing for more than one state |
+| Two things must agree, nothing makes them agree | 34 (a form sized at one width and drawn at another, the status line's short form against the timer, a variable and its fallback, the MSRV typed apart; before: a level after a win, the last move under the cursor, the menu item after going back, a lesson's frozen animations and stale feedback, hand-typed keys in lessons, a clue over a paper digit, B offered when it can't act, the data README's rebuild; before: settings page width vs its rows, hint_start shown vs used, status drop order vs the plan, a won game's keys vs the key list, a clock rule stated twice, the faint pulse vs the shading under it, hand-typed filter labels, the plan's sizes; before: a list of keys vs what changes the board, status line vs title, effect line vs removals, count vs containment, fill vs hint removal; before: key bar, board shown vs input, plan vs code, placement records vs notes, one step per house, stale candidates, comments vs measurements) | Text, sizes or rules stated in two files; a record of a change that later changes don't update |
+| Two meanings, one value | 11 ("marks" for box marks and checks, "both" with nothing beside it, "this mode" in digit mode; before: a paste verdict for a count and a character, no step for solved and stuck; before: config defaults as "unset" and "failed to load", `Option<Level>` as "menu" and "any level"; before: empty notes, complete digit, a grade for an invalid grid, Beyond's step count) | An empty set, zero or `None` standing for more than one state |
 | Input from where the player isn't looking | 11 (bookmarks un-winning a game, a lesson taking the filter's keys, r in a lesson, a tap in See it; before: a paused hint's ×, a click on nothing leaving a prompt open; before: hidden board, paste, modifiers, view changing under a hidden board, marks across games) | Any path from an event to a game change that skips what is on screen |
-| A test that cannot fail | 37 | Tests whose fixture can't tell the order or the branch apart; a loop that stops checking early; mutate the line the name claims |
-| No instrument | 9 (a lesson's claim nothing shows a step, the transform's rating, banned words in lessons; before: unknown config and theme keys, a separation claimed and unchecked, floors written twice; before: contrast, outside grader, panel fit) | A rule in the plan or CLAUDE.md that no test checks |
-| Process edges | 9 (a file unreadable as text overwritten, two sumis undoing each other, a stop mid-write, the cursor after a signal, a handler set up too late, a won save continued; before: a panic leaving terminal modes on, a half-written config file, drawing into a redirected stdout; before: closed pipes and no terminal) | What the terminal, the disk or the pipe is left holding when sumi stops early or isn't where it expects |
+| A test that cannot fail | 39 | Tests whose fixture can't tell the order or the branch apart; a loop that stops checking early; mutate the line the name claims |
+| No instrument | 10 (a release from an untested tag; before: a lesson's claim nothing shows a step, the transform's rating, banned words in lessons; before: unknown config and theme keys, a separation claimed and unchecked, floors written twice; before: contrast, outside grader, panel fit) | A rule in the plan or CLAUDE.md that no test checks |
+| Process edges | 10 (a relative HOME and folders made open; before: a file unreadable as text overwritten, two sumis undoing each other, a stop mid-write, the cursor after a signal, a handler set up too late, a won save continued; before: a panic leaving terminal modes on, a half-written config file, drawing into a redirected stdout; before: closed pipes and no terminal) | What the terminal, the disk or the pipe is left holding when sumi stops early or isn't where it expects |
