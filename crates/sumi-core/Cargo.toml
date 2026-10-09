@@ -1,10 +1,13 @@
 [package]
 name = "sumi-core"
 version = "0.1.0"
-description = "Sudoku engine for sumi: grid, solver and generator"
+description = "Sudoku engine behind sumi: solving, generating, grading and hints"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+rust-version.workspace = true
+keywords = ["sudoku", "solver", "generator", "puzzle", "hints"]
+categories = ["algorithms", "games"]
 
 [dependencies]
 rand = "0.10.3"

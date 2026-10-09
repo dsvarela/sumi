@@ -5,6 +5,9 @@ description = "A calm terminal Sudoku game that teaches"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+rust-version.workspace = true
+keywords = ["sudoku", "tui", "terminal", "game", "puzzle"]
+categories = ["games", "command-line-utilities"]
 
 [[bin]]
 name = "sumi"
