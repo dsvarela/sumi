@@ -273,7 +273,9 @@ fn write_unlocked(path: &Path, text: &str) -> std::io::Result<()> {
         let _ = std::fs::remove_file(&temporary);
         return written;
     }
-    // The rename itself reaches the disk with the directory.
+    // The rename itself reaches the disk with the directory. Windows can't
+    // open a folder as a file to sync it.
+    #[cfg(unix)]
     if let Some(parent) = target.parent()
         && let Ok(dir) = std::fs::File::open(parent)
     {
@@ -302,7 +304,8 @@ fn followed(path: &Path) -> PathBuf {
 
 /// Writes `text` to a new file at `path` with `like`'s permissions, if
 /// `like` exists, and waits for it to reach the disk. The owner can always
-/// read and write it, so a save never makes the next one unreadable.
+/// read and write it, so a save never makes the next one unreadable, and on
+/// Windows, where it is never read-only, a failed write can delete it.
 fn write_synced(path: &Path, text: &str, like: &Path) -> std::io::Result<()> {
     let mut file = std::fs::File::create(path)?;
     file.write_all(text.as_bytes())?;
@@ -313,6 +316,10 @@ fn write_synced(path: &Path, text: &str, like: &Path) -> std::io::Result<()> {
             use std::os::unix::fs::PermissionsExt;
             permissions.set_mode(permissions.mode() | 0o600);
         }
+        // Windows keeps only the read-only flag, and this clears it.
+        #[cfg(windows)]
+        #[allow(clippy::permissions_set_readonly_false)]
+        permissions.set_readonly(false);
         file.set_permissions(permissions)?;
     }
     file.sync_all()
@@ -431,6 +438,29 @@ mod tests {
         assert_eq!(mode, 0o644);
         assert!(still_link);
         assert_eq!(target.unwrap(), "linked");
+    }
+
+    /// Windows won't replace a read-only file: the write fails, and leaves
+    /// the file as it was and nothing beside it.
+    #[cfg(windows)]
+    #[test]
+    fn a_write_over_a_read_only_file_fails_cleanly() {
+        let dir = scratch("read-only");
+        let path = dir.join("stats.json");
+        std::fs::write(&path, "old").unwrap();
+        let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&path, permissions.clone()).unwrap();
+        let failed = write_whole(&path, "new");
+        let kept = std::fs::read_to_string(&path);
+        let left = names(&dir);
+        #[allow(clippy::permissions_set_readonly_false)]
+        permissions.set_readonly(false);
+        std::fs::set_permissions(&path, permissions).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(failed.is_err());
+        assert_eq!(kept.unwrap(), "old");
+        assert_eq!(left, ["stats.json"]);
     }
 
     /// A file that can't be read, as JSON or even as text, is moved
