@@ -1,8 +1,11 @@
 //! The files sumi keeps between runs in its data directory, and the one
 //! way it writes a file: whole, or not at all.
 
+use std::collections::HashSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+
+use sumi_core::grid::Grid;
 
 use crate::game::Game;
 
@@ -39,6 +42,46 @@ pub fn load_game(dir: &Path) -> Result<Option<Game>, String> {
             Err(err) => format!("{}: {why}; couldn't move it aside: {err}", path.display()),
         }
     })
+}
+
+/// The bank puzzles played, by their clues, so none comes twice.
+const PLAYED: &str = "played.json";
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Played {
+    played: Vec<String>,
+}
+
+/// The bank puzzles played, none if nothing is saved.
+pub fn load_played(dir: &Path) -> Result<HashSet<Grid>, String> {
+    let path = dir.join(PLAYED);
+    let json = match std::fs::read_to_string(&path) {
+        Ok(json) => json,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(HashSet::new()),
+        Err(err) => return Err(format!("{}: {err}", path.display())),
+    };
+    let named = |why: String| format!("{}: {why}", path.display());
+    let played: Played = serde_json::from_str(&json).map_err(|err| named(err.to_string()))?;
+    played
+        .played
+        .iter()
+        .map(|clues| {
+            clues
+                .parse()
+                .map_err(|_| named(format!("{clues:?} isn't a grid")))
+        })
+        .collect()
+}
+
+pub fn save_played(dir: &Path, played: &HashSet<Grid>) -> Result<(), String> {
+    let mut clues: Vec<String> = played.iter().map(Grid::to_string).collect();
+    clues.sort();
+    let json = serde_json::to_string(&Played { played: clues }).expect("strings make JSON");
+    let path = dir.join(PLAYED);
+    std::fs::create_dir_all(dir)
+        .and_then(|()| write_whole(&path, &json))
+        .map_err(|err| format!("{}: {err}", path.display()))
 }
 
 /// Forgets the game in progress, once it is won.
@@ -120,5 +163,22 @@ mod tests {
         assert!(err.contains("moved to"), "{err}");
         assert_eq!(aside.unwrap(), "{");
         assert!(matches!(again, Ok(None)));
+    }
+
+    /// The puzzles played read back as written; none before any is.
+    #[test]
+    fn the_puzzles_played_read_back() {
+        let dir = std::env::temp_dir().join(format!("sumi-played-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let none = load_played(&dir);
+        let played: HashSet<Grid> = [crate::fixtures::CLUES.parse().unwrap(), Grid::EMPTY].into();
+        save_played(&dir, &played).unwrap();
+        let back = load_played(&dir);
+        std::fs::write(dir.join(PLAYED), r#"{"played":["12"]}"#).unwrap();
+        let broken = load_played(&dir);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(none, Ok(HashSet::new()));
+        assert_eq!(back, Ok(played));
+        assert!(broken.unwrap_err().contains("isn't a grid"));
     }
 }

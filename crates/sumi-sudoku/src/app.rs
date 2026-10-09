@@ -1,6 +1,7 @@
 //! The interactive game: one loop that draws, waits for an event and hands it
 //! to the session.
 
+use std::collections::{HashMap, HashSet};
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -18,9 +19,10 @@ use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 use sumi_core::bank;
 use sumi_core::generate::LevelGenerator;
-use sumi_core::grid::{CELLS, House};
+use sumi_core::grid::{CELLS, Grid, House};
 use sumi_core::hint::Hint;
 use sumi_core::technique::Level;
+use sumi_core::transform::Transform;
 
 use crate::animation::{Animation, Kind as AnimationKind, complete_houses};
 use crate::config::{Config, MarksToCandidates};
@@ -130,10 +132,12 @@ fn mouse(on: bool) -> io::Result<()> {
 }
 
 /// What the app needs from outside it: where the config and the saved
-/// game live, the themes found, and what the terminal allows.
+/// game live, the bank puzzles played, the themes found, and what the
+/// terminal allows.
 struct Setup {
     dir: Option<PathBuf>,
     data: Option<PathBuf>,
+    played: HashSet<Grid>,
     themes: Vec<(String, Theme)>,
     no_color: bool,
     truecolor: bool,
@@ -164,9 +168,19 @@ fn setup() -> (Config, Setup, Option<Game>, Vec<String>) {
             None
         })
         .flatten();
+    let played = data
+        .as_deref()
+        .map(store::load_played)
+        .transpose()
+        .unwrap_or_else(|err| {
+            warnings.push(format!("couldn't read the puzzles played: {err}"));
+            None
+        })
+        .unwrap_or_default();
     let setup = Setup {
         dir,
         data,
+        played,
         themes,
         no_color: std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty()),
         truecolor: std::env::var("COLORTERM").is_ok_and(|v| v == "truecolor" || v == "24bit"),
@@ -298,6 +312,8 @@ struct App {
     /// nothing kept writes nothing.
     saved: Option<Saved>,
     slot: Slot,
+    /// One per level, so each remembers what it has made.
+    generators: HashMap<Level, LevelGenerator>,
 }
 
 /// What a saved game holds that a key can change, short of the time.
@@ -344,6 +360,7 @@ impl App {
             save_error: None,
             saved: None,
             slot: Slot::default(),
+            generators: HashMap::new(),
         };
         if let Some(game) = saved {
             let mut session = Session::new(game, &app.config, clock);
@@ -476,11 +493,42 @@ impl App {
     fn start(&mut self, level: Level) {
         self.level = level;
         let notes_hidden = self.session.as_ref().is_some_and(|s| s.view.notes_hidden);
-        let game = new_game(&mut self.rng, level);
+        let game = self.new_game(level);
         let mut session = Session::new(game, &self.config, self.clock);
         session.view.notes_hidden = notes_hidden;
         self.session = Some(session);
         self.screen = Screen::Game;
+    }
+
+    /// A game of `level`, with its rating. Hard and Expert puzzles come
+    /// from the bank, which says why, until every one of the level has
+    /// been played; the rest are generated. Each is shown under a random
+    /// transform, so a puzzle met again, or one like it, looks new.
+    fn new_game(&mut self, level: Level) -> Game {
+        let rng = &mut self.rng;
+        let played = &mut self.setup.played;
+        let puzzle = match bank::pick(rng, level, played) {
+            Some(puzzle) => {
+                played.insert(*puzzle.clues());
+                if let Some(dir) = &self.setup.data
+                    && let Err(err) = store::save_played(dir, played)
+                {
+                    let line = format!("couldn't save the puzzles played: {err}");
+                    if !self.warnings.contains(&line) {
+                        self.warnings.push(line);
+                    }
+                }
+                puzzle
+            }
+            None => {
+                let generator = self
+                    .generators
+                    .entry(level)
+                    .or_insert_with(|| LevelGenerator::new(level));
+                generator.next(rng).0
+            }
+        };
+        Game::new(Transform::random(rng).puzzle(&puzzle)).rated(level)
     }
 
     fn resume(&mut self) {
@@ -975,19 +1023,6 @@ impl Session {
             }
         }
     }
-}
-
-/// A game of `level`, with its rating. Easy and Medium puzzles are
-/// generated on the spot; Hard and Expert ones come from the bank, which
-/// says why.
-fn new_game(rng: &mut Xoshiro256PlusPlus, level: Level) -> Game {
-    let puzzle = match level {
-        Level::Hard | Level::Expert => {
-            bank::pick(rng, level).expect("the bank holds Hard and Expert puzzles")
-        }
-        _ => LevelGenerator::new(level).next(rng).0,
-    };
-    Game::new(puzzle).rated(level)
 }
 
 fn is_ctrl_c(key: KeyEvent) -> bool {
@@ -1544,6 +1579,39 @@ mod tests {
         assert_eq!(menu_kind(&app), Some(Kind::Main));
     }
 
+    /// A bank puzzle started counts as played and is written down; it
+    /// is shown transformed, and once a level's bank is played the level
+    /// is generated.
+    #[test]
+    fn played_bank_puzzles_are_remembered_and_not_given_again() {
+        let dir = scratch("played");
+        let mut all_expert = HashSet::new();
+        let mut rng = Xoshiro256PlusPlus::seed_from_u64(1);
+        while let Some(puzzle) = bank::pick(&mut rng, Level::Expert, &all_expert) {
+            all_expert.insert(*puzzle.clues());
+        }
+        let mut played = all_expert.clone();
+        let last = *played.iter().next().unwrap();
+        played.remove(&last);
+        let mut app = app_with(fixtures::game());
+        app.setup.data = Some(dir.clone());
+        app.setup.played = played;
+        let game = app.new_game(Level::Expert);
+        assert!(app.setup.played.contains(&last));
+        assert_eq!(store::load_played(&dir).unwrap(), app.setup.played);
+        assert_ne!(game.board(), &last, "shown transformed");
+        assert_eq!(game.board().filled(), last.filled());
+
+        let game = app.new_game(Level::Expert);
+        assert_eq!(
+            app.setup.played.len(),
+            all_expert.len(),
+            "generated, not from the bank"
+        );
+        assert_eq!(game.level(), Some(Level::Expert));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("sumi-app-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1712,6 +1780,7 @@ mod tests {
         Setup {
             dir: None,
             data: None,
+            played: HashSet::new(),
             themes: Theme::load_all(None).0,
             no_color: false,
             truecolor: true,

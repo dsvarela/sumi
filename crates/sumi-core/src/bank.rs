@@ -5,6 +5,8 @@
 //! generation does not do. `data/README.md` says where the puzzles come
 //! from and the rule they are chosen by.
 
+use std::collections::HashSet;
+
 use rand::Rng;
 use rand::seq::IndexedRandom;
 
@@ -17,11 +19,11 @@ use crate::technique::{HiddenSingle, Level, Technique};
 
 const BANK: &str = include_str!("../data/bank.txt");
 
-/// A random bank puzzle of `level`, or `None` for a level the bank doesn't
-/// hold.
-pub fn pick<R: Rng + ?Sized>(rng: &mut R, level: Level) -> Option<Puzzle> {
+/// A random bank puzzle of `level` whose clues aren't in `played`, or
+/// `None` once every one is, or for a level the bank doesn't hold.
+pub fn pick<R: Rng + ?Sized>(rng: &mut R, level: Level, played: &HashSet<Grid>) -> Option<Puzzle> {
     let puzzles: Vec<Grid> = lines()
-        .filter(|(_, l, _)| *l == level)
+        .filter(|(clues, l, _)| *l == level && !played.contains(clues))
         .map(|(clues, _, _)| clues)
         .collect();
     let clues = *puzzles.choose(rng)?;
@@ -287,11 +289,32 @@ mod tests {
     #[test]
     fn pick_gives_a_puzzle_of_the_level_asked() {
         let mut rng = Xoshiro256PlusPlus::seed_from_u64(1);
+        let none = HashSet::new();
         for level in [Level::Hard, Level::Expert] {
-            let puzzle = pick(&mut rng, level).unwrap();
+            let puzzle = pick(&mut rng, level, &none).unwrap();
             assert_eq!(grade(puzzle.clues()).unwrap().level, level);
             assert_eq!(solve(puzzle.clues()), Solutions::Unique(*puzzle.solution()));
         }
-        assert_eq!(pick(&mut rng, Level::Easy), None);
+        assert_eq!(pick(&mut rng, Level::Easy, &none), None);
+    }
+
+    /// Played puzzles aren't picked again; with all but one played, that
+    /// one comes, and with all played, none.
+    #[test]
+    fn pick_leaves_out_the_puzzles_played() {
+        let mut rng = Xoshiro256PlusPlus::seed_from_u64(1);
+        let mut played: HashSet<Grid> = lines()
+            .filter(|(_, l, _)| *l == Level::Expert)
+            .map(|(clues, _, _)| clues)
+            .collect();
+        let last = *played.iter().next().unwrap();
+        played.remove(&last);
+        assert_eq!(
+            pick(&mut rng, Level::Expert, &played).map(|p| *p.clues()),
+            Some(last)
+        );
+        played.insert(last);
+        assert_eq!(pick(&mut rng, Level::Expert, &played), None);
+        assert!(pick(&mut rng, Level::Hard, &played).is_some());
     }
 }

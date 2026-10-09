@@ -705,7 +705,7 @@ mod tests {
             } else {
                 Level::Expert
             };
-            let puzzle = crate::bank::pick(&mut rng, level).unwrap();
+            let puzzle = crate::bank::pick(&mut rng, level, &Default::default()).unwrap();
             for step in &solving_steps(puzzle.clues()) {
                 let effect = step.technique.explain(step).effect;
                 // "Remove 2, 7 and 9 elsewhere in row 1." or "Remove 4 from

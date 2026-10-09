@@ -11,4 +11,5 @@ pub mod puzzle;
 pub mod solver;
 pub mod step;
 pub mod technique;
+pub mod transform;
 mod words;

@@ -2300,7 +2300,8 @@ mod tests {
         let mut rng = rand::rngs::Xoshiro256PlusPlus::seed_from_u64(5);
         for level in [Level::Hard, Level::Expert] {
             for _ in 0..8 {
-                let mut game = Game::new(sumi_core::bank::pick(&mut rng, level).unwrap());
+                let mut game =
+                    Game::new(sumi_core::bank::pick(&mut rng, level, &Default::default()).unwrap());
                 while let Some(step) = game.hint().step().cloned() {
                     hints.push(game.hint());
                     game.apply_hint(&step);
