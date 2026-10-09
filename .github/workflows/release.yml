@@ -33,15 +33,20 @@ jobs:
       matrix:
         include:
           # Static binaries, so one file runs on any Linux. The aarch64
-          # one is also the Termux build.
+          # one is also the Termux build. `name` is what the archive is
+          # called by.
           - target: x86_64-unknown-linux-musl
+            name: x86_64-linux
             os: ubuntu-latest
           - target: aarch64-unknown-linux-musl
+            name: aarch64-linux
             os: ubuntu-latest
             rustflags: -C linker=rust-lld
           - target: aarch64-apple-darwin
+            name: aarch64-macos
             os: macos-latest
           - target: x86_64-apple-darwin
+            name: x86_64-macos
             os: macos-latest
     runs-on: ${{ matrix.os }}
     steps:
@@ -58,7 +63,7 @@ jobs:
           # Keeps macOS tar from adding ._ files for extended attributes.
           COPYFILE_DISABLE: 1
         run: |
-          name="sumi-$GITHUB_REF_NAME-${{ matrix.target }}"
+          name="sumi-$GITHUB_REF_NAME-${{ matrix.name }}"
           mkdir "$name"
           cp "target/${{ matrix.target }}/release/sumi" LICENSE README.md "$name/"
           tar czf "$name.tar.gz" "$name"
