@@ -912,7 +912,6 @@ impl App {
         }
     }
 
-    /// The pause menu, or the main menu.
     /// The pause menu, or the main menu, at `from`, the item left by.
     fn back_to_menu(&mut self, from_pause: bool, from: Item) {
         let kind = if from_pause { Kind::Pause } else { Kind::Main };
