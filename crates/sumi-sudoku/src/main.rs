@@ -10,6 +10,7 @@ mod game;
 mod input;
 mod menu;
 mod settings;
+mod store;
 mod theme;
 mod ui;
 

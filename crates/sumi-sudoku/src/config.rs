@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use crate::store;
+
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Config {
@@ -74,21 +76,6 @@ impl Default for Highlights {
             note_clashes: true,
         }
     }
-}
-
-/// Writes `text` to `path` all at once: into a file beside it, then renamed
-/// over it, so a crash or a full disk never leaves half a file. A symlink is
-/// followed, so the file it points to is the one replaced.
-fn write_whole(path: &Path, text: &str) -> std::io::Result<()> {
-    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let mut temporary = target.clone().into_os_string();
-    temporary.push(".sumi-new");
-    let temporary = PathBuf::from(temporary);
-    std::fs::write(&temporary, text)?;
-    if let Ok(metadata) = std::fs::metadata(&target) {
-        std::fs::set_permissions(&temporary, metadata.permissions())?;
-    }
-    std::fs::rename(&temporary, &target)
 }
 
 /// Puts `value` into `slot` through `make`, if it has the type `make`
@@ -214,7 +201,8 @@ impl Config {
             }
         }
         std::fs::create_dir_all(dir).map_err(|err| format!("{}: {err}", dir.display()))?;
-        write_whole(&path, &doc.to_string()).map_err(|err| format!("{}: {err}", path.display()))
+        store::write_whole(&path, &doc.to_string())
+            .map_err(|err| format!("{}: {err}", path.display()))
     }
 
     /// Reads `config.toml` from `dir`, with a line for each thing in it
