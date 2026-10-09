@@ -18,7 +18,7 @@ use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 use sumi_core::bank;
 use sumi_core::generate::LevelGenerator;
-use sumi_core::grid::House;
+use sumi_core::grid::{CELLS, House};
 use sumi_core::hint::Hint;
 use sumi_core::technique::Level;
 
@@ -26,7 +26,7 @@ use crate::animation::{Animation, Kind as AnimationKind, complete_houses};
 use crate::config::{Config, MarksToCandidates};
 use crate::game::{CandidatesFromMarks, Game, Mode};
 use crate::input::{Action, FilterKey, action, filter_key};
-use crate::menu::{Choice, Item, Kind, Menu};
+use crate::menu::{Choice, Item, Kind, Menu, Progress};
 use crate::settings::{Choice as SettingsChoice, Page, Setting};
 use crate::store;
 use crate::theme::{self, Theme};
@@ -193,10 +193,10 @@ fn play(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
             app.area = frame.area();
             shown = app.fits(frame.area());
             let theme = &app.theme;
-            let in_progress = app.in_progress();
+            let progress = app.progress();
             match (&app.screen, &app.session) {
                 (Screen::Menu(menu), _) => {
-                    ui::draw_menu(frame, menu, &menu.items(in_progress), theme);
+                    ui::draw_menu(frame, menu, &menu.items(progress), theme);
                 }
                 (Screen::Settings(page), _) => {
                     let page = ui::SettingsPage {
@@ -362,9 +362,14 @@ impl App {
         app
     }
 
-    /// Whether a game is there to continue: one started and not won.
-    fn in_progress(&self) -> bool {
-        self.session.as_ref().is_some_and(|s| !s.game.is_won())
+    /// The game there is to continue, one started and not won, as the
+    /// main menu shows it.
+    fn progress(&self) -> Option<Progress> {
+        let game = &self.session.as_ref()?.game;
+        (!game.is_won()).then(|| Progress {
+            level: game.level(),
+            left: CELLS - game.board().filled(),
+        })
     }
 
     /// Writes the game in progress to the saved game, if anything kept has
@@ -401,9 +406,9 @@ impl App {
 
     /// Whether the screen showing can be drawn in a window of this size.
     fn fits(&self, area: Rect) -> bool {
-        match self.screen {
+        match &self.screen {
             Screen::Game => ui::fits(area),
-            Screen::Menu(_) => ui::menu_fits(area),
+            Screen::Menu(menu) => ui::menu_fits(area, menu, &menu.items(self.progress())),
             Screen::Settings(_) => ui::settings_fit(area),
         }
     }
@@ -524,7 +529,7 @@ impl App {
 
     /// A key on a menu or the settings page.
     fn menu_action(&mut self, action: Action) -> Flow {
-        let in_progress = self.in_progress();
+        let progress = self.progress();
         match &mut self.screen {
             Screen::Game => {}
             Screen::Settings(page) => {
@@ -540,7 +545,7 @@ impl App {
             }
             Screen::Menu(menu) => {
                 let kind = menu.kind;
-                match menu.handle(action, in_progress) {
+                match menu.handle(action, progress) {
                     None => {}
                     Some(Choice::Back) => match kind {
                         Kind::Levels { from_pause: true } => {
@@ -553,7 +558,7 @@ impl App {
                         Kind::Main => {}
                     },
                     Some(Choice::Chosen(item)) => match item {
-                        Item::Continue | Item::Resume => self.resume(),
+                        Item::Continue(_) | Item::Resume => self.resume(),
                         Item::NewGame => {
                             let from_pause = kind == Kind::Pause;
                             self.screen = Screen::Menu(Menu::new(Kind::Levels { from_pause }));
@@ -579,7 +584,7 @@ impl App {
             return Flow::Continue;
         }
         let (x, y) = (mouse.column, mouse.row);
-        let in_progress = self.in_progress();
+        let progress = self.progress();
         match &mut self.screen {
             Screen::Game => {
                 let session = self.session.as_mut().expect("the game screen shows a game");
@@ -587,7 +592,7 @@ impl App {
                 Flow::Continue
             }
             Screen::Menu(menu) => {
-                let items = menu.items(in_progress);
+                let items = menu.items(progress);
                 match ui::menu_hit(self.area, menu, &items, x, y) {
                     Some(i) => {
                         menu.selected = i;
@@ -1578,7 +1583,7 @@ mod tests {
         let Screen::Menu(menu) = &app.screen else {
             panic!("the main menu")
         };
-        assert_eq!(menu.items(app.in_progress()).first(), Some(&Item::NewGame));
+        assert_eq!(menu.items(app.progress()).first(), Some(&Item::NewGame));
     }
 
     fn win(s: &mut Session) {
@@ -2005,7 +2010,7 @@ mod tests {
         let Screen::Menu(menu) = &app.screen else {
             panic!("no menu")
         };
-        let items = menu.items(app.session.is_some());
+        let items = menu.items(app.progress());
         (0..app.area.height)
             .flat_map(|y| (0..app.area.width).map(move |x| (x, y)))
             .find(|&(x, y)| ui::menu_hit(app.area, menu, &items, x, y) == Some(index))
