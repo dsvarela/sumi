@@ -1689,27 +1689,24 @@ enum Weight {
 }
 
 /// The stats screen's lines: a table of the levels solved, hints per game
-/// under it, and the techniques hints took most. All at most 37 wide,
-/// times up to 99 hours included.
+/// under it, and the techniques hints took most, each at most
+/// `STATS_TEXT_WIDTH` wide whatever the file holds.
 fn stats_text(stats: &Stats) -> Vec<(String, Weight)> {
     let rows = stats.rows();
     if rows.is_empty() {
         return vec![("No games solved yet.".to_string(), Weight::Text)];
     }
-    let row = |level: &str, solved: &str, best: &str, average: &str, hints: &str| {
-        format!("{level:<6} {solved:>6} {best:>8} {average:>8} {hints:>5}")
+    let row = |level: &str, won: &str, best: &str, average: &str, hints: &str| {
+        format!("{level:<6} {won:>4} {best:>7} {average:>7} {hints:>5}")
     };
-    let mut lines = vec![(
-        row("", "Solved", "Best", "Average", "Hints"),
-        Weight::Heading,
-    )];
+    let mut lines = vec![(row("", "Won", "Best", "Average", "Hints"), Weight::Heading)];
     for r in rows {
         let line = row(
             level_name(r.level),
-            &r.solved.to_string(),
-            &clock_text(r.best),
-            &clock_text(r.average),
-            &format!("{:.1}", r.hints_per_game),
+            &r.solved.min(9999).to_string(),
+            &stats_time(r.best),
+            &stats_time(r.average),
+            &format!("{:.1}", r.hints_per_game.min(99.9)),
         );
         lines.push((line, Weight::Text));
     }
@@ -1719,10 +1716,23 @@ fn stats_text(stats: &Stats) -> Vec<(String, Weight)> {
         lines.push((String::new(), Weight::Text));
         lines.push(("Hints took most".to_string(), Weight::Heading));
         for (technique, count) in most {
-            lines.push((format!("{technique:<32}{count:>5}"), Weight::Text));
+            let mut name: String = technique.chars().take(27).collect();
+            if technique.chars().count() > 27 {
+                name.pop();
+                name.push('…');
+            }
+            lines.push((format!("{name:<28}{:>5}", count.min(99999)), Weight::Text));
         }
     }
     lines
+}
+
+/// A time in the stats: at most 7 wide, whole hours from 10 on.
+fn stats_time(time: std::time::Duration) -> String {
+    match time.as_secs() / 3600 {
+        hours @ 10.. => format!("{}h", hours.min(999_999)),
+        _ => clock_text(time),
+    }
 }
 
 fn stats_lines(stats: &Stats, theme: &Theme) -> Vec<Line<'static>> {
@@ -1740,7 +1750,9 @@ fn stats_lines(stats: &Stats, theme: &Theme) -> Vec<Line<'static>> {
         .collect()
 }
 
-const STATS_TEXT_WIDTH: u16 = 37;
+/// The stats' lines are at most this wide, so with the frame and a
+/// column of space each side they fit the phone's 38 columns.
+const STATS_TEXT_WIDTH: u16 = 33;
 
 fn stats_keys() -> Vec<(&'static str, &'static str)> {
     vec![
@@ -1753,7 +1765,7 @@ fn stats_keys() -> Vec<(&'static str, &'static str)> {
 /// row and two columns of space, and the key bar.
 fn stats_needed(stats: &Stats) -> (u16, u16) {
     let lines = stats_text(stats).len() as u16;
-    let width = STATS_TEXT_WIDTH + 6;
+    let width = STATS_TEXT_WIDTH + 4;
     let key_rows = key_rows(&stats_keys(), usize::from(width)).len() as u16;
     (width, lines + 4 + key_rows)
 }
@@ -1784,7 +1796,7 @@ pub fn draw_stats(frame: &mut Frame, stats: &Stats, theme: &Theme) {
         Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
     )));
     frame.render_widget(block, boxed);
-    let inner = boxed.inner(ratatui::layout::Margin::new(3, 2));
+    let inner = boxed.inner(ratatui::layout::Margin::new(2, 2));
     frame.render_widget(Paragraph::new(lines), inner);
     let keys_text = key_bar_lines(&stats_keys(), theme, usize::from(area.width));
     frame.render_widget(
@@ -3545,7 +3557,7 @@ mod tests {
                 let hint = game.hint();
                 game.count_hint(&hint);
             }
-            stats.record(&game, std::time::Duration::from_secs(36_000 + 59 * 60 + 59));
+            stats.record(&game, std::time::Duration::from_secs(400 * 3600));
         }
         let backend = |stats: &Stats, size: (u16, u16)| {
             let mut terminal = Terminal::new(TestBackend::new(size.0, size.1)).unwrap();
@@ -3556,7 +3568,14 @@ mod tests {
             terminal.backend().clone()
         };
         insta::assert_snapshot!(backend(&stats, stats_needed(&stats)));
-        for (line, _) in stats_text(&stats) {
+        // A file edited by hand can hold any name and any count.
+        let edited: Stats = serde_json::from_str(
+            r#"{"levels":{"easy":{"games":4294967295,"best_ms":18446744073709551615,
+            "total_ms":18446744073709551615,"hints":4294967295}},
+            "hint_techniques":{"A technique with a much longer name than any":4294967295}}"#,
+        )
+        .unwrap();
+        for (line, _) in stats_text(&stats).into_iter().chain(stats_text(&edited)) {
             assert!(
                 line.chars().count() <= usize::from(STATS_TEXT_WIDTH),
                 "{line}"
@@ -3566,6 +3585,7 @@ mod tests {
         let text = text_of(&backend(&none, stats_needed(&none)));
         assert!(text.contains("No games solved yet."), "{text}");
         let (width, height) = stats_needed(&stats);
+        assert!(width <= DENSE.0, "the phone's {} columns: {width}", DENSE.0);
         for smaller in [(width - 1, height), (width, height - 1)] {
             let text = text_of(&backend(&stats, smaller));
             assert!(text.contains(&format!("{width}×{height}")), "{text}");
