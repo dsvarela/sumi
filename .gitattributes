@@ -1,0 +1,3 @@
+# The bank, lessons and themes are built into sumi as they are checked
+# out, and tests compare files byte for byte, so Windows checkouts keep LF.
+* text=auto eol=lf
