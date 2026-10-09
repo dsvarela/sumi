@@ -215,7 +215,7 @@ fn gen_puzzles(count: u32, seed: Option<u64>, level: Option<Level>) -> io::Resul
             Some(generator) => generator.next(&mut rng).0,
             None => generate_solvable(&mut rng).0,
         };
-        writeln!(out, "{}", puzzle.clues)?;
+        writeln!(out, "{}", puzzle.clues())?;
     }
     out.flush()?;
     Ok(true)

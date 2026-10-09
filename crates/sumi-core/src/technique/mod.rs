@@ -225,23 +225,23 @@ mod tests {
         ) {
             let puzzle = generate(&mut Xoshiro256PlusPlus::seed_from_u64(seed));
             let mut candidates: [Digits; CELLS] =
-                std::array::from_fn(|c| puzzle.clues.possible(c));
+                std::array::from_fn(|c| puzzle.clues().possible(c));
             for (cell, digit) in removals {
-                if puzzle.solution.get(cell) != Some(digit) {
+                if puzzle.solution().get(cell) != Some(digit) {
                     candidates[cell].remove(digit);
                 }
             }
-            let mut p = Position::with_candidates(&puzzle.clues, candidates).known_unique();
+            let mut p = Position::with_candidates(puzzle.clues(), candidates).known_unique();
             loop {
                 let mut first = None;
                 for technique in ORDER {
                     for step in technique.all(&p) {
                         for &(cell, digits) in &step.removals {
-                            let answer = puzzle.solution.get(cell).unwrap();
+                            let answer = puzzle.solution().get(cell).unwrap();
                             prop_assert!(!digits.contains(answer), "{:?} in {:?}", step, p);
                         }
                         if let Some((cell, digit)) = step.placement {
-                            prop_assert_eq!(puzzle.solution.get(cell), Some(digit), "{:?}", step);
+                            prop_assert_eq!(puzzle.solution().get(cell), Some(digit), "{:?}", step);
                         }
                         first.get_or_insert(step);
                     }

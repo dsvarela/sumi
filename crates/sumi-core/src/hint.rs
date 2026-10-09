@@ -9,6 +9,7 @@
 use crate::digits::Digits;
 use crate::grid::{CELLS, Cell, Grid, House, box_of};
 use crate::position::Position;
+use crate::puzzle::Puzzle;
 use crate::step::Step;
 use crate::technique::{Level, ORDER};
 use crate::words;
@@ -50,11 +51,11 @@ pub struct Rung {
     pub placement: Option<(Cell, u8)>,
 }
 
-/// The hint for a board. `notes` are the player's candidates for each cell, or
-/// `None` for a cell with none written, which holds every digit it can.
-/// `unique` says the puzzle has exactly one solution, which the techniques
-/// that rely on that need.
-pub fn find(board: &Grid, solution: &Grid, notes: &[Option<Digits>; CELLS], unique: bool) -> Hint {
+/// The hint for a board played from `puzzle`. `notes` are the player's
+/// candidates for each cell, or `None` for a cell with none written, which
+/// holds every digit it can.
+pub fn find(board: &Grid, puzzle: &Puzzle, notes: &[Option<Digits>; CELLS]) -> Hint {
+    let solution = puzzle.solution();
     if let Some(cell) =
         (0..CELLS).find(|&c| board.get(c).is_some() && board.get(c) != solution.get(c))
     {
@@ -70,13 +71,11 @@ pub fn find(board: &Grid, solution: &Grid, notes: &[Option<Digits>; CELLS], uniq
     if let Some(cell) = (0..CELLS).find(answer_missing) {
         return Hint::StruckOut(cell);
     }
-    let mut position = Position::with_candidates(
+    let position = Position::with_candidates(
         board,
         std::array::from_fn(|c| notes[c].unwrap_or_else(|| board.possible(c))),
-    );
-    if unique {
-        position = position.known_unique();
-    }
+    )
+    .known_unique();
     let Some(step) = ORDER.iter().find_map(|t| t.find(&position)) else {
         return Hint::Stuck;
     };
@@ -293,7 +292,6 @@ fn cells_line(step: &Step, second_group: &[Cell]) -> String {
 mod tests {
     use super::*;
     use crate::generate::generate;
-    use crate::solver::{Solutions, solve};
     use crate::technique::examples::*;
     use proptest::prelude::*;
     use rand::SeedableRng;
@@ -370,16 +368,13 @@ mod tests {
         std::array::from_fn(|c| p.grid().get(c).is_none().then(|| p.candidates(c)))
     }
 
-    fn solution_of(grid: &Grid) -> Grid {
-        let Solutions::Unique(solution) = solve(grid) else {
-            panic!("no unique solution");
-        };
-        solution
+    fn puzzle_of(grid: &Grid) -> Puzzle {
+        Puzzle::new(*grid).expect("one solution")
     }
 
     fn hint_for(example: &Example) -> Hint {
         let p = example.position();
-        find(p.grid(), &solution_of(p.grid()), &notes_of(&p), true)
+        find(p.grid(), &puzzle_of(p.grid()), &notes_of(&p))
     }
 
     fn step_of(hint: &Hint) -> &StepHint {
@@ -576,7 +571,8 @@ mod tests {
     #[test]
     fn the_hint_goes_to_a_wrong_digit_before_anything_else() {
         let p = FULL_HOUSE_1.position();
-        let solution = solution_of(p.grid());
+        let puzzle = puzzle_of(p.grid());
+        let solution = *puzzle.solution();
         let mut board = *p.grid();
         let cell = (0..CELLS).find(|&c| board.get(c).is_none()).unwrap();
         let wrong = (1..=9).find(|&d| Some(d) != solution.get(cell)).unwrap();
@@ -585,28 +581,27 @@ mod tests {
         let mut notes = [None; CELLS];
         let other = (cell + 1..CELLS).find(|&c| board.get(c).is_none()).unwrap();
         notes[other] = Some(Digits::NONE);
-        assert_eq!(find(&board, &solution, &notes, true), Hint::Mistake(cell));
+        assert_eq!(find(&board, &puzzle, &notes), Hint::Mistake(cell));
     }
 
     #[test]
     fn the_hint_goes_to_a_struck_out_answer_before_any_technique() {
         let p = FULL_HOUSE_1.position();
-        let solution = solution_of(p.grid());
+        let puzzle = puzzle_of(p.grid());
+        let solution = *puzzle.solution();
         let mut notes = notes_of(&p);
         let cell = (0..CELLS).find(|&c| notes[c].is_some()).unwrap();
         let answer = solution.get(cell).unwrap();
         notes[cell] = notes[cell].map(|set| set.without([answer].into_iter().collect()));
-        assert_eq!(
-            find(p.grid(), &solution, &notes, true),
-            Hint::StruckOut(cell)
-        );
+        assert_eq!(find(p.grid(), &puzzle, &notes), Hint::StruckOut(cell));
     }
 
     #[test]
     fn a_cell_with_no_notes_holds_every_digit_it_can() {
         let p = FULL_HOUSE_1.position();
-        let solution = solution_of(p.grid());
-        let hint = find(p.grid(), &solution, &[None; CELLS], true);
+        let puzzle = puzzle_of(p.grid());
+        let solution = *puzzle.solution();
+        let hint = find(p.grid(), &puzzle, &[None; CELLS]);
         let step = &step_of(&hint).step;
         assert_eq!(step.technique.name(), "Full house");
         let (cell, digit) = step.placement.unwrap();
@@ -616,7 +611,7 @@ mod tests {
     #[test]
     fn a_board_the_techniques_cannot_move_has_no_step() {
         // Every technique fails on an empty grid.
-        let hint = find(&Grid::EMPTY, &solution_of_any(), &[None; CELLS], false);
+        let hint = find(&Grid::EMPTY, &puzzle_of_any(), &[None; CELLS]);
         assert_eq!(
             hint.rung(1).text,
             "No logical step found with sumi's techniques."
@@ -624,25 +619,23 @@ mod tests {
         assert_eq!(hint.rungs(), 1);
     }
 
-    fn solution_of_any() -> Grid {
-        let puzzle = generate(&mut Xoshiro256PlusPlus::seed_from_u64(1));
-        puzzle.solution
+    fn puzzle_of_any() -> Puzzle {
+        generate(&mut Xoshiro256PlusPlus::seed_from_u64(1))
     }
 
     #[test]
     fn a_solved_board_has_nothing_to_hint() {
-        let solution = solution_of_any();
-        assert_eq!(
-            find(&solution, &solution, &[None; CELLS], true),
-            Hint::Solved
-        );
+        let puzzle = puzzle_of_any();
+        let solution = *puzzle.solution();
+        assert_eq!(find(&solution, &puzzle, &[None; CELLS]), Hint::Solved);
     }
 
     /// One empty cell left is a full house, a hidden single and a naked
     /// single, all placing the same digit: one step, not three.
     #[test]
     fn a_placement_three_techniques_make_counts_once() {
-        let solution = solution_of_any();
+        let puzzle = puzzle_of_any();
+        let solution = *puzzle.solution();
         let mut board = solution;
         board.set(40, None);
         let p = Position::new(&board).known_unique();
@@ -653,7 +646,7 @@ mod tests {
             .sum();
         assert_eq!(by_each, 3);
         assert_eq!(steps_at(&p, Level::Easy), 1);
-        let hint = find(&board, &solution, &[None; CELLS], true);
+        let hint = find(&board, &puzzle, &[None; CELLS]);
         assert_eq!(step_of(&hint).count, 1);
     }
 
@@ -713,7 +706,7 @@ mod tests {
                 Level::Expert
             };
             let puzzle = crate::bank::pick(&mut rng, level).unwrap();
-            for step in &solving_steps(&puzzle.clues) {
+            for step in &solving_steps(puzzle.clues()) {
                 let effect = step.technique.explain(step).effect;
                 // "Remove 2, 7 and 9 elsewhere in row 1." or "Remove 4 from
                 // r5c3 and r9c8.": the digits come before the place.
@@ -809,8 +802,8 @@ mod tests {
             play in prop::collection::vec((0..CELLS, 1u8..=9, any::<bool>()), 0..120),
         ) {
             let puzzle = generate(&mut Xoshiro256PlusPlus::seed_from_u64(seed));
-            let solution = puzzle.solution;
-            let mut board = puzzle.clues;
+            let solution = *puzzle.solution();
+            let mut board = *puzzle.clues();
             let mut notes: [Option<Digits>; CELLS] = [None; CELLS];
             for (cell, digit, place) in play {
                 let answer = solution.get(cell).unwrap();
@@ -826,7 +819,7 @@ mod tests {
                 }
             }
             for _ in 0..200 {
-                match find(&board, &solution, &notes, true) {
+                match find(&board, &puzzle, &notes) {
                     Hint::Solved => {
                         prop_assert_eq!(board, solution);
                         break;
@@ -870,10 +863,10 @@ mod tests {
         let mut named = [0usize; 3];
         for line in bank.lines().filter(|l| !l.starts_with('#')).take(20) {
             let clues: Grid = line.split(' ').next().unwrap().parse().unwrap();
-            let solution = solution_of(&clues);
+            let puzzle = puzzle_of(&clues);
             let mut p = Position::new(&clues).known_unique();
             for graded in solving_steps(&clues) {
-                let hint = find(p.grid(), &solution, &notes_of(&p), true);
+                let hint = find(p.grid(), &puzzle, &notes_of(&p));
                 let step = &step_of(&hint).step;
                 assert_eq!(
                     (&step.cells, step.placement, &step.removals),
@@ -899,25 +892,14 @@ mod tests {
         }
     }
 
-    /// Unique rectangle removes true digits from a puzzle with several
-    /// solutions, so it needs the caller to say there is one.
-    #[test]
-    fn unique_rectangle_waits_for_a_unique_puzzle() {
-        for example in [&UNIQUE_RECTANGLE_1, &UNIQUE_RECTANGLE_2] {
-            let p = example.position();
-            let solution = solution_of(p.grid());
-            assert_eq!(find(p.grid(), &solution, &notes_of(&p), false), Hint::Stuck);
-        }
-    }
-
     /// Candidates the player struck out are used: without them, a pointing
     /// pair comes before the hidden quad or colouring the notes allow.
     #[test]
     fn the_players_notes_decide_the_hint() {
         for example in [&HIDDEN_QUAD_1, &SIMPLE_COLOURING_1] {
             let p = example.position();
-            let solution = solution_of(p.grid());
-            let hint = find(p.grid(), &solution, &[None; CELLS], true);
+            let puzzle = puzzle_of(p.grid());
+            let hint = find(p.grid(), &puzzle, &[None; CELLS]);
             assert_eq!(step_of(&hint).step.technique.name(), "Pointing pair");
         }
     }

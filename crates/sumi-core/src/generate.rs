@@ -8,14 +8,9 @@ use rand::{Rng, RngExt};
 
 use crate::grade::{Grade, grade};
 use crate::grid::{CELLS, Grid};
+use crate::puzzle::Puzzle;
 use crate::solver::{Solutions, search, solve};
 use crate::technique::Level;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Puzzle {
-    pub clues: Grid,
-    pub solution: Grid,
-}
 
 /// A puzzle of any level sumi's techniques can finish, with its grade. A
 /// Beyond puzzle is never offered, since no hint could help with it; about
@@ -23,7 +18,7 @@ pub struct Puzzle {
 pub fn generate_solvable<R: Rng + ?Sized>(rng: &mut R) -> (Puzzle, Grade) {
     loop {
         let puzzle = generate(rng);
-        let grade = grade(&puzzle.clues).expect("generated puzzles have one solution");
+        let grade = grade(puzzle.clues()).expect("generated puzzles have one solution");
         if grade.level != Level::Beyond {
             return (puzzle, grade);
         }
@@ -35,10 +30,7 @@ pub fn generate_solvable<R: Rng + ?Sized>(rng: &mut R) -> (Puzzle, Grade) {
 /// appearing. Its level is anything, Beyond included.
 pub(crate) fn generate<R: Rng + ?Sized>(rng: &mut R) -> Puzzle {
     let solution = random_full_grid(rng);
-    Puzzle {
-        clues: minimise(rng, solution, &solution),
-        solution,
-    }
+    Puzzle::proven(minimise(rng, solution, &solution), solution)
 }
 
 /// Makes puzzles of one level, all different.
@@ -80,10 +72,10 @@ impl LevelGenerator {
                 Level::Hard => self.moved_seed(rng).unwrap_or_else(|| generate(rng)),
                 _ => generate(rng),
             };
-            let grade = grade(&puzzle.clues).expect("generated puzzles have one solution");
+            let grade = grade(puzzle.clues()).expect("generated puzzles have one solution");
             let wanted = grade.level == self.level
                 && (self.level != Level::Expert || grade.hardest_steps >= 2);
-            if wanted && self.made.insert(puzzle.clues) {
+            if wanted && self.made.insert(*puzzle.clues()) {
                 if self.level == Level::Hard {
                     self.seeds.push((puzzle.clone(), 0));
                 }
@@ -110,24 +102,24 @@ fn move_clue_pair<R: Rng + ?Sized>(rng: &mut R, puzzle: &Puzzle) -> Option<Puzzl
     let halves = 0..=CELLS / 2;
     let given: Vec<usize> = halves
         .clone()
-        .filter(|&c| puzzle.clues.get(c).is_some())
+        .filter(|&c| puzzle.clues().get(c).is_some())
         .collect();
-    let empty: Vec<usize> = halves.filter(|&c| puzzle.clues.get(c).is_none()).collect();
+    let empty: Vec<usize> = halves
+        .filter(|&c| puzzle.clues().get(c).is_none())
+        .collect();
     let (&from, &to) = (given.choose(rng)?, empty.choose(rng)?);
-    let mut clues = puzzle.clues;
+    let mut clues = *puzzle.clues();
     for cell in [from, CELLS - 1 - from] {
         clues.set(cell, None);
     }
     for cell in [to, CELLS - 1 - to] {
-        clues.set(cell, puzzle.solution.get(cell));
+        clues.set(cell, puzzle.solution().get(cell));
     }
     if !matches!(solve(&clues), Solutions::Unique(_)) {
         return None;
     }
-    Some(Puzzle {
-        clues: minimise(rng, clues, &puzzle.solution),
-        solution: puzzle.solution,
-    })
+    let solution = *puzzle.solution();
+    Some(Puzzle::proven(minimise(rng, clues, &solution), solution))
 }
 
 /// Tries taking away every symmetric pair of clues once, in random order,
@@ -175,7 +167,8 @@ mod tests {
     fn a_thousand_puzzles_each_have_exactly_one_solution() {
         for seed in 0..1000 {
             let mut rng = Xoshiro256PlusPlus::seed_from_u64(seed);
-            let Puzzle { clues, solution } = generate(&mut rng);
+            let puzzle = generate(&mut rng);
+            let (clues, solution) = (*puzzle.clues(), *puzzle.solution());
 
             assert!(is_valid_solution(&solution), "seed {seed}");
             assert_eq!(solve(&clues), Solutions::Unique(solution), "seed {seed}");
@@ -202,7 +195,7 @@ mod tests {
             let mut generator = LevelGenerator::new(level);
             let (a, grade) = generator.next(&mut rng);
             assert_eq!(grade.level, level);
-            assert_eq!(Some(grade.clone()), crate::grade::grade(&a.clues));
+            assert_eq!(Some(grade.clone()), crate::grade::grade(a.clues()));
             let (b, _) = generator.next(&mut rng);
             assert_ne!(a, b);
             if level == Level::Expert {
@@ -216,7 +209,7 @@ mod tests {
         let mut generator = LevelGenerator::new(Level::Medium);
         let rng = Xoshiro256PlusPlus::seed_from_u64(11);
         let (first, _) = generator.clone().next(&mut rng.clone());
-        generator.made.insert(first.clues);
+        generator.made.insert(*first.clues());
         let (next, _) = generator.next(&mut rng.clone());
         assert_ne!(next, first);
     }
@@ -233,7 +226,7 @@ mod tests {
         let Solutions::Unique(solution) = solve(&clues) else {
             panic!("the seed has one solution")
         };
-        let seed = Puzzle { clues, solution };
+        let seed = Puzzle::proven(clues, solution);
         let mut generator = LevelGenerator::new(Level::Hard);
         generator.seeds.push((seed.clone(), 0));
         generator.made.insert(clues);
@@ -243,10 +236,10 @@ mod tests {
         for _ in 0..3 {
             let (puzzle, grade) = generator.next(&mut rng);
             assert_eq!(grade.level, Level::Hard);
-            assert!(is_symmetric(&puzzle.clues));
-            assert_eq!(solve(&puzzle.clues), Solutions::Unique(puzzle.solution));
+            assert!(is_symmetric(puzzle.clues()));
+            assert_eq!(solve(puzzle.clues()), Solutions::Unique(*puzzle.solution()));
             // Moving clues keeps the solution; a fresh puzzle wouldn't.
-            moved += usize::from(puzzle.solution == seed.solution);
+            moved += usize::from(*puzzle.solution() == *seed.solution());
         }
         assert!(moved > 0);
     }
@@ -256,7 +249,7 @@ mod tests {
         let mut rng = Xoshiro256PlusPlus::seed_from_u64(4);
         for _ in 0..100 {
             let (puzzle, grade) = generate_solvable(&mut rng);
-            assert_ne!(grade.level, Level::Beyond, "{}", puzzle.clues);
+            assert_ne!(grade.level, Level::Beyond, "{}", puzzle.clues());
         }
     }
 

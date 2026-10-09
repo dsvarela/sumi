@@ -1,7 +1,7 @@
 //! A puzzle shared by the tests, with its solution.
 
-use sumi_core::generate::Puzzle;
 use sumi_core::grid::Grid;
+use sumi_core::puzzle::Puzzle;
 
 use crate::game::Game;
 
@@ -11,10 +11,7 @@ pub const SOLUTION: &str =
     "534678912672195348198342567859761423426853791713924856961537284287419635345286179";
 
 pub fn game() -> Game {
-    Game::new(Puzzle {
-        clues: CLUES.parse().unwrap(),
-        solution: solution(),
-    })
+    Game::new(Puzzle::new(CLUES.parse().unwrap()).unwrap())
 }
 
 pub fn solution() -> Grid {

@@ -8,11 +8,10 @@
 use rand::Rng;
 use rand::seq::IndexedRandom;
 
-use crate::generate::Puzzle;
 use crate::grade::Grade;
 use crate::grid::{Grid, House};
 use crate::position::Position;
-use crate::solver::{Solutions, solve};
+use crate::puzzle::Puzzle;
 use crate::step::Step;
 use crate::technique::{HiddenSingle, Level, Technique};
 
@@ -26,10 +25,7 @@ pub fn pick<R: Rng + ?Sized>(rng: &mut R, level: Level) -> Option<Puzzle> {
         .map(|(clues, _, _)| clues)
         .collect();
     let clues = *puzzles.choose(rng)?;
-    let Solutions::Unique(solution) = solve(&clues) else {
-        unreachable!("the bank test checks every puzzle has one solution")
-    };
-    Some(Puzzle { clues, solution })
+    Some(Puzzle::new(clues).expect("the bank test checks every puzzle has one solution"))
 }
 
 /// How many positions along the solving path `steps` have a hidden single
@@ -94,6 +90,7 @@ mod tests {
     use super::*;
     use crate::grade::grade;
     use crate::grid::CELLS;
+    use crate::solver::{Solutions, solve};
     use crate::technique::{ORDER, ORDER_VERSION};
     use rand::SeedableRng;
     use rand::rngs::Xoshiro256PlusPlus;
@@ -292,8 +289,8 @@ mod tests {
         let mut rng = Xoshiro256PlusPlus::seed_from_u64(1);
         for level in [Level::Hard, Level::Expert] {
             let puzzle = pick(&mut rng, level).unwrap();
-            assert_eq!(grade(&puzzle.clues).unwrap().level, level);
-            assert_eq!(solve(&puzzle.clues), Solutions::Unique(puzzle.solution));
+            assert_eq!(grade(puzzle.clues()).unwrap().level, level);
+            assert_eq!(solve(puzzle.clues()), Solutions::Unique(*puzzle.solution()));
         }
         assert_eq!(pick(&mut rng, Level::Easy), None);
     }

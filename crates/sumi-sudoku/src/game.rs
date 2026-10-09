@@ -4,9 +4,9 @@
 
 use std::time::{Duration, Instant};
 use sumi_core::digits::Digits;
-use sumi_core::generate::Puzzle;
 use sumi_core::grid::{CELLS, Cell, Grid, col, peers, row};
 use sumi_core::hint::{self, Hint};
+use sumi_core::puzzle::Puzzle;
 use sumi_core::step::Step as SolverStep;
 use sumi_core::technique::Level;
 
@@ -108,7 +108,7 @@ struct Step {
 impl Game {
     pub fn new(puzzle: Puzzle) -> Game {
         Game {
-            board: puzzle.clues,
+            board: *puzzle.clues(),
             puzzle,
             candidates: [None; CELLS],
             marks: [Digits::NONE; CELLS],
@@ -223,7 +223,7 @@ impl Game {
     }
 
     pub fn is_clue(&self, cell: Cell) -> bool {
-        self.puzzle.clues.get(cell).is_some()
+        self.puzzle.clues().get(cell).is_some()
     }
 
     pub fn is_won(&self) -> bool {
@@ -380,10 +380,8 @@ impl Game {
     }
 
     /// The hint for the board as it is, built from the player's candidates.
-    /// Puzzles are generated or banked with one solution, so the techniques
-    /// that need that are allowed.
     pub fn hint(&self) -> Hint {
-        hint::find(&self.board, &self.puzzle.solution, &self.candidates, true)
+        hint::find(&self.board, &self.puzzle, &self.candidates)
     }
 
     /// Does what a hint's step says: places its digit, or removes its
@@ -412,7 +410,7 @@ impl Game {
             .filter(|&c| !self.is_clue(c))
             .filter_map(|c| {
                 let digit = self.board.get(c)?;
-                (self.puzzle.solution.get(c) != Some(digit)).then_some((c, digit))
+                (self.puzzle.solution().get(c) != Some(digit)).then_some((c, digit))
             })
             .collect()
     }
@@ -421,7 +419,7 @@ impl Game {
     /// digit is already it, so nothing changes.
     pub fn reveal(&mut self) {
         let cell = self.cursor;
-        if let Some(answer) = self.puzzle.solution.get(cell) {
+        if let Some(answer) = self.puzzle.solution().get(cell) {
             let before = self.revision;
             self.record(|g| g.place(cell, answer));
             if self.revision != before {
@@ -476,7 +474,7 @@ impl Game {
     fn fill(&mut self, cell: Cell) {
         let possible = self.board.possible(cell);
         self.candidates[cell] = Some(possible);
-        self.hidden[cell].candidates = self.puzzle.clues.possible(cell).without(possible);
+        self.hidden[cell].candidates = self.puzzle.clues().possible(cell).without(possible);
     }
 
     /// Writes the digit and hides it in the notes of every cell it sees. The
@@ -758,7 +756,7 @@ mod tests {
             use rand::SeedableRng;
             let mut rng = rand::rngs::Xoshiro256PlusPlus::seed_from_u64(seed);
             let (puzzle, _) = sumi_core::generate::generate_solvable(&mut rng);
-            let solution = puzzle.solution;
+            let solution = *puzzle.solution();
             let mut g = Game::new(puzzle);
             for (cell, digit, kind) in play {
                 g.cursor = cell;
