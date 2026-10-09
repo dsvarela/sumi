@@ -37,7 +37,27 @@ pub fn level_from_key(key: &str) -> Option<Level> {
 /// Where sumi keeps the saved game, the bank puzzles played and the
 /// stats, if the system has a home directory.
 pub fn dir() -> Option<PathBuf> {
-    directories::ProjectDirs::from("", "", "sumi").map(|dirs| dirs.data_dir().to_path_buf())
+    xdg_dir("XDG_DATA_HOME", ".local/share")
+}
+
+/// sumi's folder under the XDG base directory `var` names, or under
+/// `fallback` in the home directory when `var` is unset or relative, as
+/// the XDG spec asks. macOS follows the same rule, so config and saves
+/// stay apart there too.
+pub fn xdg_dir(var: &str, fallback: &str) -> Option<PathBuf> {
+    under_base(
+        std::env::var_os(var).map(PathBuf::from),
+        std::env::home_dir(),
+        fallback,
+    )
+}
+
+fn under_base(base: Option<PathBuf>, home: Option<PathBuf>, fallback: &str) -> Option<PathBuf> {
+    let base = match base {
+        Some(base) if base.is_absolute() => base,
+        _ => home?.join(fallback),
+    };
+    Some(base.join("sumi"))
 }
 
 /// A file that was there but couldn't be read.
@@ -277,6 +297,35 @@ fn write_synced(path: &Path, text: &str, like: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_base_directory_is_used_only_when_absolute() {
+        let home = Some(PathBuf::from("/home/p"));
+        let under = |base: Option<&str>, home: Option<PathBuf>| {
+            under_base(base.map(PathBuf::from), home, ".local/share")
+        };
+        assert_eq!(
+            under(Some("/x/data"), home.clone()),
+            Some(PathBuf::from("/x/data/sumi"))
+        );
+        assert_eq!(
+            under(Some("x/data"), home.clone()),
+            Some(PathBuf::from("/home/p/.local/share/sumi"))
+        );
+        assert_eq!(
+            under(Some(""), home.clone()),
+            Some(PathBuf::from("/home/p/.local/share/sumi"))
+        );
+        assert_eq!(
+            under(None, home),
+            Some(PathBuf::from("/home/p/.local/share/sumi"))
+        );
+        assert_eq!(
+            under(Some("/x/data"), None),
+            Some(PathBuf::from("/x/data/sumi"))
+        );
+        assert_eq!(under(None, None), None);
+    }
 
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("sumi-store-{name}-{}", std::process::id()));

@@ -172,7 +172,7 @@ impl Config {
 
     /// Where sumi keeps its files, if the system has a home directory.
     pub fn dir() -> Option<PathBuf> {
-        directories::ProjectDirs::from("", "", "sumi").map(|dirs| dirs.config_dir().to_path_buf())
+        store::xdg_dir("XDG_CONFIG_HOME", ".config")
     }
 
     /// Writes one setting into `config.toml` in `dir`, at `key` (a table's
