@@ -1640,6 +1640,7 @@ dependencies = [
  "ratatui",
  "serde",
  "serde_json",
+ "signal-hook",
  "sumi-core",
  "toml",
  "toml_edit",

@@ -2,7 +2,8 @@
 //! to the session.
 
 use std::io::{self, IsTerminal, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use rand::rngs::Xoshiro256PlusPlus;
@@ -13,6 +14,8 @@ use ratatui::crossterm::event::{
 };
 use ratatui::crossterm::execute;
 use ratatui::layout::Rect;
+use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
+use signal_hook::iterator::Signals;
 use sumi_core::bank;
 use sumi_core::generate::LevelGenerator;
 use sumi_core::grid::House;
@@ -67,6 +70,11 @@ pub fn run(start: Start) -> io::Result<()> {
     }));
     let mut app = App::new(rand::make_rng(), start, saved, config, setup, Instant::now);
     app.warnings = warnings;
+    if let Some(dir) = app.setup.data.clone() {
+        let slot = Arc::clone(&app.slot);
+        let signals = Signals::new([SIGTERM, SIGHUP, SIGINT])?;
+        std::thread::spawn(move || on_signals(signals, &slot, &dir));
+    }
     // With bracketed paste on, pasted text arrives as one event that the game
     // ignores, instead of as keys that could place digits or quit.
     let result =
@@ -81,6 +89,30 @@ pub fn run(start: Start) -> io::Result<()> {
     }
     result
 }
+
+/// Saves the game again and puts the terminal back when sumi is told to
+/// stop, as when its terminal closes, then stops as the signal asks. The
+/// main loop can't do it: a closed terminal can leave it reading nothing
+/// forever.
+fn on_signals(mut signals: Signals, slot: &Slot, dir: &Path) {
+    if let Some(signal) = signals.forever().next() {
+        // The lock is kept, so the loop writes nothing more.
+        let slot = slot.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(game) = &*slot {
+            let _ = store::save_game(dir, &game.to_json(Instant::now()));
+        }
+        let _ = execute!(io::stdout(), DisableBracketedPaste);
+        let _ = mouse(false);
+        ratatui::restore();
+        let _ = signal_hook::low_level::emulate_default_handler(signal);
+        std::process::exit(128 + signal);
+    }
+}
+
+/// The game in progress as last saved, shared with the thread that saves
+/// it again on a signal. The file is written under its lock, so the two
+/// never write it at once. `None` once there is nothing to save.
+type Slot = Arc<Mutex<Option<Game>>>;
 
 /// Turns the terminal's mouse reporting on or off: presses and releases
 /// only (1000), in SGR form (1006). Unlike crossterm's EnableMouseCapture it
@@ -265,6 +297,7 @@ struct App {
     /// What the saved game was last written from, so a key that changes
     /// nothing kept writes nothing.
     saved: Option<Saved>,
+    slot: Slot,
 }
 
 /// What a saved game holds that a key can change, short of the time.
@@ -310,12 +343,14 @@ impl App {
             warnings: Vec::new(),
             save_error: None,
             saved: None,
+            slot: Slot::default(),
         };
         if let Some(game) = saved {
             let mut session = Session::new(game, &app.config, clock);
             session.game.stop_clock(clock());
             session.show_last_move();
             app.saved = Some(session.saved());
+            *app.slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(session.game.clone());
             app.session = Some(session);
         }
         match start {
@@ -323,6 +358,7 @@ impl App {
             Start::Level(level) => app.start(level),
             Start::Continue => app.resume(),
         }
+        app.save(false);
         app
     }
 
@@ -343,11 +379,14 @@ impl App {
         if now == self.saved && !always {
             return;
         }
-        let result = if session.game.is_won() {
+        let mut slot = self.slot.lock().unwrap_or_else(PoisonError::into_inner);
+        let won = session.game.is_won();
+        let result = if won {
             store::remove_game(dir)
         } else {
             store::save_game(dir, &session.game.to_json((self.clock)()))
         };
+        *slot = (!won).then(|| session.game.clone());
         match result {
             Ok(()) => self.saved = now,
             Err(err) => {
@@ -1456,9 +1495,19 @@ mod tests {
         press_keys(&mut app, &[KeyCode::Char('n')]);
         assert!(path.exists(), "the mode is kept");
         press_keys(&mut app, &[KeyCode::Char('n'), KeyCode::Char('n')]);
+        let shared = app.slot.lock().unwrap().as_ref().map(Game::board).copied();
+        assert_eq!(
+            shared.and_then(|b| b.get(2)),
+            Some(4),
+            "the signal thread's copy"
+        );
         win(game_of(&mut app));
         press_keys(&mut app, &[KeyCode::Char('Z')]);
         assert!(!path.exists());
+        assert!(
+            app.slot.lock().unwrap().is_none(),
+            "nothing to save after a win"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1498,6 +1547,10 @@ mod tests {
         };
         let mut app = open(Start::Menu);
         assert_eq!(menu_kind(&app), Some(Kind::Main));
+        assert!(
+            app.slot.lock().unwrap().is_some(),
+            "a signal before any key saves it"
+        );
         // The last move, 1 in r1c3, is shown until the first key.
         assert_eq!(game_of(&mut app).view.last_move, [2]);
         assert_eq!(game_of(&mut app).game.cursor(), 2);

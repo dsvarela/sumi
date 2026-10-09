@@ -12,6 +12,7 @@ use sumi_core::technique::Level;
 
 mod saved;
 
+#[derive(Clone)]
 pub struct Game {
     puzzle: Puzzle,
     /// Clues and the player's digits together.
@@ -100,6 +101,7 @@ struct Hidden {
 /// One undo step: every cell an action changed, before and after. An action
 /// that touches many cells, such as placing a digit and clearing it from the
 /// notes around it, is still one step.
+#[derive(Clone)]
 struct Step {
     /// Where the cursor was when the action ran. Undo and redo put it back
     /// there, which for a one-cell action is the cell that changed.
