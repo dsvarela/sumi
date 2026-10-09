@@ -32,15 +32,7 @@ only then the move.
 
 ## Install
 
-With Rust 1.88 or later:
-
-```bash
-cargo install --locked sumi-sudoku
-```
-
-The program it installs is called `sumi`.
-
-Or download a binary from the
+Download a binary from the
 [releases page](https://github.com/dsvarela/sumi/releases): static builds
 for x86_64 and aarch64 Linux, and builds for macOS on Apple silicon and
 Intel. Each archive holds the `sumi` program; put it anywhere on your
@@ -50,6 +42,14 @@ with a browser until you clear its quarantine:
 ```bash
 xattr -d com.apple.quarantine sumi
 ```
+
+Or build it from this repository, with Rust 1.88 or later:
+
+```bash
+cargo install --locked --git https://github.com/dsvarela/sumi sumi-sudoku
+```
+
+The program it installs is called `sumi`.
 
 ## Play
 
