@@ -1,0 +1,17 @@
+---
+source: crates/sumi-sudoku/src/ui.rs
+expression: "backend(&stats, stats_needed(&stats))"
+---
+"╭ Stats ──────────────────────────────────╮"
+"│                                         │"
+"│         Solved     Best  Average Hints  │"
+"│  Easy        1 10:59:59 10:59:59   0.0  │"
+"│  Hard        1 10:59:59 10:59:59   2.0  │"
+"│  Beyond      1 10:59:59 10:59:59   1.0  │"
+"│  Hints are per game.                    │"
+"│                                         │"
+"│  Hints took most                        │"
+"│  Hidden single                       3  │"
+"│                                         │"
+"╰─────────────────────────────────────────╯"
+"             Esc back  q quit              "

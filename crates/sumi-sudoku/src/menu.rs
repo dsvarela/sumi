@@ -13,6 +13,7 @@ pub enum Item {
     NewGame,
     /// Type in a puzzle, from the main menu.
     CustomPuzzle,
+    Stats,
     Level(Level),
     /// Back to the game, from the pause menu.
     Resume,
@@ -40,6 +41,8 @@ pub struct Context {
     pub progress: Option<Progress>,
     /// The cells left at each of its bookmarks, oldest first.
     pub bookmarks: Vec<usize>,
+    /// The stats are turned on.
+    pub stats: bool,
 }
 
 /// How far the game in progress is: its level, when it is rated, and the
@@ -68,6 +71,7 @@ impl Item {
             Item::Continue(_) => "Continue",
             Item::NewGame => "New game",
             Item::CustomPuzzle => "Custom puzzle",
+            Item::Stats => "Stats",
             Item::Level(Level::Easy) => "Easy",
             Item::Level(Level::Medium) => "Medium",
             Item::Level(Level::Hard) => "Hard",
@@ -136,12 +140,11 @@ impl Menu {
                 if let Some(progress) = context.progress {
                     items.push(Item::Continue(progress));
                 }
-                items.extend([
-                    Item::NewGame,
-                    Item::CustomPuzzle,
-                    Item::Settings,
-                    Item::Quit,
-                ]);
+                items.extend([Item::NewGame, Item::CustomPuzzle]);
+                if context.stats {
+                    items.push(Item::Stats);
+                }
+                items.extend([Item::Settings, Item::Quit]);
                 items
             }
             Kind::Pause => {
@@ -206,7 +209,7 @@ mod tests {
     fn playing() -> Context {
         Context {
             progress: PROGRESS,
-            bookmarks: Vec::new(),
+            ..Context::default()
         }
     }
 

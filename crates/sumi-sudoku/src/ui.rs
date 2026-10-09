@@ -21,6 +21,7 @@ use crate::game::{CandidatesFromMarks, Game, Mode};
 use crate::input::{Action, FilterKey, filter_label, key_label, left_right_label, up_down_label};
 use crate::menu::{Item, Menu};
 use crate::settings::{GROUPS, Page, Setting};
+use crate::stats::Stats;
 use crate::theme::Theme;
 
 /// A cell is 3 rows tall in both layouts, with a one-character line between
@@ -1640,6 +1641,123 @@ pub fn draw_settings(frame: &mut Frame, page: &SettingsPage, theme: &Theme) {
     frame.render_widget(Paragraph::new(keys).centered(), keys_area);
 }
 
+/// How a line of the stats is drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Weight {
+    Heading,
+    Text,
+    Note,
+}
+
+/// The stats screen's lines: a table of the levels solved, hints per game
+/// under it, and the techniques hints took most. All at most 37 wide,
+/// times up to 99 hours included.
+fn stats_text(stats: &Stats) -> Vec<(String, Weight)> {
+    let rows = stats.rows();
+    if rows.is_empty() {
+        return vec![("No games solved yet.".to_string(), Weight::Text)];
+    }
+    let row = |level: &str, solved: &str, best: &str, average: &str, hints: &str| {
+        format!("{level:<6} {solved:>6} {best:>8} {average:>8} {hints:>5}")
+    };
+    let mut lines = vec![(
+        row("", "Solved", "Best", "Average", "Hints"),
+        Weight::Heading,
+    )];
+    for r in rows {
+        let line = row(
+            level_name(r.level),
+            &r.solved.to_string(),
+            &clock_text(r.best),
+            &clock_text(r.average),
+            &format!("{:.1}", r.hints_per_game),
+        );
+        lines.push((line, Weight::Text));
+    }
+    lines.push(("Hints are per game.".to_string(), Weight::Note));
+    let most = stats.most_hinted(5);
+    if !most.is_empty() {
+        lines.push((String::new(), Weight::Text));
+        lines.push(("Hints took most".to_string(), Weight::Heading));
+        for (technique, count) in most {
+            lines.push((format!("{technique:<32}{count:>5}"), Weight::Text));
+        }
+    }
+    lines
+}
+
+fn stats_lines(stats: &Stats, theme: &Theme) -> Vec<Line<'static>> {
+    let text = Style::new().fg(theme.text);
+    stats_text(stats)
+        .into_iter()
+        .map(|(line, weight)| {
+            let style = match weight {
+                Weight::Heading => text.add_modifier(Modifier::BOLD),
+                Weight::Text => text,
+                Weight::Note => Style::new().fg(theme.dimmed),
+            };
+            Line::from(Span::styled(line, style))
+        })
+        .collect()
+}
+
+const STATS_TEXT_WIDTH: u16 = 37;
+
+fn stats_keys() -> Vec<(&'static str, &'static str)> {
+    vec![
+        (key_label(Action::Close), "back"),
+        (key_label(Action::Quit), "quit"),
+    ]
+}
+
+/// The smallest window the stats fit in: their lines in a frame with a
+/// row and two columns of space, and the key bar.
+fn stats_needed(stats: &Stats) -> (u16, u16) {
+    let lines = stats_text(stats).len() as u16;
+    let width = STATS_TEXT_WIDTH + 6;
+    let key_rows = key_rows(&stats_keys(), usize::from(width)).len() as u16;
+    (width, lines + 4 + key_rows)
+}
+
+pub fn stats_fit(area: Rect, stats: &Stats) -> bool {
+    let (width, height) = stats_needed(stats);
+    area.width >= width && area.height >= height
+}
+
+/// The stats in a frame titled Stats, and the key bar.
+pub fn draw_stats(frame: &mut Frame, stats: &Stats, theme: &Theme) {
+    let area = frame.area();
+    frame.render_widget(Block::new().style(Style::new().bg(theme.background)), area);
+    if !stats_fit(area, stats) {
+        too_small(frame, theme, stats_needed(stats));
+        return;
+    }
+    let (width, height) = stats_needed(stats);
+    let whole = area.centered(Constraint::Length(width), Constraint::Length(height));
+    let lines = stats_lines(stats, theme);
+    let [boxed, keys] = Layout::vertical([
+        Constraint::Length(lines.len() as u16 + 4),
+        Constraint::Fill(1),
+    ])
+    .areas(whole);
+    let block = frame_block(theme).title_top(Line::from(Span::styled(
+        " Stats ",
+        Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
+    )));
+    frame.render_widget(block, boxed);
+    let inner = boxed.inner(ratatui::layout::Margin::new(3, 2));
+    frame.render_widget(Paragraph::new(lines), inner);
+    let keys_text = key_bar_lines(&stats_keys(), theme, usize::from(area.width));
+    frame.render_widget(
+        Paragraph::new(keys_text).centered(),
+        Rect {
+            x: area.x,
+            width: area.width,
+            ..keys
+        },
+    );
+}
+
 /// The entry screen's board: each cell a digit and a space, with a line
 /// between boxes, 23 columns and 11 rows.
 const ENTRY_BOARD: (u16, u16) = (23, 11);
@@ -3083,8 +3201,8 @@ mod tests {
         let mut game = won_game().rated(Level::Hard);
         let lines = panel_lines(&render(&game, &View::default()));
         assert_eq!(lines, ["Solved, Hard.", "No hints.", ""]);
-        game.count_hint();
-        game.count_hint();
+        game.count_hint(&Hint::Stuck);
+        game.count_hint(&Hint::Stuck);
         let timed = View {
             time: Some(std::time::Duration::from_secs(754)),
             ..View::default()
@@ -3162,8 +3280,8 @@ mod tests {
         assert_eq!(five(&off(|h| h.complete_digits = false)), theme.clue);
     }
 
-    /// A game in progress with the longest Continue label there is, and
-    /// bookmarks with the longest labels.
+    /// A game in progress with the longest Continue label there is,
+    /// bookmarks with the longest labels, and the stats on.
     fn playing() -> Context {
         Context {
             progress: Some(Progress {
@@ -3171,6 +3289,7 @@ mod tests {
                 left: 81,
             }),
             bookmarks: vec![81; 10],
+            stats: true,
         }
     }
 
@@ -3323,6 +3442,45 @@ mod tests {
                     assert!(text_of(&render_entry(&entry, smaller)).contains(&asked));
                 }
             }
+        }
+    }
+
+    /// Stats with every level, Beyond too, the longest times, and the
+    /// most hinted techniques, as the smallest window shows them; with
+    /// none, a line says so. A window a row or a column smaller is told.
+    #[test]
+    fn the_stats_screen() {
+        let mut stats = Stats::default();
+        for (level, hints) in [(Level::Easy, 0), (Level::Hard, 2), (Level::Beyond, 1)] {
+            let mut game = game().rated(level);
+            for _ in 0..hints {
+                let hint = game.hint();
+                game.count_hint(&hint);
+            }
+            stats.record(&game, std::time::Duration::from_secs(36_000 + 59 * 60 + 59));
+        }
+        let backend = |stats: &Stats, size: (u16, u16)| {
+            let mut terminal = Terminal::new(TestBackend::new(size.0, size.1)).unwrap();
+            let theme = Theme::tokyo_night_amoled();
+            terminal
+                .draw(|frame| draw_stats(frame, stats, &theme))
+                .unwrap();
+            terminal.backend().clone()
+        };
+        insta::assert_snapshot!(backend(&stats, stats_needed(&stats)));
+        for (line, _) in stats_text(&stats) {
+            assert!(
+                line.chars().count() <= usize::from(STATS_TEXT_WIDTH),
+                "{line}"
+            );
+        }
+        let none = Stats::default();
+        let text = text_of(&backend(&none, stats_needed(&none)));
+        assert!(text.contains("No games solved yet."), "{text}");
+        let (width, height) = stats_needed(&stats);
+        for smaller in [(width - 1, height), (width, height - 1)] {
+            let text = text_of(&backend(&stats, smaller));
+            assert!(text.contains(&format!("{width}×{height}")), "{text}");
         }
     }
 

@@ -11,6 +11,7 @@ mod game;
 mod input;
 mod menu;
 mod settings;
+mod stats;
 mod store;
 mod theme;
 mod ui;

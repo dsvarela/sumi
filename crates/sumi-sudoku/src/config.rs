@@ -14,6 +14,9 @@ pub struct Config {
     pub theme: Option<String>,
     /// Show the time played. Off by default: sumi doesn't race a clock.
     pub timer: bool,
+    /// Offer the stats in the main menu. Off by default, for the same
+    /// reason; games solved are kept either way.
+    pub stats: bool,
     /// The rung a hint opens at, 1 to 5.
     pub hint_start: usize,
     pub marks_to_candidates: MarksToCandidates,
@@ -33,6 +36,7 @@ impl Default for Config {
         Config {
             theme: None,
             timer: false,
+            stats: false,
             hint_start: 1,
             marks_to_candidates: MarksToCandidates::Fill,
             key_bar: true,
@@ -111,6 +115,7 @@ impl Config {
             let checked = match key.as_str() {
                 "theme" => read(value, &mut config.theme, Some),
                 "timer" => read(value, &mut config.timer, |v| v),
+                "stats" => read(value, &mut config.stats, |v| v),
                 // A rung past the ladder's ends is taken as the nearest end,
                 // so the settings page shows what hints do.
                 "hint_start" => {

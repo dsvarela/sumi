@@ -31,6 +31,7 @@ use crate::game::{CandidatesFromMarks, Game, Mode};
 use crate::input::{Action, FilterKey, action, filter_key};
 use crate::menu::{Choice, Context, Item, Kind, Menu, Progress};
 use crate::settings::{Choice as SettingsChoice, Page, Setting};
+use crate::stats::Stats;
 use crate::store;
 use crate::theme::{self, Theme};
 use crate::ui::{self, Filter, OpenHint, Target, View};
@@ -139,6 +140,7 @@ struct Setup {
     dir: Option<PathBuf>,
     data: Option<PathBuf>,
     played: HashSet<Grid>,
+    stats: Stats,
     themes: Vec<(String, Theme)>,
     no_color: bool,
     truecolor: bool,
@@ -178,10 +180,20 @@ fn setup() -> (Config, Setup, Option<Game>, Vec<String>) {
             None
         })
         .unwrap_or_default();
+    let stats = data
+        .as_deref()
+        .map(store::load_stats)
+        .transpose()
+        .unwrap_or_else(|err| {
+            warnings.push(format!("couldn't read the stats: {err}"));
+            None
+        })
+        .unwrap_or_default();
     let setup = Setup {
         dir,
         data,
         played,
+        stats,
         themes,
         no_color: std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty()),
         truecolor: std::env::var("COLORTERM").is_ok_and(|v| v == "truecolor" || v == "24bit"),
@@ -224,6 +236,7 @@ fn play(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                     ui::draw_settings(frame, &page, theme);
                 }
                 (Screen::Entry(entry), _) => ui::draw_entry(frame, entry, theme),
+                (Screen::Stats, _) => ui::draw_stats(frame, &app.setup.stats, theme),
                 (Screen::Game, Some(session)) => {
                     ui::draw(frame, &session.game, &session.view, theme);
                 }
@@ -288,6 +301,7 @@ enum Screen {
     Settings(Page),
     /// Typing in a puzzle.
     Entry(Entry),
+    Stats,
 }
 
 /// The screen showing, the game in progress if there is one, and where new
@@ -425,6 +439,7 @@ impl App {
                 .session
                 .as_ref()
                 .map_or(Vec::new(), |s| s.game.bookmarks()),
+            stats: self.config.stats,
         }
     }
 
@@ -470,6 +485,7 @@ impl App {
             Screen::Menu(menu) => ui::menu_fits(area, menu, &menu.items(&self.menu_context())),
             Screen::Settings(_) => ui::settings_fit(area),
             Screen::Entry(entry) => ui::entry_fits(area, entry),
+            Screen::Stats => ui::stats_fit(area, &self.setup.stats),
         }
     }
 
@@ -586,8 +602,31 @@ impl App {
     /// saved.
     fn handle(&mut self, event: Event, shown: bool) -> Flow {
         let flow = self.react(event, shown);
+        self.record_win();
         self.save(false);
         flow
+    }
+
+    /// Counts a game just won in the stats, once, and saves them. A
+    /// failure is named on stderr after quitting.
+    fn record_win(&mut self) {
+        let Some(session) = &mut self.session else {
+            return;
+        };
+        if !session.game.is_won() || session.counted {
+            return;
+        }
+        session.counted = true;
+        let time = session.game.elapsed((self.clock)());
+        self.setup.stats.record(&session.game, time);
+        if let Some(dir) = &self.setup.data
+            && let Err(err) = store::save_stats(dir, &self.setup.stats)
+        {
+            let line = format!("couldn't save the stats: {err}");
+            if !self.warnings.contains(&line) {
+                self.warnings.push(line);
+            }
+        }
     }
 
     fn react(&mut self, event: Event, shown: bool) -> Flow {
@@ -636,6 +675,11 @@ impl App {
         let context = self.menu_context();
         match &mut self.screen {
             Screen::Game => {}
+            Screen::Stats => {
+                if action == Action::Close {
+                    self.back_to_menu(false);
+                }
+            }
             Screen::Entry(entry) => match entry.handle(action) {
                 Outcome::Stay => {}
                 Outcome::Back => self.back_to_menu(false),
@@ -682,6 +726,7 @@ impl App {
                             None => self.back_to_menu(false),
                         },
                         Item::CustomPuzzle => self.screen = Screen::Entry(Entry::new()),
+                        Item::Stats => self.screen = Screen::Stats,
                         Item::MainMenu => self.screen = Screen::Menu(Menu::new(Kind::Main)),
                         Item::Settings => {
                             self.screen = Screen::Settings(Page::new(kind == Kind::Pause));
@@ -749,8 +794,8 @@ impl App {
                     None => Flow::Continue,
                 }
             }
-            // Typing in a puzzle is done with keys.
-            Screen::Entry(_) => Flow::Continue,
+            // Typing in a puzzle is done with keys, and the stats take none.
+            Screen::Entry(_) | Screen::Stats => Flow::Continue,
             Screen::Settings(page) => match ui::settings_hit(self.area, x, y) {
                 Some(i) => {
                     page.selected = i;
@@ -781,6 +826,8 @@ struct Session {
     /// The houses complete after the last key or click, so the next can
     /// tell which it completed.
     complete: [bool; 27],
+    /// The game has been counted in the stats, once won.
+    counted: bool,
     /// When the animations were last moved on.
     last_tick: Instant,
     /// Where the time comes from; tests set their own.
@@ -798,6 +845,7 @@ impl Session {
             timer: config.timer,
             animations: config.animations,
             complete,
+            counted: false,
             last_tick: clock(),
             clock,
         };
@@ -1081,8 +1129,8 @@ impl Session {
         match &mut self.view.hint {
             Some(open) => open.rung = (open.rung + 1).min(open.hint.rungs()),
             None => {
-                self.game.count_hint();
                 let hint = self.game.hint();
+                self.game.count_hint(&hint);
                 let rung = self.game.hint_start().clamp(1, hint.rungs());
                 self.view.hint = Some(OpenHint {
                     hint,
@@ -1803,6 +1851,61 @@ mod tests {
         );
     }
 
+    /// A win is counted in the stats once, with the hints opened but not
+    /// checks or reveals, and the stats are saved.
+    #[test]
+    fn a_win_is_counted_in_the_stats_once() {
+        let dir = scratch("stats");
+        let mut app = app_with(fixtures::game().rated(Level::Easy));
+        app.setup.data = Some(dir.clone());
+        press_keys(
+            &mut app,
+            &[KeyCode::Char('?'), KeyCode::Esc, KeyCode::Char('c')],
+        );
+        press_keys(
+            &mut app,
+            &[KeyCode::Char('l'), KeyCode::Char('l'), KeyCode::Char('r')],
+        );
+        win(game_of(&mut app));
+        press_keys(&mut app, &[KeyCode::Char('Z'), KeyCode::Char('Z')]);
+        let rows = app.setup.stats.rows();
+        assert_eq!(
+            (rows.len(), rows[0].solved, rows[0].hints_per_game),
+            (1, 1, 1.0)
+        );
+        assert_eq!(store::load_stats(&dir).unwrap(), app.setup.stats);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Stats shows in the main menu only once turned on, and Esc leaves it.
+    #[test]
+    fn the_stats_are_in_the_main_menu_once_turned_on() {
+        let open = |stats| {
+            App::new(
+                Xoshiro256PlusPlus::seed_from_u64(1),
+                Start::Menu,
+                None,
+                Config {
+                    stats,
+                    ..Config::default()
+                },
+                setup(),
+                now,
+            )
+        };
+        let items = |app: &App| match &app.screen {
+            Screen::Menu(menu) => menu.items(&app.menu_context()),
+            _ => panic!("a menu"),
+        };
+        assert!(!items(&open(false)).contains(&Item::Stats));
+        let mut app = open(true);
+        assert_eq!(items(&app)[2], Item::Stats);
+        press_keys(&mut app, &[KeyCode::Down, KeyCode::Down, KeyCode::Enter]);
+        assert_eq!(app.screen, Screen::Stats);
+        press_keys(&mut app, &[KeyCode::Esc]);
+        assert_eq!(menu_kind(&app), Some(Kind::Main));
+    }
+
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("sumi-app-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1975,6 +2078,7 @@ mod tests {
             dir: None,
             data: None,
             played: HashSet::new(),
+            stats: Stats::default(),
             themes: Theme::load_all(None).0,
             no_color: false,
             truecolor: true,
@@ -2012,7 +2116,7 @@ mod tests {
     fn menu_kind(app: &App) -> Option<Kind> {
         match &app.screen {
             Screen::Menu(menu) => Some(menu.kind),
-            Screen::Game | Screen::Settings(_) | Screen::Entry(_) => None,
+            Screen::Game | Screen::Settings(_) | Screen::Entry(_) | Screen::Stats => None,
         }
     }
 

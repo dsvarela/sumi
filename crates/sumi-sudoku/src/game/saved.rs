@@ -7,15 +7,16 @@
 //! solution again, and no cell, digit or step may break what a game holds,
 //! such as a step that changes a clue.
 
+use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use sumi_core::digits::Digits;
 use sumi_core::grid::{CELLS, Cell, Grid};
 use sumi_core::puzzle::{NotUnique, Puzzle};
-use sumi_core::technique::Level;
 
 use super::{Bookmark, CellState, Game, Hidden, Mode, Step};
+use crate::store;
 
 /// Bumped when a saved game an older sumi wrote can't be read as it is.
 const VERSION: u32 = 1;
@@ -26,7 +27,7 @@ impl Game {
         let saved = Saved {
             version: VERSION,
             clues: self.puzzle.clues().to_string(),
-            level: self.level.map(level_name).map(str::to_string),
+            level: self.level.map(store::level_key).map(str::to_string),
             board: self.board.to_string(),
             candidates: self.candidates.iter().map(|c| c.map(text)).collect(),
             marks: self.marks.iter().map(|&m| text(m)).collect(),
@@ -48,6 +49,7 @@ impl Game {
                 })
                 .collect(),
             hints_used: self.hints_used,
+            hint_techniques: self.hint_techniques.clone(),
             revealed: self.revealed,
             played_ms: self.elapsed(now).as_millis() as u64,
         };
@@ -71,7 +73,7 @@ impl Game {
         })?;
         let mut game = Game::new(puzzle);
         game.level = match saved.level {
-            Some(name) => Some(level_named(&name).ok_or("an unknown level")?),
+            Some(name) => Some(store::level_from_key(&name).ok_or("an unknown level")?),
             None => None,
         };
         game.board = saved.board.parse().map_err(|_| "the board isn't a grid")?;
@@ -99,6 +101,7 @@ impl Game {
             .map(|b| b.into_bookmark(&clues))
             .collect::<Result<_, _>>()?;
         game.hints_used = saved.hints_used;
+        game.hint_techniques = saved.hint_techniques;
         game.revealed = saved.revealed;
         game.banked = Duration::from_millis(saved.played_ms);
         Ok(game)
@@ -124,6 +127,8 @@ struct Saved {
     #[serde(default)]
     bookmarks: Vec<SavedBookmark>,
     hints_used: u32,
+    #[serde(default)]
+    hint_techniques: BTreeMap<String, u32>,
     revealed: u32,
     played_ms: u64,
 }
@@ -254,33 +259,11 @@ fn digits(text: &str) -> Result<Digits, String> {
         .collect()
 }
 
-/// The names a saved game uses, apart from those the screen shows, so
-/// renaming a level on screen keeps old saves readable.
-const LEVELS: [(Level, &str); 5] = [
-    (Level::Easy, "easy"),
-    (Level::Medium, "medium"),
-    (Level::Hard, "hard"),
-    (Level::Expert, "expert"),
-    (Level::Beyond, "beyond"),
-];
-
 const MODES: [(Mode, &str); 3] = [
     (Mode::Digit, "digit"),
     (Mode::Candidate, "candidate"),
     (Mode::BoxMark, "box mark"),
 ];
-
-fn level_name(level: Level) -> &'static str {
-    LEVELS
-        .iter()
-        .find(|(l, _)| *l == level)
-        .expect("every level")
-        .1
-}
-
-fn level_named(name: &str) -> Option<Level> {
-    LEVELS.iter().find(|(_, n)| *n == name).map(|(l, _)| *l)
-}
 
 fn mode_name(mode: Mode) -> &'static str {
     MODES
@@ -300,6 +283,7 @@ mod tests {
     use crate::fixtures::{CLUES, game};
     use proptest::prelude::*;
     use sumi_core::hint::Hint;
+    use sumi_core::technique::Level;
 
     /// Everything a saved game keeps, as one comparable value.
     fn kept(g: &Game) -> impl PartialEq + std::fmt::Debug {
@@ -317,6 +301,7 @@ mod tests {
                 .map(|b| (b.cursor, b.cells.to_vec()))
                 .collect::<Vec<_>>(),
             (g.hints_used, g.revealed, g.banked),
+            g.hint_techniques.clone(),
         )
     }
 
@@ -363,7 +348,7 @@ mod tests {
             Move::Marks => g.marks_to_candidates(),
             Move::Hint => {
                 if let Hint::Step(hint) = g.hint() {
-                    g.count_hint();
+                    g.count_hint(&Hint::Step(hint.clone()));
                     g.apply_hint(&hint.step);
                 }
             }

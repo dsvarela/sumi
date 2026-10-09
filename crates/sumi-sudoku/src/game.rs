@@ -2,6 +2,7 @@
 //! and notes, the cursor, the input mode, the undo history, the hints and
 //! reveals used, and the time played.
 
+use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 use sumi_core::digits::Digits;
 use sumi_core::grid::{CELLS, Cell, Grid, col, peers, row};
@@ -37,6 +38,7 @@ pub struct Game {
     level: Option<Level>,
     /// Hint ladders opened, and cells `r` changed.
     hints_used: u32,
+    hint_techniques: BTreeMap<String, u32>,
     revealed: u32,
     /// Time played before the clock last started, and when that was, if it
     /// is running.
@@ -135,6 +137,7 @@ impl Game {
             revision: 0,
             level: None,
             hints_used: 0,
+            hint_techniques: BTreeMap::new(),
             revealed: 0,
             banked: Duration::ZERO,
             running_since: None,
@@ -165,9 +168,21 @@ impl Game {
         self.level
     }
 
-    /// Counts a hint ladder the player opened.
-    pub fn count_hint(&mut self) {
+    /// Counts a hint ladder the player opened, and the technique its step
+    /// takes, if it has one.
+    pub fn count_hint(&mut self, hint: &Hint) {
         self.hints_used += 1;
+        if let Some(step) = hint.step() {
+            *self
+                .hint_techniques
+                .entry(step.technique.name().to_string())
+                .or_default() += 1;
+        }
+    }
+
+    /// How many hints opened took each technique, by its name.
+    pub fn hint_techniques(&self) -> &BTreeMap<String, u32> {
+        &self.hint_techniques
     }
 
     pub fn hints_used(&self) -> u32 {

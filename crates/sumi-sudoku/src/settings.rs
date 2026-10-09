@@ -8,6 +8,7 @@ use crate::input::Action;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Setting {
     Timer,
+    Stats,
     Mouse,
     HintStart,
     MarksToCandidates,
@@ -24,7 +25,10 @@ pub enum Setting {
 /// The groups in order, each with its settings. Keys has none yet:
 /// remapping comes after v1, and the page says where the keys are listed.
 pub const GROUPS: [(&str, &[Setting]); 6] = [
-    ("Gameplay", &[Setting::Timer, Setting::Mouse]),
+    (
+        "Gameplay",
+        &[Setting::Timer, Setting::Stats, Setting::Mouse],
+    ),
     ("Hints", &[Setting::HintStart]),
     ("Notes", &[Setting::MarksToCandidates]),
     (
@@ -57,6 +61,7 @@ impl Setting {
     pub fn label(self) -> &'static str {
         match self {
             Setting::Timer => "Timer",
+            Setting::Stats => "Stats",
             Setting::Mouse => "Mouse and tap",
             Setting::HintStart => "A hint opens at rung",
             Setting::MarksToCandidates => "t on box marks",
@@ -75,6 +80,7 @@ impl Setting {
     pub fn key(self) -> &'static [&'static str] {
         match self {
             Setting::Timer => &["timer"],
+            Setting::Stats => &["stats"],
             Setting::Mouse => &["mouse"],
             Setting::HintStart => &["hint_start"],
             Setting::MarksToCandidates => &["marks_to_candidates"],
@@ -95,6 +101,7 @@ impl Setting {
         let on = |b: bool| if b { "on" } else { "off" }.to_string();
         match self {
             Setting::Timer => on(config.timer),
+            Setting::Stats => on(config.stats),
             Setting::Mouse => on(config.mouse),
             Setting::HintStart => config.hint_start.to_string(),
             Setting::MarksToCandidates => match config.marks_to_candidates {
@@ -118,6 +125,7 @@ impl Setting {
         let h = &mut config.highlights;
         match self {
             Setting::Timer => config.timer = !config.timer,
+            Setting::Stats => config.stats = !config.stats,
             Setting::Mouse => config.mouse = !config.mouse,
             Setting::HintStart => {
                 let next = if forward {
@@ -166,6 +174,7 @@ impl Setting {
         let h = &config.highlights;
         match self {
             Setting::Timer => config.timer.into(),
+            Setting::Stats => config.stats.into(),
             Setting::Mouse => config.mouse.into(),
             Setting::HintStart => (config.hint_start as i64).into(),
             Setting::MarksToCandidates => match config.marks_to_candidates {
