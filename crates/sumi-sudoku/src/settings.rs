@@ -30,7 +30,7 @@ pub const GROUPS: [(&str, &[Setting]); 6] = [
         &[Setting::Timer, Setting::Stats, Setting::Mouse],
     ),
     ("Hints", &[Setting::HintStart]),
-    ("Notes", &[Setting::MarksToCandidates]),
+    ("Candidates and marks", &[Setting::MarksToCandidates]),
     (
         "Highlights",
         &[
@@ -68,7 +68,7 @@ impl Setting {
             Setting::SameDigit => "Same digit",
             Setting::Peer => "Row, column and box",
             Setting::CompleteDigits => "Dim finished digits",
-            Setting::NoteClashes => "Notes that clash",
+            Setting::NoteClashes => "Candidates that clash",
             Setting::Theme => "Theme",
             Setting::KeyBar => "Key bar",
             Setting::Pad => "Digit pad",

@@ -629,7 +629,7 @@ fn status(game: &Game, view: &View, theme: &Theme, width: usize) -> Line<'static
     if !fits(&optional) {
         for (place, part) in &mut optional {
             if *place == 2 {
-                *part = "notes hidden".to_string();
+                *part = format!("both hidden ({})", key_label(Action::ToggleNotes));
             }
         }
     }
@@ -823,15 +823,15 @@ fn help_words(action: Action) -> &'static str {
     match action {
         Action::Step(_) => "move (arrows too)",
         Action::Jump(_) => "next box",
-        Action::Digit(_) => "place, or toggle a note",
+        Action::Digit(_) => "place, candidate or mark",
         Action::Clear => "clear the cell",
         Action::NextMode => "mode: digit, candidate, mark",
         Action::FillCandidates => "fill empty cells' candidates",
         Action::RefillCandidates => "refill every empty cell",
         Action::MarksToCandidates => "box marks to candidates",
-        Action::ClearLayer => "clear this mode's notes",
-        Action::ClearAllNotes => "clear all notes",
-        Action::ToggleNotes => "hide or show notes",
+        Action::ClearLayer => "clear in this mode",
+        Action::ClearAllNotes => "clear candidates and marks",
+        Action::ToggleNotes => "hide or show both",
         Action::Filter => "filter: 1-9, b pairs, 0 off",
         Action::Hint => "hint, then its next rung",
         Action::Confirm => "apply hint, go to mistake",
@@ -860,7 +860,7 @@ fn help_group(action: Action) -> &'static str {
         | Action::ClearLayer
         | Action::ClearAllNotes
         | Action::ToggleNotes
-        | Action::Filter => "Notes",
+        | Action::Filter => "Candidates and marks",
         Action::Hint | Action::Confirm | Action::Check | Action::Reveal | Action::Close => {
             "Hints and checks"
         }
@@ -3148,6 +3148,35 @@ mod tests {
         insta::assert_snapshot!("key_list_dense", render_dense(&game(), &view));
     }
 
+    /// "Note" stays off the screen, as in the hint wording: the key list,
+    /// the settings page and the status line say candidates and marks.
+    #[test]
+    fn no_screen_says_note() {
+        let help = View {
+            help: true,
+            ..View::default()
+        };
+        let hidden = View {
+            notes_hidden: true,
+            ..View::default()
+        };
+        let screens = [
+            render(&game(), &help),
+            render_dense(&game(), &help),
+            render(&game(), &hidden),
+            render_dense(&game(), &hidden),
+            render_settings(
+                &Page::new(true),
+                &Config::default(),
+                SettingsForm::Wide.needs(),
+            ),
+        ];
+        for screen in screens {
+            let text = screen.to_string().to_lowercase();
+            assert!(!text.contains("note"), "{text}");
+        }
+    }
+
     /// The key list names every action with its key, in both layouts.
     #[test]
     fn the_key_list_shows_every_action() {
@@ -3239,7 +3268,7 @@ mod tests {
         };
         let full = top_line(&render(&game, &view));
         assert!(
-            full.contains("Medium · 1:02:05 · notes hidden · filter 5"),
+            full.contains("Medium · 1:02:05 · both hidden (v) · filter 5"),
             "{full}"
         );
         let dense = top_line(&render_dense(
@@ -3249,7 +3278,7 @@ mod tests {
                 ..view.clone()
             },
         ));
-        assert!(dense.contains("notes hidden · ● DIGIT"), "{dense}");
+        assert!(dense.contains("both hidden (v) · ● DIGIT"), "{dense}");
         assert!(!dense.contains("Medium"), "{dense}");
     }
 
