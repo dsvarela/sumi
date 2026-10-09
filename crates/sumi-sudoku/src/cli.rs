@@ -146,8 +146,12 @@ fn rate(input: &str) -> ExitCode {
 
 /// `Hard: X-Wing (1 step at that level, score 804)`.
 fn describe(grade: &Grade) -> String {
+    // No step taken means solved already, or stuck from the first.
     let Some(hardest) = grade.hardest else {
-        return format!("{:?}: no step needed", grade.level);
+        return match grade.level {
+            Level::Beyond => "Beyond: none of sumi's techniques finds a first step".to_string(),
+            level => format!("{level:?}: no step needed"),
+        };
     };
     if grade.level == Level::Beyond {
         return format!(
@@ -229,6 +233,7 @@ fn gen_puzzles(count: u32, seed: Option<u64>, level: Option<Level>) -> io::Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fixtures;
 
     #[test]
     fn rate_reads_a_list_and_skips_lines_that_are_not_puzzles() {
@@ -287,5 +292,12 @@ not a puzzle
             ),
             "Beyond: sumi's techniques run out, the hardest used being 2-String Kite"
         );
+        assert_eq!(
+            line(
+                "1.......2.9.4...5...6...7...5.9.3.......7.......85..4.7.....6...3...9.8...2.....1"
+            ),
+            "Beyond: none of sumi's techniques finds a first step"
+        );
+        assert_eq!(line(fixtures::SOLUTION), "Easy: no step needed");
     }
 }
