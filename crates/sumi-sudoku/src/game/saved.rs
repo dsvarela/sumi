@@ -59,13 +59,17 @@ impl Game {
     /// The game `json` holds, with its clock stopped, or what's wrong with
     /// it. Settings are the defaults until the caller applies its own.
     pub fn from_json(json: &str) -> Result<Game, String> {
-        let saved: Saved = serde_json::from_str(json).map_err(|err| err.to_string())?;
-        if saved.version != VERSION {
+        // The version first: a newer sumi's save may hold fields this one
+        // doesn't know, and should say so rather than name a field.
+        let value: serde_json::Value = serde_json::from_str(json).map_err(|err| err.to_string())?;
+        let version = value.get("version").and_then(serde_json::Value::as_u64);
+        if version != Some(u64::from(VERSION)) {
             return Err(format!(
                 "saved by another version of sumi ({})",
-                saved.version
+                version.map_or("none".to_string(), |v| v.to_string())
             ));
         }
+        let saved: Saved = serde_json::from_value(value).map_err(|err| err.to_string())?;
         let clues: Grid = saved.clues.parse().map_err(|_| "the clues aren't a grid")?;
         let puzzle = Puzzle::new(clues).map_err(|err| match err {
             NotUnique::NoSolution => "the clues have no solution",
@@ -104,6 +108,9 @@ impl Game {
         game.hint_techniques = saved.hint_techniques;
         game.revealed = saved.revealed;
         game.banked = Duration::from_millis(saved.played_ms);
+        if game.is_won() {
+            return Err("the game is already won".to_string());
+        }
         Ok(game)
     }
 }
@@ -439,6 +446,34 @@ mod tests {
         let broken = broken
             .into_iter()
             .chain([(bookmark_on_clue, "bookmark changes a clue")]);
+        let mut stepped = game();
+        stepped.move_to(2);
+        stepped.press(4);
+        let stepped = stepped.to_json(Instant::now());
+        let step_cursor = stepped.replacen(r#""undo":[{"cursor":2"#, r#""undo":[{"cursor":200"#, 1);
+        assert_ne!(step_cursor, stepped);
+        let bookmark_cursor = marked.replace(
+            r#""bookmarks":[{"cursor":0"#,
+            r#""bookmarks":[{"cursor":99"#,
+        );
+        assert_ne!(bookmark_cursor, marked);
+        let short = json.replacen(r#""marks":["","#, r#""marks":["#, 1);
+        let newer = json.replace(r#""version":1,"#, r#""version":2,"new":0,"#);
+        let mut won = game();
+        for cell in 0..CELLS {
+            if let Some(d) = won.solution_digit(cell) {
+                won.move_to(cell);
+                won.press(d);
+            }
+        }
+        let won = won.to_json(Instant::now());
+        let broken = broken.into_iter().chain([
+            (step_cursor, "200 isn't a cell"),
+            (bookmark_cursor, "99 isn't a cell"),
+            (short, "80 cells, not 81"),
+            (newer, "another version of sumi (2)"),
+            (won, "already won"),
+        ]);
         for (text, why) in broken {
             let err = Game::from_json(&text).err().unwrap_or_default();
             assert!(err.contains(why), "{why:?} in {err:?}");

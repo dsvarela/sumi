@@ -59,11 +59,13 @@ impl Stats {
         } else {
             solved.best_ms.min(ms)
         };
-        solved.games += 1;
-        solved.total_ms += ms;
-        solved.hints += game.hints_used();
+        // A hand-edited file can hold any count; one more doesn't wrap.
+        solved.games = solved.games.saturating_add(1);
+        solved.total_ms = solved.total_ms.saturating_add(ms);
+        solved.hints = solved.hints.saturating_add(game.hints_used());
         for (technique, count) in game.hint_techniques() {
-            *self.hint_techniques.entry(technique.clone()).or_default() += count;
+            let total = self.hint_techniques.entry(technique.clone()).or_default();
+            *total = total.saturating_add(*count);
         }
     }
 
@@ -145,6 +147,26 @@ mod tests {
             ]
         );
         assert_eq!(stats.most_hinted(5), [("Hidden single", 3)]);
+    }
+
+    /// A file can hold any count; one more game stops at the most a count
+    /// holds rather than wrapping or stopping sumi.
+    #[test]
+    fn counts_stop_at_their_most() {
+        let mut stats = Stats::default();
+        stats.levels.insert(
+            "hard".to_string(),
+            Solved {
+                games: u32::MAX,
+                best_ms: 1,
+                total_ms: u64::MAX,
+                hints: u32::MAX,
+            },
+        );
+        stats.record(&solved(Level::Hard, 1), Duration::from_secs(5));
+        let row = stats.rows()[0];
+        assert_eq!(row.solved, u32::MAX);
+        assert_eq!(row.best, Duration::from_millis(1));
     }
 
     /// Hints that name no technique, as a mistake's, count as hints and

@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use rand::rngs::Xoshiro256PlusPlus;
 use ratatui::DefaultTerminal;
+use ratatui::crossterm::cursor::Show;
 use ratatui::crossterm::event::{
     self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyEventKind,
     KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
@@ -57,6 +58,8 @@ pub fn run(start: Start) -> io::Result<()> {
         ));
     }
     let (config, setup, saved, warnings) = setup();
+    // Set up before the terminal changes, so a failure leaves it as it is.
+    let signals = Signals::new([SIGTERM, SIGHUP, SIGINT])?;
     if start == Start::Continue && saved.is_none() {
         for line in &warnings {
             eprintln!("sumi: {line}");
@@ -75,11 +78,8 @@ pub fn run(start: Start) -> io::Result<()> {
     }));
     let mut app = App::new(rand::make_rng(), start, saved, config, setup, Instant::now);
     app.warnings = warnings;
-    if let Some(dir) = app.setup.data.clone() {
-        let slot = Arc::clone(&app.slot);
-        let signals = Signals::new([SIGTERM, SIGHUP, SIGINT])?;
-        std::thread::spawn(move || on_signals(signals, &slot, &dir));
-    }
+    let (slot, dir) = (Arc::clone(&app.slot), app.setup.data.clone());
+    std::thread::spawn(move || on_signals(signals, &slot, dir.as_deref()));
     // With bracketed paste on, pasted text arrives as one event that the game
     // ignores, instead of as keys that could place digits or quit.
     let result =
@@ -95,18 +95,19 @@ pub fn run(start: Start) -> io::Result<()> {
     result
 }
 
-/// Saves the game again and puts the terminal back when sumi is told to
-/// stop, as when its terminal closes, then stops as the signal asks. The
-/// main loop can't do it: a closed terminal can leave it reading nothing
-/// forever.
-fn on_signals(mut signals: Signals, slot: &Slot, dir: &Path) {
+/// Saves what the game holds that the file doesn't yet, and puts the
+/// terminal back, cursor included, when sumi is told to stop, as when its
+/// terminal closes; then stops as the signal asks. The main loop can't do
+/// it: a closed terminal can leave it reading nothing forever.
+fn on_signals(mut signals: Signals, slot: &Slot, dir: Option<&Path>) {
     if let Some(signal) = signals.forever().next() {
-        // The lock is kept, so the loop writes nothing more.
+        // Both locks are kept, so nothing else is written, or half written.
         let slot = slot.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(game) = &*slot {
-            let _ = store::save_game(dir, &game.to_json(Instant::now()));
+        let last = store::last_write();
+        if let (Some(game), Some(dir)) = (&*slot, dir) {
+            let _ = last.save_game(dir, &game.to_json(Instant::now()));
         }
-        let _ = execute!(io::stdout(), DisableBracketedPaste);
+        let _ = execute!(io::stdout(), DisableBracketedPaste, Show);
         let _ = mouse(false);
         ratatui::restore();
         let _ = signal_hook::low_level::emulate_default_handler(signal);
@@ -114,9 +115,10 @@ fn on_signals(mut signals: Signals, slot: &Slot, dir: &Path) {
     }
 }
 
-/// The game in progress as last saved, shared with the thread that saves
-/// it again on a signal. The file is written under its lock, so the two
-/// never write it at once. `None` once there is nothing to save.
+/// What the game in progress holds that its file may not: a copy while
+/// its clock runs, since the time played grows, and `None` while the file
+/// holds it all. The signal thread writes it on a signal; the file is
+/// written under its lock, so the two never write it at once.
 type Slot = Arc<Mutex<Option<Game>>>;
 
 /// Turns the terminal's mouse reporting on or off: presses and releases
@@ -163,33 +165,7 @@ fn setup() -> (Config, Setup, Option<Game>, Vec<String>) {
             theme::DEFAULT
         ));
     }
-    let saved = data
-        .as_deref()
-        .map(store::load_game)
-        .transpose()
-        .unwrap_or_else(|err| {
-            warnings.push(format!("couldn't read the saved game: {err}"));
-            None
-        })
-        .flatten();
-    let played = data
-        .as_deref()
-        .map(store::load_played)
-        .transpose()
-        .unwrap_or_else(|err| {
-            warnings.push(format!("couldn't read the puzzles played: {err}"));
-            None
-        })
-        .unwrap_or_default();
-    let stats = data
-        .as_deref()
-        .map(store::load_stats)
-        .transpose()
-        .unwrap_or_else(|err| {
-            warnings.push(format!("couldn't read the stats: {err}"));
-            None
-        })
-        .unwrap_or_default();
+    let (data, saved, played, stats) = read_data(data, &mut warnings);
     let setup = Setup {
         dir,
         data,
@@ -200,6 +176,42 @@ fn setup() -> (Config, Setup, Option<Game>, Vec<String>) {
         truecolor: std::env::var("COLORTERM").is_ok_and(|v| v == "truecolor" || v == "24bit"),
     };
     (config, setup, saved, warnings)
+}
+
+/// What `data`, the data directory, holds: the saved game, the bank
+/// puzzles played and the stats, each the default if it can't be read. A
+/// file that couldn't be read and stays in place would be destroyed by the
+/// next write, so then the directory comes back as `None` and nothing is
+/// written this run.
+fn read_data(
+    data: Option<PathBuf>,
+    warnings: &mut Vec<String>,
+) -> (Option<PathBuf>, Option<Game>, HashSet<Grid>, Stats) {
+    let Some(dir) = data else {
+        return (None, None, HashSet::new(), Stats::default());
+    };
+    let mut in_place = false;
+    let mut read = |what: &str, err: store::Unreadable| {
+        warnings.push(format!("couldn't read {what}: {}", err.message));
+        in_place |= err.in_place;
+    };
+    let saved = store::load_game(&dir).unwrap_or_else(|err| {
+        read("the saved game", err);
+        None
+    });
+    let played = store::load_played(&dir).unwrap_or_else(|err| {
+        read("the puzzles played", err);
+        HashSet::new()
+    });
+    let stats = store::load_stats(&dir).unwrap_or_else(|err| {
+        read("the stats", err);
+        Stats::default()
+    });
+    if in_place {
+        warnings.push("so that nothing is lost, nothing is saved this run".to_string());
+        return (None, saved, played, stats);
+    }
+    (Some(dir), saved, played, stats)
 }
 
 fn play(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
@@ -420,7 +432,6 @@ impl App {
             session.game.stop_clock(clock());
             session.show_last_move();
             app.saved = Some(session.saved());
-            *app.slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(session.game.clone());
             app.session = Some(session);
         }
         match start {
@@ -469,7 +480,10 @@ impl App {
             return;
         };
         let now = Some(session.saved());
-        if now == self.saved && !always {
+        // With the clock stopped and nothing changed, the file holds the
+        // game already; writing it would undo another sumi's moves.
+        let running = session.game.clock_is_running();
+        if now == self.saved && !(always && running) {
             return;
         }
         let mut slot = self.slot.lock().unwrap_or_else(PoisonError::into_inner);
@@ -479,7 +493,7 @@ impl App {
         } else {
             store::save_game(dir, &session.game.to_json((self.clock)()))
         };
-        *slot = (!won).then(|| session.game.clone());
+        *slot = (!won && running).then(|| session.game.clone());
         match result {
             Ok(()) => self.saved = now,
             Err(err) => {
@@ -588,12 +602,15 @@ impl App {
         let puzzle = match bank::pick(rng, level, played) {
             Some(puzzle) => {
                 played.insert(*puzzle.clues());
-                if let Some(dir) = &self.setup.data
-                    && let Err(err) = store::save_played(dir, played)
-                {
-                    let line = format!("couldn't save the puzzles played: {err}");
-                    if !self.warnings.contains(&line) {
-                        self.warnings.push(line);
+                if let Some(dir) = &self.setup.data {
+                    match store::save_played(dir, played) {
+                        Ok(all) => *played = all,
+                        Err(err) => {
+                            let line = format!("couldn't save the puzzles played: {err}");
+                            if !self.warnings.contains(&line) {
+                                self.warnings.push(line);
+                            }
+                        }
                     }
                 }
                 puzzle
@@ -623,8 +640,10 @@ impl App {
     /// saved.
     fn handle(&mut self, event: Event, shown: bool) -> Flow {
         let flow = self.react(event, shown);
-        self.record_win();
+        // The game's file goes before the win is counted, so a stop between
+        // the two can't count it again.
         self.save(false);
+        self.record_win();
         flow
     }
 
@@ -639,14 +658,19 @@ impl App {
         }
         session.counted = true;
         let time = session.game.elapsed((self.clock)());
-        self.setup.stats.record(&session.game, time);
-        if let Some(dir) = &self.setup.data
-            && let Err(err) = store::save_stats(dir, &self.setup.stats)
-        {
-            let line = format!("couldn't save the stats: {err}");
-            if !self.warnings.contains(&line) {
-                self.warnings.push(line);
-            }
+        let game = &session.game;
+        match &self.setup.data {
+            Some(dir) => match store::update_stats(dir, |stats| stats.record(game, time)) {
+                Ok(stats) => self.setup.stats = stats,
+                Err(err) => {
+                    self.setup.stats.record(game, time);
+                    let line = format!("couldn't save the stats: {err}");
+                    if !self.warnings.contains(&line) {
+                        self.warnings.push(line);
+                    }
+                }
+            },
+            None => self.setup.stats.record(game, time),
         }
     }
 
@@ -1970,6 +1994,7 @@ mod tests {
         let dir = scratch("stats");
         let mut app = app_with(fixtures::game().rated(Level::Easy));
         app.setup.data = Some(dir.clone());
+        advance(30);
         press_keys(
             &mut app,
             &[KeyCode::Char('?'), KeyCode::Esc, KeyCode::Char('c')],
@@ -1985,6 +2010,7 @@ mod tests {
             (rows.len(), rows[0].solved, rows[0].hints_per_game),
             (1, 1, 1.0)
         );
+        assert_eq!(rows[0].best, secs(30), "the time played");
         assert_eq!(store::load_stats(&dir).unwrap(), app.setup.stats);
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -2094,6 +2120,53 @@ mod tests {
         assert_ne!(next, first, "the next board");
     }
 
+    /// Quitting with nothing changed and the clock stopped writes nothing,
+    /// so another sumi's moves in the same file are kept.
+    #[test]
+    fn quitting_with_nothing_changed_writes_nothing() {
+        let dir = scratch("unchanged");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut app = App::new(
+            Xoshiro256PlusPlus::seed_from_u64(1),
+            Start::Menu,
+            Some(fixtures::game()),
+            Config::default(),
+            Setup {
+                data: Some(dir.clone()),
+                ..setup()
+            },
+            now,
+        );
+        std::fs::write(dir.join("game.json"), "another sumi's").unwrap();
+        app.save(true);
+        let after = std::fs::read_to_string(dir.join("game.json")).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(after, "another sumi's");
+    }
+
+    /// A file that can't be read or moved aside turns off every write for
+    /// the run; one moved aside doesn't.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_that_cant_be_moved_aside_stops_all_saving() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("stuck");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("stats.json"), "{").unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let mut warnings = Vec::new();
+        let (stuck, ..) = read_data(Some(dir.clone()), &mut warnings);
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let (moved, ..) = read_data(Some(dir.clone()), &mut Vec::new());
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(stuck, None);
+        assert!(
+            warnings.last().unwrap().contains("nothing is saved"),
+            "{warnings:?}"
+        );
+        assert_eq!(moved, Some(dir));
+    }
+
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("sumi-app-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -2171,8 +2244,8 @@ mod tests {
         let mut app = open(Start::Menu);
         assert_eq!(menu_kind(&app), Some(Kind::Main));
         assert!(
-            app.slot.lock().unwrap().is_some(),
-            "a signal before any key saves it"
+            app.slot.lock().unwrap().is_none(),
+            "the file holds it all, so a signal writes nothing"
         );
         // The last move, 1 in r1c3, is shown until the first key.
         assert_eq!(game_of(&mut app).view.last_move, [2]);

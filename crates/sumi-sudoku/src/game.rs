@@ -182,12 +182,13 @@ impl Game {
     /// Counts a hint ladder the player opened, and the technique its step
     /// takes, if it has one.
     pub fn count_hint(&mut self, hint: &Hint) {
-        self.hints_used += 1;
+        self.hints_used = self.hints_used.saturating_add(1);
         if let Some(step) = hint.step() {
-            *self
+            let count = self
                 .hint_techniques
                 .entry(step.technique.name().to_string())
-                .or_default() += 1;
+                .or_default();
+            *count = count.saturating_add(1);
         }
     }
 
