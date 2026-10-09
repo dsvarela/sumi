@@ -3,7 +3,7 @@
 The Sudoku engine behind [sumi](https://github.com/dsvarela/sumi), a
 terminal Sudoku game that teaches. It has no terminal code. It solves,
 generates and grades puzzles. It also finds the easiest next step as a
-hint in five rungs, from how hard the step is to the digit it places.
+hint in five rungs, from how hard the step is to the move itself.
 
 Grading solves a puzzle the way a person would. It always takes the
 easiest step among 20 techniques, from full house through fish and wings

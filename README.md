@@ -23,8 +23,9 @@ only then the move.
 - **Everything can be switched off**: each highlight, the animations, the
   key bar, the digit pad, the mouse.
 - **Four levels**, Easy to Expert, graded by the hardest technique a puzzle
-  needs. Hard and Expert come from a bank of 1,000 checked puzzles, each
-  shown relabelled. Easy and Medium are made on the spot. You can also type
+  needs. Hard and Expert are dealt from a bank of 1,000 checked puzzles,
+  each shown relabelled and moved. Once a level's bank is played, and for
+  Easy and Medium always, puzzles are made on the spot. You can also type
   in a puzzle from paper, with the digits you have solved so far.
 - **Your game is kept.** It is saved after every move, and `sumi continue`
   picks it up. Bookmarks (`b`, then `B` to go back) let you try a guess.
@@ -34,15 +35,21 @@ only then the move.
 With Rust 1.88 or later:
 
 ```bash
-cargo install sumi-sudoku
+cargo install --locked sumi-sudoku
 ```
 
 The program it installs is called `sumi`.
 
 Or download a binary from the
 [releases page](https://github.com/dsvarela/sumi/releases): static builds
-for x86_64 and aarch64 Linux, and for macOS on Apple silicon and Intel. Each
-archive holds the `sumi` program; put it anywhere on your `PATH`.
+for x86_64 and aarch64 Linux, and builds for macOS on Apple silicon and
+Intel. Each archive holds the `sumi` program; put it anywhere on your
+`PATH`. The macOS builds are not notarized, so macOS refuses one downloaded
+with a browser until you clear its quarantine:
+
+```bash
+xattr -d com.apple.quarantine sumi
+```
 
 ## Play
 
@@ -50,7 +57,8 @@ archive holds the `sumi` program; put it anywhere on your `PATH`.
 sumi
 ```
 
-The menu opens on New game, Custom puzzle, Learn and Settings. To skip it:
+The menu offers New game, Custom puzzle, Learn, Settings and Quit, with
+Continue first while a game is saved. To skip it:
 
 ```bash
 sumi new hard
@@ -65,7 +73,7 @@ In a game, `i` lists every key. These are enough to start:
 | `n` | switch between digits, candidates and box marks |
 | `a` | fill in every candidate |
 | `?` | a hint, then its next rung |
-| `Esc` | close the hint, or open the pause menu |
+| `Esc` | close the hint, clear checks, or open the pause menu |
 
 With the mouse on, a click or tap on a cell, a pad digit or a menu item
 works too.
@@ -75,25 +83,26 @@ works too.
 
 ## Small windows
 
-sumi needs 75×46 for its full layout. In a smaller window it switches to a
-dense one that fits 38×47, and the settings page to a narrow form. It runs
-in Termux on Android with the aarch64 Linux build, which is not what it is
-tuned for.
+sumi needs 75×46 for its full layout. In a narrower window it switches to
+a dense layout that fits 38×47, or 38×45 with the digit pad hidden. The
+settings page has a narrow form that fits there too. sumi runs in Termux
+on Android with the aarch64 Linux build, though it is not tuned for it.
 
 ![The dense layout in Konsole at 38×47, a Hard game in candidate mode](docs/screenshots/narrow.png)
 
 ## Settings and files
 
 The settings page writes `config.toml`, keeping any comments in it. sumi
-follows the XDG base directories, on macOS as well:
+follows the XDG base directories, on macOS as well. A variable counts only
+when it holds an absolute path.
 
 | What | Where |
 | --- | --- |
 | `config.toml`, and your own themes in `themes/` | `$XDG_CONFIG_HOME/sumi`, or `~/.config/sumi` |
 | The saved game, the bank puzzles played, the stats | `$XDG_DATA_HOME/sumi`, or `~/.local/share/sumi` |
 
-Seven themes are built in, Tokyo Night AMOLED by default, with a light one
-(Paper) and one safe for colour blindness (Okabe-Ito). A theme is a TOML
+Seven themes are built in, Tokyo Night AMOLED by default. Paper is a light
+one, and Colour-blind safe uses the Okabe-Ito palette. A theme is a TOML
 file of colours; the built-in ones are in
 [`crates/sumi-sudoku/themes`](crates/sumi-sudoku/themes). `NO_COLOR` is
 honoured.
@@ -111,4 +120,5 @@ MIT. sumi is written from scratch. Its technique order and test positions
 draw on HoDoKu and SudokuWiki, but no code is taken from either.
 
 The screenshots are Konsole on KDE Plasma with JetBrains Mono, at the
-window sizes given, from real runs of the build they came with.
+window sizes given, from real runs of the build they came with. sumi ran
+inside tmux, its status bar off, so that keys could be sent to it.
