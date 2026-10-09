@@ -25,19 +25,36 @@ use crate::game::{CandidatesFromMarks, Game, Mode};
 use crate::input::{Action, FilterKey, action, filter_key};
 use crate::menu::{Choice, Item, Kind, Menu};
 use crate::settings::{Choice as SettingsChoice, Page, Setting};
+use crate::store;
 use crate::theme::{self, Theme};
 use crate::ui::{self, Filter, OpenHint, Target, View};
 
-/// Plays puzzles of `level`, or opens the main menu without one. Fails
-/// without changing the terminal when there is none to draw on.
-pub fn run(level: Option<Level>) -> io::Result<()> {
+/// What sumi opens on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Start {
+    Menu,
+    /// A new game of a level.
+    Level(Level),
+    /// The saved game.
+    Continue,
+}
+
+/// Opens on `start`. Fails without changing the terminal when there is
+/// none to draw on, or no saved game to continue.
+pub fn run(start: Start) -> io::Result<()> {
     // Drawing into a file would leave the terminal raw and blank.
     if !io::stdout().is_terminal() {
         return Err(io::Error::other(
             "can't draw: standard output isn't a terminal",
         ));
     }
-    let (config, setup, warnings) = start();
+    let (config, setup, saved, warnings) = setup();
+    if start == Start::Continue && saved.is_none() {
+        for line in &warnings {
+            eprintln!("sumi: {line}");
+        }
+        return Err(io::Error::other("there's no saved game to continue"));
+    }
     let mut terminal = ratatui::try_init()
         .map_err(|err| io::Error::new(err.kind(), format!("can't open the terminal: {err}")))?;
     // ratatui's own hook leaves raw mode and the alternate screen; this one
@@ -48,12 +65,13 @@ pub fn run(level: Option<Level>) -> io::Result<()> {
         let _ = mouse(false);
         restore(info);
     }));
-    let mut app = App::new(rand::make_rng(), level, config, setup, Instant::now);
+    let mut app = App::new(rand::make_rng(), start, saved, config, setup, Instant::now);
     app.warnings = warnings;
     // With bracketed paste on, pasted text arrives as one event that the game
     // ignores, instead of as keys that could place digits or quit.
     let result =
         execute!(io::stdout(), EnableBracketedPaste).and_then(|()| play(&mut terminal, &mut app));
+    app.save(true);
     let _ = execute!(io::stdout(), DisableBracketedPaste);
     let _ = mouse(false);
     ratatui::restore();
@@ -79,18 +97,21 @@ fn mouse(on: bool) -> io::Result<()> {
     out.flush()
 }
 
-/// What the app needs from outside it: where the config lives, the themes
-/// found, and what the terminal allows.
+/// What the app needs from outside it: where the config and the saved
+/// game live, the themes found, and what the terminal allows.
 struct Setup {
     dir: Option<PathBuf>,
+    data: Option<PathBuf>,
     themes: Vec<(String, Theme)>,
     no_color: bool,
     truecolor: bool,
 }
 
-/// The config, the setup, and a line for each file that couldn't be read.
-fn start() -> (Config, Setup, Vec<String>) {
+/// The config, the setup, the saved game, and a line for each file that
+/// couldn't be read.
+fn setup() -> (Config, Setup, Option<Game>, Vec<String>) {
     let dir = Config::dir();
+    let data = store::dir();
     let (config, warning) = Config::load(dir.as_ref());
     let (themes, warnings) = Theme::load_all(dir.as_ref().map(|d| d.join("themes")).as_deref());
     let mut warnings: Vec<String> = warning.into_iter().chain(warnings).collect();
@@ -102,13 +123,23 @@ fn start() -> (Config, Setup, Vec<String>) {
             theme::DEFAULT
         ));
     }
+    let saved = data
+        .as_deref()
+        .map(store::load_game)
+        .transpose()
+        .unwrap_or_else(|err| {
+            warnings.push(format!("couldn't read the saved game: {err}"));
+            None
+        })
+        .flatten();
     let setup = Setup {
         dir,
+        data,
         themes,
         no_color: std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty()),
         truecolor: std::env::var("COLORTERM").is_ok_and(|v| v == "truecolor" || v == "24bit"),
     };
-    (config, setup, warnings)
+    (config, setup, saved, warnings)
 }
 
 fn play(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
@@ -130,9 +161,10 @@ fn play(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
             app.area = frame.area();
             shown = app.fits(frame.area());
             let theme = &app.theme;
+            let in_progress = app.in_progress();
             match (&app.screen, &app.session) {
-                (Screen::Menu(menu), session) => {
-                    ui::draw_menu(frame, menu, &menu.items(session.is_some()), theme);
+                (Screen::Menu(menu), _) => {
+                    ui::draw_menu(frame, menu, &menu.items(in_progress), theme);
                 }
                 (Screen::Settings(page), _) => {
                     let page = ui::SettingsPage {
@@ -230,13 +262,28 @@ struct App {
     /// couldn't be saved.
     warnings: Vec<String>,
     save_error: Option<String>,
+    /// What the saved game was last written from, so a key that changes
+    /// nothing kept writes nothing.
+    saved: Option<Saved>,
+}
+
+/// What a saved game holds that a key can change, short of the time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Saved {
+    revision: u64,
+    cursor: sumi_core::grid::Cell,
+    mode: Mode,
+    hints_used: u32,
+    clock_running: bool,
 }
 
 impl App {
-    /// A game of `level` straight away, or the main menu without one.
+    /// Opens on `start`. `saved`, the saved game, is the game in progress
+    /// until another starts.
     fn new(
         rng: Xoshiro256PlusPlus,
-        level: Option<Level>,
+        start: Start,
+        saved: Option<Game>,
         config: Config,
         setup: Setup,
         clock: fn() -> Instant,
@@ -251,7 +298,10 @@ impl App {
             screen: Screen::Menu(Menu::new(Kind::Main)),
             session: None,
             rng,
-            level: level.unwrap_or(Level::Medium),
+            level: saved
+                .as_ref()
+                .and_then(Game::level)
+                .unwrap_or(Level::Medium),
             config,
             setup,
             theme,
@@ -259,11 +309,54 @@ impl App {
             area: Rect::default(),
             warnings: Vec::new(),
             save_error: None,
+            saved: None,
         };
-        if let Some(level) = level {
-            app.start(level);
+        if let Some(game) = saved {
+            let mut session = Session::new(game, &app.config, clock);
+            session.game.stop_clock(clock());
+            app.saved = Some(session.saved());
+            app.session = Some(session);
+        }
+        match start {
+            Start::Menu => {}
+            Start::Level(level) => app.start(level),
+            Start::Continue => app.resume(),
         }
         app
+    }
+
+    /// Whether a game is there to continue: one started and not won.
+    fn in_progress(&self) -> bool {
+        self.session.as_ref().is_some_and(|s| !s.game.is_won())
+    }
+
+    /// Writes the game in progress to the saved game, if anything kept has
+    /// changed since it was last written, or with `always`, as on quitting,
+    /// which keeps the time. A won game's save is removed. A failure is
+    /// shown on the status line and named on stderr after quitting.
+    fn save(&mut self, always: bool) {
+        let (Some(dir), Some(session)) = (&self.setup.data, &mut self.session) else {
+            return;
+        };
+        let now = Some(session.saved());
+        if now == self.saved && !always {
+            return;
+        }
+        let result = if session.game.is_won() {
+            store::remove_game(dir)
+        } else {
+            store::save_game(dir, &session.game.to_json((self.clock)()))
+        };
+        match result {
+            Ok(()) => self.saved = now,
+            Err(err) => {
+                session.view.notice = Some("game not saved");
+                let line = format!("couldn't save the game: {err}");
+                if !self.warnings.contains(&line) {
+                    self.warnings.push(line);
+                }
+            }
+        }
     }
 
     /// Whether the screen showing can be drawn in a window of this size.
@@ -345,8 +438,15 @@ impl App {
     }
 
     /// `shown` is false while the window is too small for the screen;
-    /// then only quitting acts.
+    /// then only quitting acts. Whatever the event changed in the game is
+    /// saved.
     fn handle(&mut self, event: Event, shown: bool) -> Flow {
+        let flow = self.react(event, shown);
+        self.save(false);
+        flow
+    }
+
+    fn react(&mut self, event: Event, shown: bool) -> Flow {
         if let Event::Mouse(mouse) = event {
             return if shown {
                 self.click(mouse)
@@ -384,6 +484,7 @@ impl App {
 
     /// A key on a menu or the settings page.
     fn menu_action(&mut self, action: Action) -> Flow {
+        let in_progress = self.in_progress();
         match &mut self.screen {
             Screen::Game => {}
             Screen::Settings(page) => {
@@ -399,7 +500,7 @@ impl App {
             }
             Screen::Menu(menu) => {
                 let kind = menu.kind;
-                match menu.handle(action, self.session.is_some()) {
+                match menu.handle(action, in_progress) {
                     None => {}
                     Some(Choice::Back) => match kind {
                         Kind::Levels { from_pause: true } => {
@@ -438,6 +539,7 @@ impl App {
             return Flow::Continue;
         }
         let (x, y) = (mouse.column, mouse.row);
+        let in_progress = self.in_progress();
         match &mut self.screen {
             Screen::Game => {
                 let session = self.session.as_mut().expect("the game screen shows a game");
@@ -445,7 +547,7 @@ impl App {
                 Flow::Continue
             }
             Screen::Menu(menu) => {
-                let items = menu.items(self.session.is_some());
+                let items = menu.items(in_progress);
                 match ui::menu_hit(self.area, menu, &items, x, y) {
                     Some(i) => {
                         menu.selected = i;
@@ -540,6 +642,16 @@ impl Session {
             animation.elapsed += step;
         }
         self.view.animations.retain(|a| !a.done());
+    }
+
+    fn saved(&self) -> Saved {
+        Saved {
+            revision: self.game.revision(),
+            cursor: self.game.cursor(),
+            mode: self.game.mode(),
+            hints_used: self.game.hints_used(),
+            clock_running: self.game.clock_is_running(),
+        }
     }
 
     /// The time to show, if the timer is on.
@@ -1247,6 +1359,7 @@ mod tests {
         };
         let mut app = App::new(
             Xoshiro256PlusPlus::seed_from_u64(1),
+            Start::Menu,
             None,
             config,
             setup(),
@@ -1307,6 +1420,89 @@ mod tests {
     }
 
     /// Fills in the fixture puzzle's solution with keys.
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("sumi-app-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    /// A move is saved as it is made, a key that changes nothing kept
+    /// writes nothing, and a win forgets the game.
+    #[test]
+    fn every_move_is_saved_and_a_win_forgets_the_game() {
+        let dir = scratch("autosave");
+        let path = dir.join("game.json");
+        let mut app = app_with(fixtures::game());
+        app.setup.data = Some(dir.clone());
+        press_keys(&mut app, &[KeyCode::Char('l'), KeyCode::Char('l')]);
+        press_keys(&mut app, &[KeyCode::Char('4')]);
+        let saved = Game::from_json(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!((saved.board().get(2), saved.cursor()), (Some(4), 2));
+        std::fs::remove_file(&path).unwrap();
+        press_keys(&mut app, &[KeyCode::Char('Z')]);
+        assert!(!path.exists(), "nothing kept changed");
+        press_keys(&mut app, &[KeyCode::Char('n')]);
+        assert!(path.exists(), "the mode is kept");
+        press_keys(&mut app, &[KeyCode::Char('n'), KeyCode::Char('n')]);
+        win(game_of(&mut app));
+        press_keys(&mut app, &[KeyCode::Char('Z')]);
+        assert!(!path.exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A save that can't be written says so on the status line, and once
+    /// on stderr however many keys fail.
+    #[test]
+    fn a_failed_save_says_so() {
+        let dir = scratch("unsaved");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("file"), "").unwrap();
+        let mut app = app_with(fixtures::game());
+        app.setup.data = Some(dir.join("file").join("sumi"));
+        press_keys(&mut app, &[KeyCode::Char('l'), KeyCode::Char('l')]);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(game_of(&mut app).view.notice, Some("game not saved"));
+        assert_eq!(app.warnings.len(), 1, "{:?}", app.warnings);
+    }
+
+    /// A saved game waits under the main menu, its clock stopped, until
+    /// Continue; sumi continue opens it straight away. A won game is
+    /// nothing to continue.
+    #[test]
+    fn a_saved_game_is_continued_from_the_main_menu_or_at_once() {
+        let open = |start| {
+            let mut game = fixtures::game();
+            game.press(1);
+            App::new(
+                Xoshiro256PlusPlus::seed_from_u64(1),
+                start,
+                Some(game),
+                Config::default(),
+                setup(),
+                now,
+            )
+        };
+        let mut app = open(Start::Menu);
+        assert_eq!(menu_kind(&app), Some(Kind::Main));
+        assert!(!game_of(&mut app).game.clock_is_running());
+        press_keys(&mut app, &[KeyCode::Enter]);
+        assert_eq!(app.screen, Screen::Game);
+        assert!(game_of(&mut app).game.clock_is_running());
+        assert_eq!(game_of(&mut app).game.board().get(0), Some(5));
+
+        let mut app = open(Start::Continue);
+        assert_eq!(app.screen, Screen::Game);
+        assert!(game_of(&mut app).game.clock_is_running());
+
+        win(game_of(&mut app));
+        press_keys(&mut app, &[KeyCode::Esc, KeyCode::Down, KeyCode::Down]);
+        press_keys(&mut app, &[KeyCode::Down, KeyCode::Enter]);
+        let Screen::Menu(menu) = &app.screen else {
+            panic!("the main menu")
+        };
+        assert_eq!(menu.items(app.in_progress()).first(), Some(&Item::NewGame));
+    }
+
     fn win(s: &mut Session) {
         let solution = fixtures::solution();
         let empty: Vec<usize> = (0..81).filter(|&c| !s.game.is_clue(c)).collect();
@@ -1341,7 +1537,8 @@ mod tests {
         for level in [Level::Medium, Level::Hard] {
             let mut app = App::new(
                 Xoshiro256PlusPlus::seed_from_u64(2),
-                Some(level),
+                Start::Level(level),
+                None,
                 Config::default(),
                 setup(),
                 now,
@@ -1363,6 +1560,7 @@ mod tests {
     fn setup() -> Setup {
         Setup {
             dir: None,
+            data: None,
             themes: Theme::load_all(None).0,
             no_color: false,
             truecolor: true,
@@ -1373,6 +1571,7 @@ mod tests {
     fn app_with(game: Game) -> App {
         let mut app = App::new(
             Xoshiro256PlusPlus::seed_from_u64(1),
+            Start::Menu,
             None,
             Config::default(),
             setup(),
@@ -1409,6 +1608,7 @@ mod tests {
     fn the_main_menu_starts_a_game_of_the_level_picked() {
         let mut app = App::new(
             Xoshiro256PlusPlus::seed_from_u64(3),
+            Start::Menu,
             None,
             Config::default(),
             setup(),
@@ -1428,6 +1628,7 @@ mod tests {
         assert_eq!(game_of(&mut app).game.level(), Some(Level::Easy));
         let mut app = App::new(
             Xoshiro256PlusPlus::seed_from_u64(3),
+            Start::Menu,
             None,
             Config::default(),
             setup(),
@@ -1557,6 +1758,7 @@ mod tests {
     fn settings_from_the_main_menu_go_back_there() {
         let mut app = App::new(
             Xoshiro256PlusPlus::seed_from_u64(1),
+            Start::Menu,
             None,
             Config::default(),
             setup(),

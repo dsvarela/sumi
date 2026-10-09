@@ -10,6 +10,8 @@ use sumi_core::puzzle::Puzzle;
 use sumi_core::step::Step as SolverStep;
 use sumi_core::technique::Level;
 
+mod saved;
+
 pub struct Game {
     puzzle: Puzzle,
     /// Clues and the player's digits together.

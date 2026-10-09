@@ -1,5 +1,5 @@
-//! The command line: `sumi` opens the menu, `sumi new` plays, `sumi rate` and
-//! `sumi gen` work on puzzles.
+//! The command line: `sumi` opens the menu, `sumi new` and `sumi continue`
+//! play, `sumi rate` and `sumi gen` work on puzzles.
 
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::process::ExitCode;
@@ -12,6 +12,8 @@ use sumi_core::grade::{Grade, grade};
 use sumi_core::grid::Grid;
 use sumi_core::solver::{Solutions, solve};
 use sumi_core::technique::Level;
+
+use crate::app::Start;
 
 #[derive(Parser)]
 #[command(
@@ -32,6 +34,8 @@ enum Command {
         #[arg(value_enum, ignore_case = true)]
         level: LevelArg,
     },
+    /// Go back to the saved game.
+    Continue,
     /// Say whether a puzzle has one solution and, if it has, how hard it is.
     /// With no puzzle, rate the first word of each line of standard input,
     /// skipping blank lines and lines starting with #. Each output line is
@@ -78,8 +82,9 @@ impl From<LevelArg> for Level {
 
 pub fn run() -> ExitCode {
     match Cli::parse().command {
-        None => play(None),
-        Some(Command::New { level }) => play(Some(level.into())),
+        None => play(Start::Menu),
+        Some(Command::New { level }) => play(Start::Level(level.into())),
+        Some(Command::Continue) => play(Start::Continue),
         Some(Command::Rate {
             puzzle: Some(puzzle),
         }) => rate(&puzzle),
@@ -111,8 +116,8 @@ fn piped(result: io::Result<bool>) -> ExitCode {
     }
 }
 
-fn play(level: Option<Level>) -> ExitCode {
-    match crate::app::run(level) {
+fn play(start: Start) -> ExitCode {
+    match crate::app::run(start) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("sumi: {err}");

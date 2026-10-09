@@ -1,7 +1,56 @@
-//! How sumi writes its files: whole, or not at all.
+//! The files sumi keeps between runs in its data directory, and the one
+//! way it writes a file: whole, or not at all.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
+
+use crate::game::Game;
+
+/// Where sumi keeps the saved game, if the system has a home directory.
+pub fn dir() -> Option<PathBuf> {
+    directories::ProjectDirs::from("", "", "sumi").map(|dirs| dirs.data_dir().to_path_buf())
+}
+
+/// The game in progress, the one autosave slot.
+const GAME: &str = "game.json";
+
+/// Saves `json`, a game, as the game in progress.
+pub fn save_game(dir: &Path, json: &str) -> Result<(), String> {
+    let path = dir.join(GAME);
+    std::fs::create_dir_all(dir)
+        .and_then(|()| write_whole(&path, json))
+        .map_err(|err| format!("{}: {err}", path.display()))
+}
+
+/// The game in progress, if one is saved. A saved game that can't be read
+/// is moved aside to `game.json.unreadable`, so the next save doesn't
+/// destroy it, and the error says so.
+pub fn load_game(dir: &Path) -> Result<Option<Game>, String> {
+    let path = dir.join(GAME);
+    let json = match std::fs::read_to_string(&path) {
+        Ok(json) => json,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(format!("{}: {err}", path.display())),
+    };
+    Game::from_json(&json).map(Some).map_err(|why| {
+        let aside = dir.join(format!("{GAME}.unreadable"));
+        match std::fs::rename(&path, &aside) {
+            Ok(()) => format!("{}: {why}; moved to {}", path.display(), aside.display()),
+            Err(err) => format!("{}: {why}; couldn't move it aside: {err}", path.display()),
+        }
+    })
+}
+
+/// Forgets the game in progress, once it is won.
+pub fn remove_game(dir: &Path) -> Result<(), String> {
+    let path = dir.join(GAME);
+    match std::fs::remove_file(&path) {
+        Err(err) if err.kind() != std::io::ErrorKind::NotFound => {
+            Err(format!("{}: {err}", path.display()))
+        }
+        _ => Ok(()),
+    }
+}
 
 /// Writes `text` to `path` all at once: into a file beside it, flushed to
 /// the disk, then renamed over it, so a crash, a power cut or a full disk
@@ -54,5 +103,22 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(text, "short");
         assert_eq!(left, ["game.json"]);
+    }
+
+    /// A saved game that can't be read is moved aside, not left for the
+    /// next save to overwrite.
+    #[test]
+    fn an_unreadable_save_is_moved_aside() {
+        let dir = std::env::temp_dir().join(format!("sumi-unreadable-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("game.json"), "{").unwrap();
+        let err = load_game(&dir).err().unwrap();
+        let aside = std::fs::read_to_string(dir.join("game.json.unreadable"));
+        let again = load_game(&dir);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(err.contains("moved to"), "{err}");
+        assert_eq!(aside.unwrap(), "{");
+        assert!(matches!(again, Ok(None)));
     }
 }
