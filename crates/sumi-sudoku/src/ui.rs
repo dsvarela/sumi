@@ -629,7 +629,7 @@ fn status(game: &Game, view: &View, theme: &Theme, width: usize) -> Line<'static
     if !fits(&optional) {
         for (place, part) in &mut optional {
             if *place == 2 {
-                *part = format!("both hidden ({})", key_label(Action::ToggleNotes));
+                *part = format!("hidden ({})", key_label(Action::ToggleNotes));
             }
         }
     }
@@ -699,7 +699,7 @@ fn keys(game: &Game, view: &View) -> Vec<(&'static str, &'static str)> {
         let last = if view.checked.is_empty() {
             (Action::NextMode, "mode")
         } else {
-            (Action::Close, "clear marks")
+            (Action::Close, "clear checks")
         };
         vec![
             (Action::BackToBookmark, "back to bookmark"),
@@ -714,7 +714,7 @@ fn keys(game: &Game, view: &View) -> Vec<(&'static str, &'static str)> {
                 (Action::NextMode, "mode"),
                 (Action::Hint, "hint"),
                 (Action::Undo, "undo"),
-                (Action::Close, "clear marks"),
+                (Action::Close, "clear checks"),
             ],
             Mode::Digit => vec![
                 (Action::Digit(1), "place"),
@@ -829,7 +829,7 @@ fn help_words(action: Action) -> &'static str {
         Action::FillCandidates => "fill empty cells' candidates",
         Action::RefillCandidates => "refill every empty cell",
         Action::MarksToCandidates => "box marks to candidates",
-        Action::ClearLayer => "clear in this mode",
+        Action::ClearLayer => "clear candidates or marks",
         Action::ClearAllNotes => "clear candidates and marks",
         Action::ToggleNotes => "hide or show both",
         Action::Filter => "filter: 1-9, b pairs, 0 off",
@@ -837,7 +837,7 @@ fn help_words(action: Action) -> &'static str {
         Action::Confirm => "apply hint, go to mistake",
         Action::Check => "check for mistakes",
         Action::Reveal => "reveal this cell",
-        Action::Close => "close, clear marks, menu",
+        Action::Close => "close, clear checks, menu",
         Action::Undo => "undo",
         Action::Redo => "redo",
         Action::Bookmark => "bookmark the board",
@@ -2628,6 +2628,7 @@ mod tests {
             notes_hidden: true,
             filter: Some(Filter::TwoCandidates),
             notice: Some("no mistakes"),
+            time: Some(std::time::Duration::from_secs(3725)),
             ..open(&game, 5)
         };
         let backend = render(&game, &view);
@@ -2638,7 +2639,8 @@ mod tests {
         assert!(top.ends_with("● BOX MARK ╮"), "{top}");
         assert!(top.contains("hint 5/5"), "{top}");
         assert!(top.contains("no mistakes"), "{top}");
-        assert!(!top.contains("hidden"), "{top}");
+        assert!(top.contains("hidden (v)"), "{top}");
+        assert!(!top.contains("1:02:05"), "{top}");
     }
 
     fn open(game: &Game, rung: usize) -> View {
@@ -3108,7 +3110,7 @@ mod tests {
         has("hint", ("?", "next rung"));
         has("last rung", ("Enter", "apply"));
         has("mistake", ("Enter", "go to cell"));
-        has("marks", ("Esc", "clear marks"));
+        has("marks", ("Esc", "clear checks"));
         has("key list", ("Esc", "close"));
         has("won", ("Enter", "new game"));
         has("won", ("Esc", "menu"));
@@ -3148,7 +3150,7 @@ mod tests {
             checked: vec![(2, 5)],
             ..View::default()
         };
-        assert!(keys(&dead_end(), &marked).contains(&("Esc", "clear marks")));
+        assert!(keys(&dead_end(), &marked).contains(&("Esc", "clear checks")));
         let mut noting = dead_end();
         noting.next_mode();
         assert!(keys_at(&noting).contains(&("1-9", "toggle")));
@@ -3185,17 +3187,25 @@ mod tests {
             notes_hidden: true,
             ..View::default()
         };
-        let screens = [
+        let mut screens = vec![
             render(&game(), &help),
             render_dense(&game(), &help),
             render(&game(), &hidden),
             render_dense(&game(), &hidden),
-            render_settings(
+        ];
+        for form in [SettingsForm::Wide, SettingsForm::Narrow] {
+            screens.push(render_settings(
                 &Page::new(true),
                 &Config::default(),
-                SettingsForm::Wide.needs(),
-            ),
-        ];
+                form.needs(),
+            ));
+        }
+        // Each mode's key bar.
+        let mut game = game();
+        for _ in 0..3 {
+            screens.push(render(&game, &View::default()));
+            game.next_mode();
+        }
         for screen in screens {
             let text = screen.to_string().to_lowercase();
             assert!(!text.contains("note"), "{text}");
@@ -3293,7 +3303,7 @@ mod tests {
         };
         let full = top_line(&render(&game, &view));
         assert!(
-            full.contains("Medium · 1:02:05 · both hidden (v) · filter 5"),
+            full.contains("Medium · 1:02:05 · hidden (v) · filter 5"),
             "{full}"
         );
         let dense = top_line(&render_dense(
@@ -3303,7 +3313,8 @@ mod tests {
                 ..view.clone()
             },
         ));
-        assert!(dense.contains("both hidden (v) · ● DIGIT"), "{dense}");
+        // The time the player turned on stays beside the short form.
+        assert!(dense.contains("1:02:05 · hidden (v) · ● DIGIT"), "{dense}");
         assert!(!dense.contains("Medium"), "{dense}");
     }
 
