@@ -4,7 +4,7 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use rand::rngs::Xoshiro256PlusPlus;
@@ -16,7 +16,9 @@ use ratatui::crossterm::event::{
 };
 use ratatui::crossterm::execute;
 use ratatui::layout::Rect;
+#[cfg(unix)]
 use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
+#[cfg(unix)]
 use signal_hook::iterator::Signals;
 use sumi_core::bank;
 use sumi_core::generate::LevelGenerator;
@@ -64,7 +66,7 @@ pub fn run(start: Start) -> io::Result<()> {
     }
     let (config, setup, saved, warnings) = setup();
     // Set up before the terminal changes, so a failure leaves it as it is.
-    let signals = Signals::new([SIGTERM, SIGHUP, SIGINT])?;
+    let stop = Stop::watch()?;
     if start == Start::Continue && saved.is_none() {
         for line in &warnings {
             eprintln!("sumi: {line}");
@@ -83,8 +85,7 @@ pub fn run(start: Start) -> io::Result<()> {
     }));
     let mut app = App::new(rand::make_rng(), start, saved, config, setup, Instant::now);
     app.warnings = warnings;
-    let (slot, dir) = (Arc::clone(&app.slot), app.setup.data.clone());
-    std::thread::spawn(move || on_signals(signals, &slot, dir.as_deref()));
+    stop.start(Arc::clone(&app.slot), app.setup.data.clone());
     // With bracketed paste on, pasted text arrives as one event that the game
     // ignores, instead of as keys that could place digits or quit.
     let result =
@@ -100,30 +101,96 @@ pub fn run(start: Start) -> io::Result<()> {
     result
 }
 
-/// Saves what the game holds that the file doesn't yet, and puts the
-/// terminal back, cursor included, when sumi is told to stop, as when its
-/// terminal closes; then stops as the signal asks. The main loop can't do
-/// it: a closed terminal can leave it reading nothing forever.
-fn on_signals(mut signals: Signals, slot: &Slot, dir: Option<&Path>) {
-    if let Some(signal) = signals.forever().next() {
-        // Both locks are kept, so nothing else is written, or half written.
-        let slot = slot.lock().unwrap_or_else(PoisonError::into_inner);
-        let last = store::last_write();
-        if let (Some(game), Some(dir)) = (&*slot, dir) {
-            let _ = last.save_game(dir, &game.to_json(Instant::now()));
-        }
-        let _ = execute!(io::stdout(), DisableBracketedPaste, Show);
-        let _ = mouse(false);
-        ratatui::restore();
-        let _ = signal_hook::low_level::emulate_default_handler(signal);
-        std::process::exit(128 + signal);
+/// Watches for sumi being told to stop, as when its terminal closes, to
+/// save what the game holds that the file doesn't yet and put the terminal
+/// back. The main loop can't do it: a closed terminal can leave it reading
+/// nothing forever.
+struct Stop {
+    #[cfg(unix)]
+    signals: Signals,
+}
+
+#[cfg(unix)]
+impl Stop {
+    fn watch() -> io::Result<Stop> {
+        let signals = Signals::new([SIGTERM, SIGHUP, SIGINT])?;
+        Ok(Stop { signals })
     }
+
+    /// From now on a stop saves the game `slot` holds into `dir`, then
+    /// stops as the signal asks.
+    fn start(mut self, slot: Slot, dir: Option<PathBuf>) {
+        std::thread::spawn(move || {
+            if let Some(signal) = self.signals.forever().next() {
+                let _locks = last_save(&slot, dir.as_deref());
+                let _ = signal_hook::low_level::emulate_default_handler(signal);
+                std::process::exit(128 + signal);
+            }
+        });
+    }
+}
+
+/// The slot and the folder the console handler saves into, once the game
+/// has started.
+#[cfg(windows)]
+static STOPPING: std::sync::OnceLock<(Slot, Option<PathBuf>)> = std::sync::OnceLock::new();
+
+#[cfg(windows)]
+impl Stop {
+    fn watch() -> io::Result<Stop> {
+        use windows_sys::Win32::System::Console::SetConsoleCtrlHandler;
+        // SAFETY: the handler has the signature Windows calls it with, and
+        // touches only statics.
+        if unsafe { SetConsoleCtrlHandler(Some(on_console_event), 1) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Stop {})
+    }
+
+    /// From now on a stop saves the game `slot` holds into `dir`.
+    fn start(self, slot: Slot, dir: Option<PathBuf>) {
+        let _ = STOPPING.set((slot, dir));
+    }
+}
+
+/// Windows calls it on a thread of its own when the console window closes,
+/// on Ctrl+Break, and at logoff or shutdown. Ctrl+C arrives as a key
+/// instead, since raw mode turns off its signal. Windows ends the process
+/// once the handler returns, or a few seconds after a close, so the save
+/// comes first.
+#[cfg(windows)]
+unsafe extern "system" fn on_console_event(_event: u32) -> windows_sys::core::BOOL {
+    let Some((slot, dir)) = STOPPING.get() else {
+        // Not handled: the next handler, Windows's own, ends the process.
+        return 0;
+    };
+    let _locks = last_save(slot, dir.as_deref());
+    // STATUS_CONTROL_C_EXIT, how Windows reports a process stopped this way.
+    std::process::exit(0xC000_013A_u32 as i32);
+}
+
+/// Saves what the game holds that the file doesn't yet and puts the
+/// terminal back, cursor included. The locks it gives back stop every
+/// other write, so nothing is written, or half written, before sumi ends.
+fn last_save<'a>(
+    slot: &'a Slot,
+    dir: Option<&Path>,
+) -> (MutexGuard<'a, Option<Game>>, store::LastWrite) {
+    let slot = slot.lock().unwrap_or_else(PoisonError::into_inner);
+    let last = store::last_write();
+    if let (Some(game), Some(dir)) = (&*slot, dir) {
+        let _ = last.save_game(dir, &game.to_json(Instant::now()));
+    }
+    let _ = execute!(io::stdout(), DisableBracketedPaste, Show);
+    let _ = mouse(false);
+    ratatui::restore();
+    (slot, last)
 }
 
 /// What the game in progress holds that its file may not: a copy while
 /// its clock runs, since the time played grows, and `None` while the file
-/// holds it all. The signal thread writes it on a signal; the file is
-/// written under its lock, so the two never write it at once.
+/// holds it all. `last_save` writes it when sumi is told to stop; the file
+/// is written under its lock, so the two never write it at once.
 type Slot = Arc<Mutex<Option<Game>>>;
 
 /// Turns the terminal's mouse reporting on or off: presses and releases
@@ -2298,7 +2365,7 @@ mod tests {
         assert_eq!(
             shared.and_then(|b| b.get(2)),
             Some(4),
-            "the signal thread's copy"
+            "the last save's copy"
         );
         win(game_of(&mut app));
         press_keys(&mut app, &[KeyCode::Char('Z')]);
@@ -2348,7 +2415,7 @@ mod tests {
         assert_eq!(menu_kind(&app), Some(Kind::Main));
         assert!(
             app.slot.lock().unwrap().is_none(),
-            "the file holds it all, so a signal writes nothing"
+            "the file holds it all, so a stop writes nothing"
         );
         // The last move, 1 in r1c3, is shown until the first key, and the
         // cursor is where it was left.

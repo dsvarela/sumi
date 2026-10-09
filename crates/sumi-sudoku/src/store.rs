@@ -226,11 +226,11 @@ fn move_aside(dir: &Path, name: &str, why: &str) -> Unreadable {
     }
 }
 
-/// Held while a file is written, so the signal thread, which holds it to
+/// Held while a file is written, so the last save, which holds it to
 /// the end, never stops sumi with a file half written beside its target.
 static WRITES: Mutex<()> = Mutex::new(());
 
-/// What the signal thread holds once it has stopped every other write.
+/// What the last save holds once it has stopped every other write.
 pub struct LastWrite {
     _writes: MutexGuard<'static, ()>,
 }
