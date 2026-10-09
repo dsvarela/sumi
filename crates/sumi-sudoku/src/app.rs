@@ -314,6 +314,7 @@ impl App {
         if let Some(game) = saved {
             let mut session = Session::new(game, &app.config, clock);
             session.game.stop_clock(clock());
+            session.show_last_move();
             app.saved = Some(session.saved());
             app.session = Some(session);
         }
@@ -644,6 +645,15 @@ impl Session {
         self.view.animations.retain(|a| !a.done());
     }
 
+    /// Puts the cursor on the last move and shades the cells it changed,
+    /// until the next key or click.
+    fn show_last_move(&mut self) {
+        if let Some((cursor, cells)) = self.game.last_move() {
+            self.game.move_to(cursor);
+            self.view.last_move = cells;
+        }
+    }
+
     fn saved(&self) -> Saved {
         Saved {
             revision: self.game.revision(),
@@ -704,6 +714,7 @@ impl Session {
     /// the notice, as any key does.
     fn click(&mut self, target: Option<Target>) {
         self.view.notice = None;
+        self.view.last_move.clear();
         let filtering = std::mem::take(&mut self.view.awaiting_filter);
         let Some(target) = target else {
             return;
@@ -767,6 +778,7 @@ impl Session {
 
     fn dispatch(&mut self, key: KeyEvent) -> Flow {
         self.view.notice = None;
+        self.view.last_move.clear();
         if self.view.awaiting_filter {
             self.view.awaiting_filter = false;
             match filter_key(key) {
@@ -1472,7 +1484,9 @@ mod tests {
     fn a_saved_game_is_continued_from_the_main_menu_or_at_once() {
         let open = |start| {
             let mut game = fixtures::game();
+            game.move_to(2);
             game.press(1);
+            game.move_to(80);
             App::new(
                 Xoshiro256PlusPlus::seed_from_u64(1),
                 start,
@@ -1484,14 +1498,25 @@ mod tests {
         };
         let mut app = open(Start::Menu);
         assert_eq!(menu_kind(&app), Some(Kind::Main));
+        // The last move, 1 in r1c3, is shown until the first key.
+        assert_eq!(game_of(&mut app).view.last_move, [2]);
+        assert_eq!(game_of(&mut app).game.cursor(), 2);
         assert!(!game_of(&mut app).game.clock_is_running());
         press_keys(&mut app, &[KeyCode::Enter]);
         assert_eq!(app.screen, Screen::Game);
         assert!(game_of(&mut app).game.clock_is_running());
         assert_eq!(game_of(&mut app).game.board().get(0), Some(5));
+        assert_eq!(game_of(&mut app).view.last_move, [2]);
+        press_keys(&mut app, &[KeyCode::Char('Z')]);
+        assert!(game_of(&mut app).view.last_move.is_empty());
 
         let mut app = open(Start::Continue);
         assert_eq!(app.screen, Screen::Game);
+        game_of(&mut app).click(None);
+        assert!(
+            game_of(&mut app).view.last_move.is_empty(),
+            "a click is a key"
+        );
         assert!(game_of(&mut app).game.clock_is_running());
 
         win(game_of(&mut app));

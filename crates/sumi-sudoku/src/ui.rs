@@ -109,6 +109,9 @@ pub struct View {
     /// The digits `c` found wrong. A mark stays while its cell still holds
     /// that digit.
     pub checked: Vec<(Cell, u8)>,
+    /// The cells the last move changed, shaded when a saved game comes
+    /// back until the first key.
+    pub last_move: Vec<Cell>,
     /// A one-word answer to the last key, shown in the status line.
     pub notice: Option<&'static str>,
     /// The list of every key is open over the game.
@@ -1120,7 +1123,8 @@ impl Board<'_> {
     /// A hint's cells win over everything, the cursor's corner marks being
     /// enough to find the cursor. The cursor wins over an animation's light,
     /// which wins over the filter and the same-digit highlight; those win
-    /// over a hint's area, which wins over the shading of the cursor's row,
+    /// over a hint's area and the last move's cells on coming back to a
+    /// saved game, which win over the shading of the cursor's row,
     /// column and box. The
     /// filter lights only empty cells and the same-digit highlight only
     /// filled ones, so those two never compete.
@@ -1148,7 +1152,8 @@ impl Board<'_> {
             Some(self.theme.same_digit)
         } else if rung.is_some_and(|r| {
             r.second_group.contains(&cell) || r.areas.iter().any(|h| h.contains(cell))
-        }) {
+        }) || self.view.last_move.contains(&cell)
+        {
             Some(self.theme.hint_area)
         } else if self.view.highlights.peer && sees(cell, cursor) {
             Some(self.theme.peer)
@@ -1858,6 +1863,19 @@ mod tests {
         assert_eq!(at(40), theme.hint_cell);
         assert_eq!(at(41), theme.hint_area);
         assert_eq!(at(49), theme.hint_area);
+    }
+
+    /// The last move's cells are shaded; the cells around them are not.
+    #[test]
+    fn the_last_move_is_shaded() {
+        let theme = Theme::tokyo_night_amoled();
+        let game = game();
+        let view = View {
+            last_move: vec![70],
+            ..View::default()
+        };
+        assert_eq!(background_at(&game, &view, 70), theme.hint_area);
+        assert_ne!(background_at(&game, &view, 71), theme.hint_area);
     }
 
     #[test]

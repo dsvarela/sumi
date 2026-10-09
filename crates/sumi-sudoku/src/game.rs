@@ -278,6 +278,25 @@ impl Game {
         self.cursor = cell;
     }
 
+    /// The last move kept in the undo history: where the cursor was, and
+    /// the cells whose digit it changed or, for a move of notes only, the
+    /// cells whose notes it changed.
+    pub fn last_move(&self) -> Option<(Cell, Vec<Cell>)> {
+        let step = self.undo.last()?;
+        let digits: Vec<Cell> = step
+            .cells
+            .iter()
+            .filter(|(_, before, after)| before.digit != after.digit)
+            .map(|&(cell, _, _)| cell)
+            .collect();
+        let cells = if digits.is_empty() {
+            step.cells.iter().map(|&(cell, _, _)| cell).collect()
+        } else {
+            digits
+        };
+        Some((step.cursor, cells))
+    }
+
     /// Moves to the same spot in the next box, wrapping around the board.
     pub fn jump(&mut self, direction: Direction) {
         self.cursor = moved(self.cursor, direction, 3);
@@ -610,6 +629,20 @@ mod tests {
 
     fn secs(n: u64) -> Duration {
         Duration::from_secs(n)
+    }
+
+    /// A digit's last move is its own cell, not the notes it hid around
+    /// it; a move of notes only is every cell whose notes it changed.
+    #[test]
+    fn the_last_move_is_the_cells_it_wrote_in() {
+        let mut g = at(R1C3);
+        assert_eq!(g.last_move(), None);
+        g.fill_candidates();
+        let (_, filled) = g.last_move().unwrap();
+        assert!(filled.len() > 40, "{filled:?}");
+        g.move_to(R1C8);
+        g.press(1);
+        assert_eq!(g.last_move(), Some((R1C8, vec![R1C8])));
     }
 
     #[test]
