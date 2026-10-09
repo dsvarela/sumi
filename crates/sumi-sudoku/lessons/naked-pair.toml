@@ -1,6 +1,6 @@
 technique = "Naked pair"
-goal = "Strike what a naked pair rules out, then Enter."
-close = "A naked pair: two cells of a house with the same two candidates take those digits from the rest of it."
+goal = "Strike what a naked pair rules out, then {enter}."
+close = "A naked pair: two cells of a row, column or box with the same two candidates take those digits from the rest of it."
 
 [see]
 board = "943..78.....4......17..8.9.4....6.3...2...6...8.1....5.7.6..51......5.....48..276"

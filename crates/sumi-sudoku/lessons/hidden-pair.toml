@@ -1,6 +1,6 @@
 technique = "Hidden pair"
-goal = "Strike what a hidden pair rules out, then Enter."
-close = "A hidden pair: two digits held to the same two cells of a house clear those cells of other candidates."
+goal = "Strike what a hidden pair rules out, then {enter}."
+close = "A hidden pair: two digits held to the same two cells of a row, column or box clear those cells of other candidates."
 
 [see]
 board = "...7.924..5......9.....26.7.4.8....6..1..57..3....6.1...61.....8....4.7..145.3.6."
@@ -10,6 +10,7 @@ frames = [
   { text = "{cells}", show = "pattern" },
   { text = "Those cells must hold those two digits, so their other candidates go.", show = "pattern" },
   { text = "{result}", show = "result" },
+  { text = "It works only with every candidate written in.", show = "result" },
 ]
 
 [finish]

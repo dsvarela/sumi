@@ -206,6 +206,7 @@ impl Menu {
     pub fn question(&self) -> Option<&'static str> {
         match self.kind {
             Kind::Replace => Some("Replace the saved game?"),
+            Kind::Technique(index) => Some(ORDER[index].name()),
             _ => None,
         }
     }
@@ -287,6 +288,19 @@ mod tests {
             left: 7,
         };
         assert_eq!(Item::Continue(unrated).label(), "Continue · 7 left");
+    }
+
+    /// A technique's menu names it over its Lesson and Drill.
+    #[test]
+    fn a_techniques_menu_names_it() {
+        assert_eq!(
+            Menu::new(Kind::Technique(3)).question(),
+            Some("Pointing pair")
+        );
+        assert_eq!(
+            Menu::new(Kind::Technique(3)).items(&Context::default()),
+            [Item::Lesson, Item::Drill]
+        );
     }
 
     /// Bookmarks is in the pause menu only when there are some, and its

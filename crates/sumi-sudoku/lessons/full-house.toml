@@ -1,7 +1,9 @@
 # A lesson: See it shows the frames on its board, Finish it shows the
 # pattern and asks for the step, Find it asks for it on each board. Boards
 # are 81 cells, . for an empty one, and the technique must be the easiest
-# step on each; the lesson test checks every file.
+# step on each; the lesson test checks every file. In the words, {area},
+# {cells}, {result} and {definition} are the step's as a hint words them,
+# and {enter} is the key that checks an answer.
 technique = "Full house"
 goal = "Place the digit a full house gives."
 close = "A full house: a row, column or box with one empty cell takes the digit it's missing."
@@ -10,8 +12,8 @@ close = "A full house: a row, column or box with one empty cell takes the digit 
 board = ".89....7..3..5..696...........6495.....127.....45.8...........782..1..9..4....63."
 frames = [
   { text = "Every row, column and box holds each digit once.", show = "nothing" },
-  { text = "{area}", show = "area" },
-  { text = "Eight cells there hold a digit. {cells}", show = "pattern" },
+  { text = "{area} Eight of its cells hold a digit.", show = "area" },
+  { text = "The ninth is empty. {cells}", show = "pattern" },
   { text = "{result}", show = "result" },
 ]
 

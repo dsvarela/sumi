@@ -417,9 +417,11 @@ pub fn draw(frame: &mut Frame, game: &Game, view: &View, theme: &Theme) {
     );
     match areas.density {
         Density::Full => {
+            // A lesson's board can be its puzzle's last empty cell: the
+            // lesson still has the panel.
             let title = match (&view.lesson, &view.hint) {
-                _ if game.is_won() => "Solved",
                 (Some(lesson), None) => lesson.title,
+                _ if game.is_won() => "Solved",
                 _ => "Hint",
             };
             let mut block = panel_block(theme, title);
@@ -482,7 +484,7 @@ fn paused(theme: &Theme) -> Paragraph<'static> {
 /// The panel's words: the hint, how to ask for one, or once the puzzle is
 /// solved, what it took.
 fn hint_text(game: &Game, view: &View, theme: &Theme) -> Paragraph<'static> {
-    if game.is_won() {
+    if game.is_won() && view.lesson.is_none() {
         return Paragraph::new(solved_text(game, view, theme)).wrap(Wrap { trim: true });
     }
     if view.paused {
@@ -3509,6 +3511,25 @@ mod tests {
             let text = text_of(&backend(&stats, smaller));
             assert!(text.contains(&format!("{width}×{height}")), "{text}");
         }
+    }
+
+    /// A lesson's board can be its puzzle's last empty cell; once
+    /// answered, the panel still shows the lesson, not the win.
+    #[test]
+    fn a_lesson_keeps_the_panel_on_a_won_board() {
+        let view = View {
+            lesson: Some(Panel {
+                title: "Drill",
+                heading: "Full house · 2 of 5".to_string(),
+                text: "Right.".to_string(),
+                highlight: None,
+                keys: Vec::new(),
+            }),
+            ..View::default()
+        };
+        let text = text_of(&render(&won_game(), &view));
+        assert!(text.contains("Drill") && text.contains("Right."), "{text}");
+        assert!(!text.contains("Solved, "), "{text}");
     }
 
     /// Every text a lesson shows fits the full panel and the dense hint

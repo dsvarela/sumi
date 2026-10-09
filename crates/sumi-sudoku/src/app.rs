@@ -224,7 +224,7 @@ fn play(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
             capturing = app.config.mouse;
             mouse(capturing)?;
         }
-        if let Some(session) = &mut app.session {
+        if let Some(session) = app.board_session() {
             session.view.time = session.time();
             session.tick(Instant::now());
         }
@@ -263,24 +263,16 @@ fn play(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                 (Screen::Game, None) => unreachable!("the game screen shows a game"),
             }
         })?;
-        if app.screen == Screen::Game
-            && let Some(session) = &mut app.session
-        {
+        let board = app.board_session();
+        if let Some(session) = board {
             session.set_shown(shown);
         }
         // A running timer is redrawn as its seconds change; otherwise the
         // loop sleeps until a key arrives.
-        let ticking = app.screen == Screen::Game
-            && app
-                .session
-                .as_ref()
-                .is_some_and(|s| s.view.time.is_some() && s.game.clock_is_running());
-        let animating = app.screen == Screen::Game
-            && app
-                .session
-                .as_ref()
-                .is_some_and(|s| !s.view.animations.is_empty());
-        let event = match app.session.as_ref().and_then(|s| s.view.time) {
+        let board = app.board_session().map(|s| &*s);
+        let ticking = board.is_some_and(|s| s.view.time.is_some() && s.game.clock_is_running());
+        let animating = board.is_some_and(|s| !s.view.animations.is_empty());
+        let event = match board.and_then(|s| s.view.time) {
             // About sixty frames a second while something moves.
             _ if animating => {
                 if !event::poll(Duration::from_millis(16))? {
@@ -448,6 +440,15 @@ impl App {
         }
         app.save(false);
         app
+    }
+
+    /// The session whose board is showing: the game's, or a lesson's.
+    fn board_session(&mut self) -> Option<&mut Session> {
+        match self.screen {
+            Screen::Game => self.session.as_mut(),
+            Screen::Learn => self.learning.as_mut().map(|(session, _)| session),
+            _ => None,
+        }
     }
 
     /// The game there is to continue, one started and not won, as the
@@ -938,12 +939,18 @@ impl App {
                 let Some((session, learning)) = &mut self.learning else {
                     return Flow::Continue;
                 };
-                // Only looking around, until the lesson lets the board change.
-                let target = ui::hit(self.area, &session.view, x, y);
-                if learning.lets(Action::Digit(1)) || matches!(target, Some(ui::Target::Cell(_))) {
-                    session.click(target);
-                    learning.after(&mut session.game);
-                }
+                // Only looking around, until the lesson lets the board
+                // change: a tap on a note's spot is a tap on its cell.
+                let hit = ui::hit(self.area, &session.view, x, y);
+                let target = match hit {
+                    _ if learning.lets(Action::Digit(1)) => hit,
+                    Some(ui::Target::Note(cell, _) | ui::Target::Cell(cell)) => {
+                        Some(ui::Target::Cell(cell))
+                    }
+                    _ => return Flow::Continue,
+                };
+                session.click(target);
+                learning.after(&mut session.game);
                 Flow::Continue
             }
             Screen::Settings(page) => match ui::settings_hit(self.area, x, y) {
@@ -2691,6 +2698,66 @@ mod tests {
 
     fn middle_of(rect: Rect) -> (u16, u16) {
         (rect.x + rect.width / 2, rect.y + rect.height / 2)
+    }
+
+    /// While a lesson shows its frames, a tap on a cell moves the cursor
+    /// and a tap on the pad does nothing; once a board takes answers, the
+    /// pad places.
+    #[test]
+    fn taps_in_a_lesson_follow_what_it_lets_through() {
+        let (mut app, areas) = clickable();
+        app.learn(0, Item::Lesson);
+        let lesson_board = app.learning.as_ref().unwrap().0.game.board().to_string();
+        let shown = app.board_session().unwrap().game.board().to_string();
+        assert_eq!(
+            shown, lesson_board,
+            "the loop ticks and times the lesson's board"
+        );
+        let revision = |app: &App| app.learning.as_ref().unwrap().0.game.revision();
+        let (x, y) = middle_of(areas.cell(40));
+        app.handle(click(x, y), true);
+        assert_eq!(app.learning.as_ref().unwrap().0.game.cursor(), 40);
+        let (px, py) = middle_of(areas.pad_button(5));
+        app.handle(click(px, py), true);
+        assert_eq!(revision(&app), 0, "See it takes no digits");
+        while matches!(app.learning.as_ref().unwrap().1.panel().heading.as_str(), h if h.contains("See it"))
+        {
+            press_keys(&mut app, &[KeyCode::Enter]);
+        }
+        let (session, learning) = app.learning.as_mut().unwrap();
+        let (cell, digit) = learning.answer().placement.unwrap();
+        session.game.move_to(cell);
+        let (px, py) = middle_of(areas.pad_button(digit));
+        app.handle(click(px, py), true);
+        assert!(
+            app.learning
+                .as_ref()
+                .unwrap()
+                .1
+                .panel()
+                .text
+                .starts_with("Right.")
+        );
+    }
+
+    /// With a hint open in a lesson, Enter goes to the hint, which applies
+    /// its step, and the lesson takes that as the answer; Esc closes it.
+    #[test]
+    fn a_hint_in_a_lesson_has_enter_and_esc() {
+        let mut app = app_with(fixtures::game());
+        app.learn(1, Item::Lesson);
+        while matches!(app.learning.as_ref().unwrap().1.panel().heading.as_str(), h if h.contains("See it"))
+        {
+            press_keys(&mut app, &[KeyCode::Enter]);
+        }
+        press_keys(&mut app, &[KeyCode::Char('?'), KeyCode::Esc]);
+        assert_eq!(app.screen, Screen::Learn, "Esc closed the hint");
+        for _ in 0..5 {
+            press_keys(&mut app, &[KeyCode::Char('?')]);
+        }
+        press_keys(&mut app, &[KeyCode::Enter]);
+        let panel = app.learning.as_ref().unwrap().1.panel();
+        assert!(panel.text.starts_with("Right."), "{}", panel.text);
     }
 
     #[test]

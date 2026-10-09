@@ -1,5 +1,5 @@
 technique = "Pointing pair"
-goal = "Strike what a pointing pair rules out, then Enter."
+goal = "Strike what a pointing pair rules out, then {enter}."
 close = "A pointing pair: a digit held to one row or column of a box can't go elsewhere in that line."
 
 [see]

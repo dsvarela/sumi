@@ -1,5 +1,5 @@
 technique = "Claiming"
-goal = "Strike what claiming rules out, then Enter."
+goal = "Strike what claiming rules out, then {enter}."
 close = "Claiming: a digit held to one box within a row or column can't go elsewhere in that box."
 
 [see]
@@ -10,6 +10,7 @@ frames = [
   { text = "{cells}", show = "pattern" },
   { text = "The digit goes in one of them, so the rest of that box can't hold it.", show = "pattern" },
   { text = "{result}", show = "result" },
+  { text = "It works only with every candidate written in.", show = "result" },
 ]
 
 [finish]

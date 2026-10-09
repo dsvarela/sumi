@@ -22,7 +22,7 @@ use sumi_core::technique::{Level, ORDER, Technique};
 use sumi_core::words;
 
 use crate::game::Game;
-use crate::input::Action;
+use crate::input::{Action, key_label};
 
 /// The lesson files, in the techniques' order.
 const LESSON_FILES: [&str; 7] = [
@@ -171,17 +171,19 @@ fn read_lesson(text: &str) -> Result<Lesson, String> {
             notes,
         })
     };
+    // `{enter}` in a file's words is the key that checks an answer.
+    let keys = |text: String| text.replace("{enter}", key_label(Action::Confirm));
     Ok(Lesson {
         technique,
-        goal: file.goal,
-        close: file.close,
+        goal: keys(file.goal),
+        close: keys(file.close),
         see: board(&file.see.board)?,
         frames: file
             .see
             .frames
             .into_iter()
             .map(|f| Frame {
-                text: f.text,
+                text: keys(f.text),
                 show: f.show,
             })
             .collect(),
@@ -284,8 +286,10 @@ pub struct Learning {
     misses: u8,
     /// The instance the player's answer matched, once it is right.
     found: Option<Step>,
-    /// What the last answer drew.
+    /// What the last answer drew, and the board's revision then: a later
+    /// change to the board makes it stale.
     feedback: Option<String>,
+    feedback_at: u64,
 }
 
 enum Course {
@@ -330,6 +334,7 @@ impl Learning {
             misses: 0,
             found: None,
             feedback: None,
+            feedback_at: 0,
         };
         let game = learning.begin();
         (learning, game)
@@ -354,6 +359,7 @@ impl Learning {
         self.misses = 0;
         self.found = None;
         self.feedback = None;
+        self.feedback_at = 0;
         let mut game = board.game();
         if !places(self.technique) {
             game.next_mode();
@@ -381,7 +387,13 @@ impl Learning {
             Action::Step(_) | Action::Jump(_) | Action::Help | Action::Pause | Action::Quit
         );
         match action {
-            Action::Confirm | Action::Close => false,
+            // Reveal would answer for the player, and bookmarks belong to
+            // games.
+            Action::Confirm
+            | Action::Close
+            | Action::Reveal
+            | Action::Bookmark
+            | Action::BackToBookmark => false,
             _ if matches!(self.at, At::See(_) | At::Close) || self.found.is_some() => looking,
             _ => true,
         }
@@ -407,6 +419,7 @@ impl Learning {
             }
             _ => {
                 self.check_strikes(game);
+                self.feedback_at = game.revision();
                 Next::Stay
             }
         }
@@ -436,6 +449,15 @@ impl Learning {
     /// placing technique, and a slip in an eliminating one. A placed digit
     /// that isn't right is taken back.
     pub fn after(&mut self, game: &mut Game) {
+        // What the last answer drew is about the board it was given on.
+        if game.revision() != self.feedback_at {
+            self.feedback = None;
+        }
+        self.judge_placement(game);
+        self.feedback_at = game.revision();
+    }
+
+    fn judge_placement(&mut self, game: &mut Game) {
         let Some(cell) = (0..CELLS)
             .find(|&c| self.start.grid().get(c).is_none() && game.board().get(c).is_some())
         else {
@@ -445,8 +467,9 @@ impl Learning {
         if !places(self.technique) {
             game.undo();
             self.miss(format!(
-                "{} strikes candidates: strike them, then Enter.",
-                self.technique.name()
+                "{} strikes candidates: strike them, then {}.",
+                self.technique.name(),
+                key_label(Action::Confirm)
             ));
             return;
         }
@@ -459,6 +482,11 @@ impl Learning {
             return;
         }
         game.undo();
+        if let Some(other) = self.other_technique(|s| s.placement == Some((cell, digit))) {
+            // Right, by another technique: not a miss.
+            self.feedback = Some(self.elsewhere(other));
+            return;
+        }
         let why = if game.solution_digit(cell) == Some(digit) {
             format!(
                 "{digit} is right in {}, but nothing on the board shows it yet.",
@@ -475,7 +503,7 @@ impl Learning {
     /// Checks the candidates struck since the board was given: right if
     /// each is one an instance removes, and then the matching instance is
     /// shown whole.
-    fn check_strikes(&mut self, game: &Game) {
+    fn check_strikes(&mut self, game: &mut Game) {
         let struck: Vec<(Cell, u8)> = self
             .start
             .empty_cells()
@@ -494,14 +522,23 @@ impl Learning {
                 .iter()
                 .any(|&(c, d)| c == cell && d.contains(digit))
         };
-        if let Some(&(cell, digit)) = struck
+        if let Some(&strike) = struck
             .iter()
             .find(|&&strike| !instances.iter().any(|s| removes(s, strike)))
         {
-            self.miss(format!(
-                "Nothing here rules out {digit} in {}: u takes it back.",
-                words::cell(cell)
-            ));
+            let undo = key_label(Action::Undo);
+            match self.other_technique(|s| removes(s, strike)) {
+                // Right, by another technique: not a miss.
+                Some(other) => {
+                    self.feedback = Some(format!("{} {undo} takes it back.", self.elsewhere(other)))
+                }
+                None => self.miss(format!(
+                    "Nothing here rules out {} in {}: {undo} takes it back.",
+                    strike.1,
+                    words::cell(strike.0)
+                )),
+            }
+            self.feedback_at = game.revision();
             return;
         }
         let best = instances
@@ -509,6 +546,24 @@ impl Learning {
             .max_by_key(|s| struck.iter().filter(|&&strike| removes(s, strike)).count())
             .expect("a strike an instance removes");
         self.right(best);
+    }
+
+    /// Another technique with a step on the board that `matches`.
+    fn other_technique(&self, matches: impl Fn(&Step) -> bool) -> Option<&'static dyn Technique> {
+        ORDER
+            .iter()
+            .filter(|t| t.name() != self.technique.name())
+            .find(|t| t.all(&self.start).iter().any(&matches))
+            .copied()
+    }
+
+    /// What a step `other` makes, right but not the one asked for, draws.
+    fn elsewhere(&self, other: &dyn Technique) -> String {
+        format!(
+            "{} gives that, and it's right; this board asks for {}.",
+            other.name(),
+            self.technique.name()
+        )
     }
 
     fn right(&mut self, step: Step) {
@@ -519,7 +574,7 @@ impl Learning {
     fn miss(&mut self, why: String) {
         self.misses += 1;
         self.feedback = Some(if self.misses >= 2 {
-            format!("{why} ? gives a hint.")
+            format!("{why} {} gives a hint.", key_label(Action::Hint))
         } else {
             why
         });
@@ -534,7 +589,10 @@ impl Learning {
         } else if places(self.technique) {
             format!("{name}: place the digit it gives.")
         } else {
-            format!("{name}: strike what it rules out, then Enter.")
+            format!(
+                "{name}: strike what it rules out, then {}.",
+                key_label(Action::Confirm)
+            )
         }
     }
 
@@ -549,10 +607,19 @@ impl Learning {
                 let frame = &lesson.frames[i];
                 let step = first.expect("the lesson test finds the technique");
                 let (text, highlight) = frame_text(frame, &step);
-                let heading = format!("See it · {} of {}", i + 1, lesson.frames.len());
+                let heading = format!(
+                    "{} · See it · {} of {}",
+                    self.technique.name(),
+                    i + 1,
+                    lesson.frames.len()
+                );
                 (heading, text, highlight)
             }
-            (Course::Lesson(lesson), At::Close) => ("Done".to_string(), lesson.close.clone(), None),
+            (Course::Lesson(lesson), At::Close) => (
+                format!("{} · Done", self.technique.name()),
+                lesson.close.clone(),
+                None,
+            ),
             (Course::Drill(boards), At::Close) => (
                 "Done".to_string(),
                 format!("That's all {} boards.", boards.len()),
@@ -560,10 +627,13 @@ impl Learning {
             ),
             (course, at) => {
                 let heading = match (course, at) {
-                    (_, At::Finish) => "Finish it".to_string(),
-                    (Course::Lesson(lesson), At::Find(i)) => {
-                        format!("Find it · {} of {}", i + 1, lesson.find.len())
-                    }
+                    (_, At::Finish) => format!("{} · Finish it", self.technique.name()),
+                    (Course::Lesson(lesson), At::Find(i)) => format!(
+                        "{} · Find it · {} of {}",
+                        self.technique.name(),
+                        i + 1,
+                        lesson.find.len()
+                    ),
                     (Course::Drill(boards), At::Drill(i)) => {
                         format!("{} · {} of {}", self.technique.name(), i + 1, boards.len())
                     }
@@ -679,6 +749,25 @@ mod tests {
     /// Every lesson file reads, its technique is the easiest step on every
     /// board with the candidates it shows, See it has frames, and Find it
     /// has 3 boards.
+    /// No lesson prints a word the hint wording keeps off the screen
+    /// (research/hint-wording.md), technique names aside.
+    #[test]
+    fn lessons_keep_to_the_hint_wording() {
+        let banned = [
+            "house", "unit", "region", "block", "note", "pencil", "obvious", "simply", "just",
+            "easy ",
+        ];
+        for text in every_lesson_text() {
+            // A technique's name, such as Full house, is said as it is.
+            let lower = ORDER.iter().fold(text.to_lowercase(), |t, tech| {
+                t.replace(&tech.name().to_lowercase(), "")
+            });
+            for word in banned {
+                assert!(!lower.contains(word), "{word:?} in {text:?}");
+            }
+        }
+    }
+
     #[test]
     fn every_lesson_holds_its_technique() {
         let lessons = lessons();
@@ -844,6 +933,80 @@ mod tests {
         game.press(digits.iter().next().unwrap());
         learning.confirm(&mut game);
         assert_eq!(learning.found.as_ref(), Some(&step));
+    }
+
+    /// A digit or strike another technique gives is right, says which, and
+    /// isn't a miss; a change to the board clears what the answer drew.
+    #[test]
+    fn another_techniques_step_is_right_but_not_asked_for() {
+        let (mut learning, mut game) = to_finish(lesson_named("Hidden single"));
+        let other = ORDER
+            .iter()
+            .filter(|t| t.name() != "Hidden single")
+            .find_map(|t| {
+                t.all(&learning.start)
+                    .into_iter()
+                    .find(|s| s.placement.is_some())
+            })
+            .expect("the board has another placing step");
+        let (cell, digit) = other.placement.unwrap();
+        assert!(
+            learning
+                .instances()
+                .iter()
+                .all(|s| s.placement != Some((cell, digit)))
+        );
+        game.move_to(cell);
+        game.press(digit);
+        learning.after(&mut game);
+        let said = learning.feedback.clone().unwrap();
+        assert!(said.starts_with(other.technique.name()), "{said}");
+        assert!(
+            said.ends_with("this board asks for Hidden single."),
+            "{said}"
+        );
+        assert_eq!((learning.misses, game.board().get(cell)), (0, None));
+        game.move_to((cell + 1) % CELLS);
+        learning.after(&mut game);
+        assert!(learning.feedback.is_some(), "moving keeps it");
+        game.fill_candidates();
+        learning.after(&mut game);
+        assert_eq!(learning.feedback, None, "a change to the board clears it");
+
+        let (mut learning, mut game) = to_finish(lesson_named("Naked pair"));
+        let strike = ORDER
+            .iter()
+            .filter(|t| t.name() != "Naked pair")
+            .flat_map(|t| t.all(&learning.start))
+            .flat_map(|s| s.removals)
+            .find(|&(c, d)| {
+                learning.instances().iter().all(|s| {
+                    s.removals
+                        .iter()
+                        .all(|&(rc, rd)| rc != c || rd.intersection(d).is_empty())
+                })
+            })
+            .expect("a strike only another technique makes");
+        game.move_to(strike.0);
+        game.press(strike.1.iter().next().unwrap());
+        learning.confirm(&mut game);
+        let said = learning.feedback.clone().unwrap();
+        assert!(said.contains("this board asks for Naked pair"), "{said}");
+        assert_eq!(learning.misses, 0);
+    }
+
+    /// Revealing a cell and bookmarks don't reach a lesson's board, and
+    /// every heading names the technique.
+    #[test]
+    fn a_lesson_keeps_its_own_keys_and_names_its_technique() {
+        let (learning, _) = Learning::lesson(lesson_named("Claiming"));
+        assert_eq!(learning.panel().heading, "Claiming · See it · 1 of 6");
+        let (learning, _) = to_finish(lesson_named("Claiming"));
+        for action in [Action::Reveal, Action::Bookmark, Action::BackToBookmark] {
+            assert!(!learning.lets(action), "{action:?}");
+        }
+        assert!(learning.lets(Action::Digit(1)));
+        assert_eq!(learning.panel().heading, "Claiming · Finish it");
     }
 
     /// A drill's boards come one after another, then a last line, then
