@@ -1,4 +1,4 @@
-//! The Sudoku engine behind sumi. It knows nothing about terminals.
+#![doc = include_str!("../README.md")]
 
 pub mod bank;
 pub mod digits;
