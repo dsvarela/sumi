@@ -1472,6 +1472,67 @@ pub struct SettingsPage<'a> {
     pub note: Option<&'a str>,
 }
 
+/// How the settings page lays out a setting: its value beside its label,
+/// or under it in a window too narrow for both, such as a phone's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SettingsForm {
+    Wide,
+    Narrow,
+}
+
+impl SettingsForm {
+    /// The window the page needs in this form: its widest row inside the
+    /// margins (which hold the frame) and a column either side, and its
+    /// rows with the two kept for a save error, the margins and the keys.
+    fn needs(self) -> (u16, u16) {
+        let label = 2 + label_width();
+        let value = 2 + VALUE_WIDTH + 2;
+        let rows = match self {
+            SettingsForm::Wide => label + 2 + value,
+            SettingsForm::Narrow => label.max(4 + value),
+        };
+        let widest = settings_rows(self)
+            .iter()
+            .filter_map(|row| match row {
+                SettingsRow::Heading(name) => Some(name.chars().count()),
+                SettingsRow::NoSettings => Some(no_settings_text().chars().count()),
+                _ => None,
+            })
+            .fold(rows, usize::max);
+        let width = widest as u16 + 2 * SETTINGS_MARGIN.horizontal + 2;
+        let key_rows = key_rows(&settings_keys(), usize::from(width)).len() as u16;
+        let height = settings_rows(self).len() as u16 + 2 + 2 * SETTINGS_MARGIN.vertical;
+        (width, height + key_rows)
+    }
+
+    /// The form the page takes in `area`: wide when it fits, else narrow,
+    /// and neither in a window too small for both.
+    fn of(area: Rect) -> Option<SettingsForm> {
+        [SettingsForm::Wide, SettingsForm::Narrow]
+            .into_iter()
+            .find(|form| {
+                let (width, height) = form.needs();
+                area.width >= width && area.height >= height
+            })
+    }
+}
+
+/// The space around the settings page's rows, the frame included.
+const SETTINGS_MARGIN: ratatui::layout::Margin = ratatui::layout::Margin::new(3, 2);
+
+/// The longest setting's label, which sets where values start.
+fn label_width() -> usize {
+    Setting::all()
+        .iter()
+        .map(|setting| setting.label().chars().count())
+        .max()
+        .expect("settings")
+}
+
+fn no_settings_text() -> String {
+    format!("  {} in a game lists them", key_label(Action::Help))
+}
+
 /// A row of the settings page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SettingsRow {
@@ -1479,12 +1540,15 @@ enum SettingsRow {
     Heading(&'static str),
     /// A setting, and its place in `Setting::all`.
     Setting(usize, Setting),
+    /// The narrow form's line under a setting with its value.
+    Value(usize, Setting),
     /// Where a group has no settings: the Keys group.
     NoSettings,
 }
 
-/// The settings page's rows, in order. Drawing and clicks both use it.
-fn settings_rows() -> Vec<SettingsRow> {
+/// The settings page's rows in `form`, in order. Drawing and clicks both
+/// use it.
+fn settings_rows(form: SettingsForm) -> Vec<SettingsRow> {
     let mut rows = Vec::new();
     let mut index = 0;
     for (name, settings) in GROUPS {
@@ -1494,6 +1558,9 @@ fn settings_rows() -> Vec<SettingsRow> {
         rows.push(SettingsRow::Heading(name));
         for &setting in settings {
             rows.push(SettingsRow::Setting(index, setting));
+            if form == SettingsForm::Narrow {
+                rows.push(SettingsRow::Value(index, setting));
+            }
             index += 1;
         }
         if settings.is_empty() {
@@ -1503,50 +1570,44 @@ fn settings_rows() -> Vec<SettingsRow> {
     rows
 }
 
-fn settings_lines(page: &SettingsPage, theme: &Theme) -> Vec<Line<'static>> {
+fn settings_lines(page: &SettingsPage, theme: &Theme, form: SettingsForm) -> Vec<Line<'static>> {
     let heading = Style::new().fg(theme.text).add_modifier(Modifier::BOLD);
     let accent = Style::new().fg(theme.accent).add_modifier(Modifier::BOLD);
     let selected = page.page.setting();
-    let mut lines = Vec::new();
-    for row in settings_rows() {
-        let setting = match row {
-            SettingsRow::Blank => {
-                lines.push(Line::default());
-                continue;
-            }
-            SettingsRow::Heading(name) => {
-                lines.push(Line::from(Span::styled(name, heading)));
-                continue;
-            }
-            SettingsRow::NoSettings => {
-                lines.push(Line::from(Span::styled(
-                    format!("  {} in a game lists them", key_label(Action::Help)),
-                    Style::new().fg(theme.dimmed),
-                )));
-                continue;
-            }
-            SettingsRow::Setting(_, setting) => setting,
-        };
-        {
-            let value = shorten(&setting.shown(page.config, page.theme_name), VALUE_WIDTH);
-            let line = if setting == selected {
-                Line::from(vec![
-                    Span::styled(format!("› {:<20}  ", setting.label()), accent),
-                    Span::styled(format!("‹ {value} ›"), accent),
-                ])
-            } else {
-                Line::from(vec![
-                    Span::styled(
-                        format!("  {:<20}  ", setting.label()),
-                        Style::new().fg(theme.text),
-                    ),
-                    Span::styled(format!("  {value}"), Style::new().fg(theme.dimmed)),
-                ])
-            };
-            lines.push(line);
+    // The marker and the arrows show the selection without relying on
+    // colour.
+    let label = |setting: Setting| {
+        let label = format!("{:<1$}", setting.label(), label_width());
+        if setting == selected {
+            Span::styled(format!("› {label}"), accent)
+        } else {
+            Span::styled(format!("  {label}"), Style::new().fg(theme.text))
         }
-    }
-    lines
+    };
+    let value = |setting: Setting| {
+        let value = shorten(&setting.shown(page.config, page.theme_name), VALUE_WIDTH);
+        if setting == selected {
+            Span::styled(format!("‹ {value} ›"), accent)
+        } else {
+            Span::styled(format!("  {value}"), Style::new().fg(theme.dimmed))
+        }
+    };
+    settings_rows(form)
+        .into_iter()
+        .map(|row| match row {
+            SettingsRow::Blank => Line::default(),
+            SettingsRow::Heading(name) => Line::from(Span::styled(name, heading)),
+            SettingsRow::NoSettings => Line::from(Span::styled(
+                no_settings_text(),
+                Style::new().fg(theme.dimmed),
+            )),
+            SettingsRow::Setting(_, setting) => match form {
+                SettingsForm::Wide => Line::from(vec![label(setting), "  ".into(), value(setting)]),
+                SettingsForm::Narrow => Line::from(label(setting)),
+            },
+            SettingsRow::Value(_, setting) => Line::from(vec!["    ".into(), value(setting)]),
+        })
+        .collect()
 }
 
 /// The widest value a setting row has room for beside its label; a longer
@@ -1589,23 +1650,8 @@ fn settings_message(page: &SettingsPage, theme: &Theme) -> Paragraph<'static> {
     Paragraph::new(line).wrap(Wrap { trim: true })
 }
 
-/// The settings page's width: its widest row, a label and the longest
-/// built-in theme name, in the frame.
-const SETTINGS_WIDTH: u16 = 54;
-
-/// The smallest window the settings page fits in: its width, and its rows
-/// with the two kept for a save error, the frame, and the keys.
-fn settings_needed() -> (u16, u16) {
-    let key_rows = key_rows(&settings_keys(), usize::from(SETTINGS_WIDTH)).len() as u16;
-    (
-        SETTINGS_WIDTH,
-        settings_rows().len() as u16 + 2 + 4 + key_rows,
-    )
-}
-
 pub fn settings_fit(area: Rect) -> bool {
-    let (width, height) = settings_needed();
-    area.width >= width && area.height >= height
+    SettingsForm::of(area).is_some()
 }
 
 fn settings_keys() -> Vec<(&'static str, &'static str)> {
@@ -1617,13 +1663,13 @@ fn settings_keys() -> Vec<(&'static str, &'static str)> {
     ]
 }
 
-/// Where the settings page's box, its rows and its key bar go. The rows
-/// are `settings_rows` and the two kept for a save error.
-fn settings_areas(area: Rect) -> (Rect, Rect, Rect) {
-    let rows = settings_rows().len() as u16 + 2;
+/// Where the settings page's box, its rows and its key bar go in `form`.
+/// The rows are `settings_rows` and the two kept for a save error.
+fn settings_areas(area: Rect, form: SettingsForm) -> (Rect, Rect, Rect) {
+    let rows = settings_rows(form).len() as u16 + 2;
     let key_rows = key_rows(&settings_keys(), usize::from(area.width)).len() as u16;
-    let width = SETTINGS_WIDTH - 2;
-    let height = rows + 4;
+    let width = form.needs().0 - 2;
+    let height = rows + 2 * SETTINGS_MARGIN.vertical;
     let [boxed, keys] =
         Layout::vertical([Constraint::Length(height), Constraint::Length(key_rows)]).areas(
             area.centered(
@@ -1631,7 +1677,7 @@ fn settings_areas(area: Rect) -> (Rect, Rect, Rect) {
                 Constraint::Length((height + key_rows).min(area.height)),
             ),
         );
-    let inner = boxed.inner(ratatui::layout::Margin::new(3, 2));
+    let inner = boxed.inner(SETTINGS_MARGIN);
     let keys = Rect {
         x: area.x,
         width: area.width,
@@ -1642,16 +1688,13 @@ fn settings_areas(area: Rect) -> (Rect, Rect, Rect) {
 
 /// The setting a click at `(x, y)` lands on, by its place in `Setting::all`.
 pub fn settings_hit(area: Rect, x: u16, y: u16) -> Option<usize> {
-    if !settings_fit(area) {
-        return None;
-    }
-    let rows = settings_rows();
-    let (_, inner, _) = settings_areas(area);
+    let form = SettingsForm::of(area)?;
+    let (_, inner, _) = settings_areas(area, form);
     if !inner.contains(ratatui::layout::Position::new(x, y)) {
         return None;
     }
-    match rows.get(usize::from(y - inner.y))? {
-        SettingsRow::Setting(index, _) => Some(*index),
+    match settings_rows(form).get(usize::from(y - inner.y))? {
+        SettingsRow::Setting(index, _) | SettingsRow::Value(index, _) => Some(*index),
         _ => None,
     }
 }
@@ -1659,12 +1702,12 @@ pub fn settings_hit(area: Rect, x: u16, y: u16) -> Option<usize> {
 pub fn draw_settings(frame: &mut Frame, page: &SettingsPage, theme: &Theme) {
     let area = frame.area();
     frame.render_widget(Block::new().style(Style::new().bg(theme.background)), area);
-    if !settings_fit(area) {
-        too_small(frame, theme, settings_needed());
+    let Some(form) = SettingsForm::of(area) else {
+        too_small(frame, theme, SettingsForm::Narrow.needs());
         return;
-    }
-    let lines = settings_lines(page, theme);
-    let (boxed, inner, keys_area) = settings_areas(area);
+    };
+    let lines = settings_lines(page, theme, form);
+    let (boxed, inner, keys_area) = settings_areas(area, form);
     let [rows, message] =
         Layout::vertical([Constraint::Fill(1), Constraint::Length(2)]).areas(inner);
     let block = frame_block(theme).title_top(Line::from(Span::styled(
@@ -3678,8 +3721,12 @@ mod tests {
         insta::assert_snapshot!(render_settings(
             &page,
             &Config::default(),
-            settings_needed()
+            SettingsForm::Wide.needs()
         ));
+        insta::assert_snapshot!(
+            "the_settings_page_narrow",
+            render_settings(&page, &Config::default(), SettingsForm::Narrow.needs())
+        );
     }
 
     /// The settings page's widest row fits the width it asks for.
@@ -3690,23 +3737,25 @@ mod tests {
             marks_to_candidates: crate::config::MarksToCandidates::Merge,
             ..Config::default()
         };
-        let (_, inner, _) =
-            settings_areas(Rect::new(0, 0, settings_needed().0, settings_needed().1));
-        for name in ["Tokyo Night AMOLED", "A user theme with a very long name"] {
-            for selected in 0..crate::settings::Setting::all().len() {
-                let page = Page {
-                    selected,
-                    from_pause: false,
-                };
-                let shown = SettingsPage {
-                    page: &page,
-                    config: &config,
-                    theme_name: name,
-                    error: None,
-                    note: None,
-                };
-                for line in settings_lines(&shown, &theme) {
-                    assert!(line.width() <= usize::from(inner.width), "{line}");
+        for form in [SettingsForm::Wide, SettingsForm::Narrow] {
+            let (width, height) = form.needs();
+            let (_, inner, _) = settings_areas(Rect::new(0, 0, width, height), form);
+            for name in ["Tokyo Night AMOLED", "A user theme with a very long name"] {
+                for selected in 0..crate::settings::Setting::all().len() {
+                    let page = Page {
+                        selected,
+                        from_pause: false,
+                    };
+                    let shown = SettingsPage {
+                        page: &page,
+                        config: &config,
+                        theme_name: name,
+                        error: None,
+                        note: None,
+                    };
+                    for line in settings_lines(&shown, &theme, form) {
+                        assert!(line.width() <= usize::from(inner.width), "{line}");
+                    }
                 }
             }
         }
@@ -3961,8 +4010,11 @@ mod tests {
                 error,
                 note,
             };
-            let mut terminal =
-                Terminal::new(TestBackend::new(settings_needed().0, settings_needed().1)).unwrap();
+            let mut terminal = Terminal::new(TestBackend::new(
+                SettingsForm::Wide.needs().0,
+                SettingsForm::Wide.needs().1,
+            ))
+            .unwrap();
             terminal
                 .draw(|frame| draw_settings(frame, &shown, &theme))
                 .unwrap();
@@ -3990,15 +4042,54 @@ mod tests {
     /// for.
     #[test]
     fn the_settings_page_fits_the_size_it_asks_for() {
-        let area = Rect::new(0, 0, settings_needed().0, settings_needed().1);
-        let (boxed, inner, keys) = settings_areas(area);
-        assert_eq!(inner.height as usize, settings_rows().len() + 2);
-        assert!(boxed.bottom() <= keys.y && keys.bottom() <= area.bottom());
+        for form in [SettingsForm::Wide, SettingsForm::Narrow] {
+            let (width, height) = form.needs();
+            let area = Rect::new(0, 0, width, height);
+            assert_eq!(SettingsForm::of(area), Some(form));
+            let (boxed, inner, keys) = settings_areas(area, form);
+            assert_eq!(inner.height as usize, settings_rows(form).len() + 2);
+            assert!(boxed.bottom() <= keys.y && keys.bottom() <= area.bottom());
+            assert_eq!(
+                boxed.y + keys.bottom() - area.bottom(),
+                boxed.y,
+                "no room to spare"
+            );
+        }
+    }
+
+    /// The narrow form fits the dense layout's window, so every setting
+    /// can be reached wherever a game can be played.
+    #[test]
+    fn the_narrow_settings_fit_where_the_dense_board_does() {
+        let (width, height) = SettingsForm::Narrow.needs();
+        let dense = Density::Dense.needed(false);
+        assert!(width <= dense.0 && height <= dense.1, "{width}×{height}");
         assert_eq!(
-            boxed.y + keys.bottom() - area.bottom(),
-            boxed.y,
-            "no room to spare"
+            SettingsForm::of(Rect::new(0, 0, dense.0, dense.1)),
+            Some(SettingsForm::Narrow)
         );
+    }
+
+    /// In the wide form every value starts in the same column, however
+    /// long its label.
+    #[test]
+    fn settings_values_start_in_one_column() {
+        let page = Page::new(false);
+        let backend = render_settings(&page, &Config::default(), SettingsForm::Wide.needs());
+        let starts: std::collections::HashSet<u16> = Setting::all()
+            .into_iter()
+            .map(|setting| {
+                let label = setting.label();
+                let (x, _) = spot_of(&backend, label);
+                let row: Vec<&str> = (0..backend.buffer().area.width)
+                    .map(|x| backend.buffer()[(x, spot_of(&backend, label).1)].symbol())
+                    .collect();
+                (x + label.chars().count() as u16..backend.buffer().area.width)
+                    .find(|&x| !matches!(row[usize::from(x)], " " | "‹"))
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(starts.len(), 1, "{starts:?}");
     }
 
     /// While a completed house pulses, its cells are lit; without colour,
@@ -4050,23 +4141,41 @@ mod tests {
     #[test]
     fn a_click_on_a_setting_lands_on_it() {
         let page = Page::new(false);
-        let backend = render_settings(&page, &Config::default(), settings_needed());
-        let area = Rect::new(0, 0, settings_needed().0, settings_needed().1);
-        for (i, setting) in Setting::all().into_iter().enumerate() {
-            let label = setting.label();
-            let spot = find(&backend, &label[..1])
-                .into_iter()
-                .filter(|&(x, _)| x + label.len() as u16 <= area.width)
-                .find(|&(x, y)| {
-                    let rest: String = (x..x + label.len() as u16)
-                        .map(|x| backend.buffer()[(x, y)].symbol())
-                        .collect();
-                    rest == label
-                })
-                .unwrap();
-            assert_eq!(settings_hit(area, spot.0, spot.1), Some(i), "{label}");
+        for form in [SettingsForm::Wide, SettingsForm::Narrow] {
+            let (width, height) = form.needs();
+            let backend = render_settings(&page, &Config::default(), (width, height));
+            let area = Rect::new(0, 0, width, height);
+            for (i, setting) in Setting::all().into_iter().enumerate() {
+                let label = setting.label();
+                let spot = spot_of(&backend, label);
+                assert_eq!(settings_hit(area, spot.0, spot.1), Some(i), "{label}");
+                if form == SettingsForm::Narrow {
+                    // The value's line under the label is the same setting.
+                    assert_eq!(
+                        settings_hit(area, spot.0 + 4, spot.1 + 1),
+                        Some(i),
+                        "{label}"
+                    );
+                }
+            }
+            let heading = find(&backend, "G")[0];
+            assert_eq!(settings_hit(area, heading.0, heading.1), None, "Gameplay");
         }
-        let heading = find(&backend, "G")[0];
-        assert_eq!(settings_hit(area, heading.0, heading.1), None, "Gameplay");
+    }
+
+    /// Where `text` starts on the screen.
+    fn spot_of(backend: &TestBackend, text: &str) -> (u16, u16) {
+        let width = backend.buffer().area.width;
+        let len = text.chars().count() as u16;
+        find(backend, &text[..1])
+            .into_iter()
+            .filter(|&(x, _)| x + len <= width)
+            .find(|&(x, y)| {
+                let rest: String = (x..x + len)
+                    .map(|x| backend.buffer()[(x, y)].symbol())
+                    .collect();
+                rest == text
+            })
+            .unwrap()
     }
 }

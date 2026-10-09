@@ -1,6 +1,6 @@
 ---
 source: crates/sumi-sudoku/src/ui.rs
-expression: "render_settings(&page, &Config::default(), settings_needed())"
+expression: "render_settings(&page, &Config::default(), SettingsForm::Wide.needs())"
 ---
 " ╭ Settings ────────────────────────────────────────╮ "
 " │                                                  │ "
