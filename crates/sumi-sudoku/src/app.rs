@@ -324,6 +324,7 @@ struct Saved {
     mode: Mode,
     hints_used: u32,
     clock_running: bool,
+    bookmarks: usize,
 }
 
 impl App {
@@ -779,6 +780,7 @@ impl Session {
             mode: self.game.mode(),
             hints_used: self.game.hints_used(),
             clock_running: self.game.clock_is_running(),
+            bookmarks: self.game.bookmarks().len(),
         }
     }
 
@@ -961,6 +963,19 @@ impl Session {
             Action::Filter => self.view.awaiting_filter = true,
             Action::Undo => game.undo(),
             Action::Redo => game.redo(),
+            Action::Bookmark => {
+                game.bookmark();
+                self.view.notice = Some("bookmarked");
+            }
+            Action::BackToBookmark => {
+                self.view.notice = if game.bookmarks().is_empty() {
+                    Some("no bookmark")
+                } else if game.back_to_bookmark() {
+                    Some("back to a bookmark")
+                } else {
+                    Some("at the bookmark")
+                };
+            }
             Action::Hint => self.climb_hint(),
             // Esc closes what is open, then clears check marks, then opens
             // the pause menu.
@@ -1609,6 +1624,29 @@ mod tests {
             "generated, not from the bank"
         );
         assert_eq!(game.level(), Some(Level::Expert));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// b and B answer on the status line, and a bookmark is saved with
+    /// the game though the board didn't change.
+    #[test]
+    fn bookmarks_answer_and_are_saved() {
+        let dir = scratch("bookmarks");
+        let mut app = app_with(fixtures::game());
+        app.setup.data = Some(dir.clone());
+        let notice = |app: &mut App, key: char| {
+            press_keys(app, &[KeyCode::Char(key)]);
+            game_of(app).view.notice
+        };
+        assert_eq!(notice(&mut app, 'B'), Some("no bookmark"));
+        assert_eq!(notice(&mut app, 'b'), Some("bookmarked"));
+        let saved = std::fs::read_to_string(dir.join("game.json")).unwrap();
+        assert_eq!(Game::from_json(&saved).unwrap().bookmarks().len(), 1);
+        assert_eq!(notice(&mut app, 'B'), Some("at the bookmark"));
+        press_keys(&mut app, &[KeyCode::Char('l'), KeyCode::Char('l')]);
+        assert_eq!(notice(&mut app, '4'), None);
+        assert_eq!(notice(&mut app, 'B'), Some("back to a bookmark"));
+        assert_eq!(game_of(&mut app).game.board().get(2), None);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

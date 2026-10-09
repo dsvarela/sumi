@@ -793,6 +793,8 @@ fn help_words(action: Action) -> &'static str {
         Action::Close => "close, clear marks, menu",
         Action::Undo => "undo",
         Action::Redo => "redo",
+        Action::Bookmark => "bookmark the board",
+        Action::BackToBookmark => "back to the last bookmark",
         Action::Help => "this list",
         Action::Pause => "pause, or carry on (Space)",
         Action::Quit => "quit",
@@ -815,7 +817,13 @@ fn help_group(action: Action) -> &'static str {
         Action::Hint | Action::Confirm | Action::Check | Action::Reveal | Action::Close => {
             "Hints and checks"
         }
-        Action::Undo | Action::Redo | Action::Pause | Action::Help | Action::Quit => "Game",
+        Action::Undo
+        | Action::Redo
+        | Action::Bookmark
+        | Action::BackToBookmark
+        | Action::Pause
+        | Action::Help
+        | Action::Quit => "Game",
     }
 }
 

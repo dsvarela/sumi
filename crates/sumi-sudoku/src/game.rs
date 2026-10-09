@@ -42,6 +42,15 @@ pub struct Game {
     /// is running.
     banked: Duration,
     running_since: Option<Instant>,
+    /// Boards to come back to after a guess, oldest first.
+    bookmarks: Vec<Bookmark>,
+}
+
+/// Every cell as it was when `b` was pressed, and the cursor.
+#[derive(Clone, PartialEq, Eq)]
+struct Bookmark {
+    cursor: Cell,
+    cells: [CellState; CELLS],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,7 +87,7 @@ pub enum Direction {
 }
 
 /// Everything the player can change about one cell.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 struct CellState {
     digit: Option<u8>,
     candidates: Option<Digits>,
@@ -129,6 +138,7 @@ impl Game {
             revealed: 0,
             banked: Duration::ZERO,
             running_since: None,
+            bookmarks: Vec::new(),
         }
     }
 
@@ -451,6 +461,61 @@ impl Game {
         }
     }
 
+    /// Keeps the board and every note as they are, to come back to with
+    /// [`Game::back_to_bookmark`]. A board the same as the newest bookmark's
+    /// adds none.
+    pub fn bookmark(&mut self) {
+        let here = self.here();
+        if self.bookmarks.last().map(|b| b.cells) != Some(here.cells) {
+            self.bookmarks.push(here);
+        }
+    }
+
+    /// Goes back to the newest bookmark, keeping it, so another guess can
+    /// start from it. On it already, drops it and goes back to the one
+    /// before, if there is one. Going back is one undo step. Says whether
+    /// anything changed.
+    pub fn back_to_bookmark(&mut self) -> bool {
+        let at_newest = self
+            .bookmarks
+            .last()
+            .is_some_and(|b| b.cells == self.here().cells);
+        if at_newest && self.bookmarks.len() > 1 {
+            self.bookmarks.pop();
+        }
+        match self.bookmarks.last().cloned() {
+            Some(bookmark) if bookmark.cells != self.here().cells => {
+                self.go_to(&bookmark);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// The cells left to fill at each bookmark, oldest first.
+    pub fn bookmarks(&self) -> Vec<usize> {
+        self.bookmarks
+            .iter()
+            .map(|b| b.cells.iter().filter(|s| s.digit.is_none()).count())
+            .collect()
+    }
+
+    fn here(&self) -> Bookmark {
+        Bookmark {
+            cursor: self.cursor,
+            cells: std::array::from_fn(|c| self.state(c)),
+        }
+    }
+
+    fn go_to(&mut self, bookmark: &Bookmark) {
+        self.record(|g| {
+            for (cell, &state) in bookmark.cells.iter().enumerate() {
+                g.set_state(cell, state);
+            }
+        });
+        self.cursor = bookmark.cursor;
+    }
+
     /// Changes when the board or the notes do, by any action, undo and redo
     /// included; moving and switching mode leave it. Whatever was worked out
     /// from the game at one revision is stale at any other.
@@ -631,6 +696,39 @@ mod tests {
 
     fn secs(n: u64) -> Duration {
         Duration::from_secs(n)
+    }
+
+    /// B goes back to the newest bookmark and keeps it; on it, B drops it
+    /// and goes to the one before; on the oldest, B does nothing. Each
+    /// going back is one undo step, cursor included.
+    #[test]
+    fn back_to_a_bookmark_then_walk_the_stack() {
+        let mut g = at(R1C3);
+        assert!(!g.back_to_bookmark(), "no bookmark");
+        g.bookmark();
+        g.bookmark();
+        assert_eq!(g.bookmarks(), [51], "the same board twice is one bookmark");
+        let first = g.here();
+        g.press(4);
+        g.move_to(R1C8);
+        g.press(1);
+        g.bookmark();
+        let second = g.here();
+        g.fill_candidates();
+
+        assert!(g.back_to_bookmark());
+        assert!(g.here() == second, "back to the newest");
+        g.undo();
+        assert!(
+            !g.candidates(3).is_empty(),
+            "one undo step: before going back"
+        );
+        g.redo();
+        assert!(g.back_to_bookmark());
+        assert!(g.here() == first, "on the newest, back to the one before");
+        assert_eq!(g.bookmarks(), [51]);
+        assert!(!g.back_to_bookmark(), "on the oldest");
+        assert!(g.here() == first);
     }
 
     /// A digit's last move is its own cell, not the notes it hid around

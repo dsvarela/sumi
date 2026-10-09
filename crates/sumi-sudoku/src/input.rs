@@ -23,6 +23,10 @@ pub enum Action {
     Filter,
     Undo,
     Redo,
+    /// Keeps the board to come back to after a guess.
+    Bookmark,
+    /// Back to the newest bookmark, or the one before when on it.
+    BackToBookmark,
     /// Opens the hint, or moves it up a rung.
     Hint,
     /// Esc: closes what is open (the hint, the key list, a menu), clears the
@@ -43,7 +47,7 @@ pub enum Action {
 impl Action {
     /// One of each action, in the order the help screen lists them. A test
     /// holds this to `index`, whose match the compiler makes complete.
-    pub const ALL: [Action; 22] = [
+    pub const ALL: [Action; 24] = [
         Action::Step(Direction::Up),
         Action::Jump(Direction::Up),
         Action::Digit(1),
@@ -63,6 +67,8 @@ impl Action {
         Action::Close,
         Action::Undo,
         Action::Redo,
+        Action::Bookmark,
+        Action::BackToBookmark,
         Action::Pause,
         Action::Help,
         Action::Quit,
@@ -91,9 +97,11 @@ impl Action {
             Action::Close => 16,
             Action::Undo => 17,
             Action::Redo => 18,
-            Action::Pause => 19,
-            Action::Help => 20,
-            Action::Quit => 21,
+            Action::Bookmark => 19,
+            Action::BackToBookmark => 20,
+            Action::Pause => 21,
+            Action::Help => 22,
+            Action::Quit => 23,
         }
     }
 }
@@ -137,6 +145,8 @@ pub fn action(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('v') => Action::ToggleNotes,
         KeyCode::Char('f') => Action::Filter,
         KeyCode::Char('u') => Action::Undo,
+        KeyCode::Char('b') => Action::Bookmark,
+        KeyCode::Char('B') => Action::BackToBookmark,
         KeyCode::Char('?') => Action::Hint,
         KeyCode::Char('c') => Action::Check,
         KeyCode::Char('r') => Action::Reveal,
@@ -184,6 +194,8 @@ pub fn key_label(action: Action) -> &'static str {
         Action::Filter => "f",
         Action::Undo => "u",
         Action::Redo => "^r",
+        Action::Bookmark => "b",
+        Action::BackToBookmark => "B",
         Action::Hint => "?",
         Action::Close => "Esc",
         Action::Check => "c",

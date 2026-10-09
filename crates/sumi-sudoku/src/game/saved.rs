@@ -15,7 +15,7 @@ use sumi_core::grid::{CELLS, Cell, Grid};
 use sumi_core::puzzle::{NotUnique, Puzzle};
 use sumi_core::technique::Level;
 
-use super::{CellState, Game, Hidden, Mode, Step};
+use super::{Bookmark, CellState, Game, Hidden, Mode, Step};
 
 /// Bumped when a saved game an older sumi wrote can't be read as it is.
 const VERSION: u32 = 1;
@@ -39,6 +39,14 @@ impl Game {
             mode: mode_name(self.mode).to_string(),
             undo: self.undo.iter().map(SavedStep::from).collect(),
             redo: self.redo.iter().map(SavedStep::from).collect(),
+            bookmarks: self
+                .bookmarks
+                .iter()
+                .map(|b| SavedBookmark {
+                    cursor: b.cursor,
+                    cells: b.cells.iter().map(saved_cell).collect(),
+                })
+                .collect(),
             hints_used: self.hints_used,
             revealed: self.revealed,
             played_ms: self.elapsed(now).as_millis() as u64,
@@ -85,6 +93,11 @@ impl Game {
         };
         game.undo = steps(saved.undo)?;
         game.redo = steps(saved.redo)?;
+        game.bookmarks = saved
+            .bookmarks
+            .into_iter()
+            .map(|b| b.into_bookmark(&clues))
+            .collect::<Result<_, _>>()?;
         game.hints_used = saved.hints_used;
         game.revealed = saved.revealed;
         game.banked = Duration::from_millis(saved.played_ms);
@@ -108,6 +121,8 @@ struct Saved {
     mode: String,
     undo: Vec<SavedStep>,
     redo: Vec<SavedStep>,
+    #[serde(default)]
+    bookmarks: Vec<SavedBookmark>,
     hints_used: u32,
     revealed: u32,
     played_ms: u64,
@@ -121,56 +136,81 @@ struct SavedStep {
     cells: Vec<(Cell, SavedCell, SavedCell)>,
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SavedBookmark {
+    cursor: Cell,
+    /// Every cell, in order.
+    cells: Vec<SavedCell>,
+}
+
 /// A cell's digit (0 for none), candidates (`None` for none written),
 /// box marks, hidden candidates and hidden box marks.
 type SavedCell = (u8, Option<String>, String, String, String);
 
+fn saved_cell(s: &CellState) -> SavedCell {
+    (
+        s.digit.unwrap_or(0),
+        s.candidates.map(text),
+        text(s.marks),
+        text(s.hidden.candidates),
+        text(s.hidden.marks),
+    )
+}
+
+fn cell_state(
+    (digit, candidates, marks, hidden, hidden_marks): &SavedCell,
+) -> Result<CellState, String> {
+    Ok(CellState {
+        digit: match *digit {
+            0 => None,
+            1..=9 => Some(*digit),
+            _ => return Err(format!("{digit} isn't a digit")),
+        },
+        candidates: candidates.as_deref().map(digits).transpose()?,
+        marks: digits(marks)?,
+        hidden: Hidden {
+            candidates: digits(hidden)?,
+            marks: digits(hidden_marks)?,
+        },
+    })
+}
+
 impl From<&Step> for SavedStep {
     fn from(step: &Step) -> SavedStep {
-        let cell = |s: &CellState| {
-            (
-                s.digit.unwrap_or(0),
-                s.candidates.map(text),
-                text(s.marks),
-                text(s.hidden.candidates),
-                text(s.hidden.marks),
-            )
-        };
         SavedStep {
             cursor: step.cursor,
             cells: step
                 .cells
                 .iter()
-                .map(|(c, before, after)| (*c, cell(before), cell(after)))
+                .map(|(c, before, after)| (*c, saved_cell(before), saved_cell(after)))
                 .collect(),
         }
     }
 }
 
+impl SavedBookmark {
+    fn into_bookmark(self, clues: &Grid) -> Result<Bookmark, String> {
+        let cells = cells(self.cells, cell_state)?;
+        if (0..CELLS).any(|c| clues.get(c).is_some() && cells[c].digit != clues.get(c)) {
+            return Err("a bookmark changes a clue".to_string());
+        }
+        Ok(Bookmark {
+            cursor: cell(self.cursor)?,
+            cells,
+        })
+    }
+}
+
 impl SavedStep {
     fn into_step(self, clues: &Grid) -> Result<Step, String> {
-        let state = |(digit, candidates, marks, hidden, hidden_marks): SavedCell| {
-            Ok::<_, String>(CellState {
-                digit: match digit {
-                    0 => None,
-                    1..=9 => Some(digit),
-                    _ => return Err(format!("{digit} isn't a digit")),
-                },
-                candidates: candidates.as_deref().map(digits).transpose()?,
-                marks: digits(&marks)?,
-                hidden: Hidden {
-                    candidates: digits(&hidden)?,
-                    marks: digits(&hidden_marks)?,
-                },
-            })
-        };
         let mut cells = Vec::new();
         for (c, before, after) in self.cells {
             let c = cell(c)?;
             if clues.get(c).is_some() {
                 return Err("a step changes a clue".to_string());
             }
-            cells.push((c, state(before)?, state(after)?));
+            cells.push((c, cell_state(&before)?, cell_state(&after)?));
         }
         Ok(Step {
             cursor: cell(self.cursor)?,
@@ -272,6 +312,10 @@ mod tests {
             (g.cursor, g.mode, g.level),
             steps(&g.undo),
             steps(&g.redo),
+            g.bookmarks
+                .iter()
+                .map(|b| (b.cursor, b.cells.to_vec()))
+                .collect::<Vec<_>>(),
             (g.hints_used, g.revealed, g.banked),
         )
     }
@@ -288,6 +332,8 @@ mod tests {
         Reveal,
         Undo,
         Redo,
+        Bookmark,
+        Back,
     }
 
     fn a_move() -> impl Strategy<Value = Move> {
@@ -302,6 +348,8 @@ mod tests {
             Just(Move::Reveal),
             Just(Move::Undo),
             Just(Move::Redo),
+            Just(Move::Bookmark),
+            Just(Move::Back),
         ]
     }
 
@@ -322,6 +370,10 @@ mod tests {
             Move::Reveal => g.reveal(),
             Move::Undo => g.undo(),
             Move::Redo => g.redo(),
+            Move::Bookmark => g.bookmark(),
+            Move::Back => {
+                g.back_to_bookmark();
+            }
         }
     }
 
@@ -394,6 +446,14 @@ mod tests {
                 "unknown mode",
             ),
         ];
+        let mut marked = game();
+        marked.bookmark();
+        let marked = marked.to_json(Instant::now());
+        let bookmark_on_clue = marked.replace("[[5,null", "[[4,null");
+        assert_ne!(bookmark_on_clue, marked);
+        let broken = broken
+            .into_iter()
+            .chain([(bookmark_on_clue, "bookmark changes a clue")]);
         for (text, why) in broken {
             let err = Game::from_json(&text).err().unwrap_or_default();
             assert!(err.contains(why), "{why:?} in {err:?}");
