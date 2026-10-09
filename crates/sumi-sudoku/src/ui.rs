@@ -660,6 +660,14 @@ fn keys(game: &Game, view: &View) -> Vec<(&'static str, &'static str)> {
         keys
     } else if game.is_won() {
         vec![(Action::Confirm, "new game"), (Action::Close, "menu")]
+    } else if game.at_dead_end() && !game.bookmarks().is_empty() {
+        // A guess has gone wrong: going back comes first.
+        vec![
+            (Action::BackToBookmark, "back to bookmark"),
+            (Action::Undo, "undo"),
+            (Action::Digit(1), "place"),
+            (Action::NextMode, "mode"),
+        ]
     } else {
         match game.mode() {
             Mode::Digit if !view.checked.is_empty() => vec![
@@ -2621,6 +2629,16 @@ mod tests {
     }
 
     /// Every state the key bar has keys of its own for.
+    /// A game with a bookmark, then a 5 placed in r1c3 beside the 5 in
+    /// r1c1.
+    fn dead_end() -> Game {
+        let mut game = game();
+        game.bookmark();
+        go(&mut game, 2);
+        game.press(5);
+        game
+    }
+
     fn contexts() -> Vec<(&'static str, Game, View)> {
         let mode = |presses| {
             let mut game = game();
@@ -2669,6 +2687,7 @@ mod tests {
                 },
             ),
             ("won", won_game(), View::default()),
+            ("dead end", dead_end(), View::default()),
             (
                 "paused",
                 game(),
@@ -2740,6 +2759,18 @@ mod tests {
                 assert!(rows.contains(&format!("{key} {words}")), "{name}: {rows}");
             }
         }
+    }
+
+    /// At a dead end with a bookmark the key bar offers B first; without
+    /// a bookmark it can't, and keeps the usual keys.
+    #[test]
+    fn a_dead_end_offers_the_bookmark() {
+        let keys_at = |game: &Game| keys(game, &View::default());
+        assert_eq!(keys_at(&dead_end())[0], ("B", "back to bookmark"));
+        let mut unmarked = game();
+        go(&mut unmarked, 2);
+        unmarked.press(5);
+        assert_eq!(keys_at(&unmarked), keys_at(&game()));
     }
 
     #[test]

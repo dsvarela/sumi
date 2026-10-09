@@ -492,6 +492,18 @@ impl Game {
         }
     }
 
+    /// Whether the board can't be finished as it stands: two digits clash,
+    /// or an empty cell has no digit left, by the digits around it or by
+    /// the candidates written in it. A guess has gone wrong.
+    pub fn at_dead_end(&self) -> bool {
+        self.board.conflicts().contains(&true)
+            || (0..CELLS).any(|c| {
+                self.board.get(c).is_none()
+                    && (self.board.possible(c).is_empty()
+                        || self.candidates[c].is_some_and(Digits::is_empty))
+            })
+    }
+
     /// The cells left to fill at each bookmark, oldest first.
     pub fn bookmarks(&self) -> Vec<usize> {
         self.bookmarks
@@ -696,6 +708,30 @@ mod tests {
 
     fn secs(n: u64) -> Duration {
         Duration::from_secs(n)
+    }
+
+    /// Two digits clashing, a cell no digit fits, or a cell whose
+    /// candidates are all struck out is a dead end; a board without them
+    /// isn't.
+    #[test]
+    fn a_dead_end_is_a_clash_or_a_cell_with_nothing_left() {
+        let mut g = at(R1C3);
+        assert!(!g.at_dead_end());
+        g.press(5); // r1c1 is 5
+        assert!(g.at_dead_end(), "a clash");
+        g.clear();
+        g.candidates[R1C3] = Some(Digits::NONE);
+        assert!(g.at_dead_end(), "candidates all struck out");
+        g.candidates[R1C3] = None;
+        // r1c3 can be 1, 2 or 4: put each in another cell of its row,
+        // where none of them clashes.
+        for (cell, digit) in [(6, 1), (3, 2), (5, 4)] {
+            g.move_to(cell);
+            g.press(digit);
+        }
+        assert!(g.board().possible(R1C3).is_empty());
+        assert!(!g.board().conflicts().contains(&true), "no clash to find");
+        assert!(g.at_dead_end(), "no digit fits");
     }
 
     /// B goes back to the newest bookmark and keeps it; on it, B drops it
