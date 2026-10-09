@@ -85,18 +85,25 @@ impl Density {
         }
     }
 
-    /// The smallest window the layout fits in.
-    const fn needed(self) -> (u16, u16) {
+    /// The smallest window the layout fits in, with the pad or without.
+    const fn needed(self, pad_hidden: bool) -> (u16, u16) {
+        let pad = pad_height(pad_hidden);
         match self {
-            Density::Full => (FRAME_WIDTH, BOARD_HEIGHT + 2 + PAD_HEIGHT + PANEL_HEIGHT),
+            Density::Full => (FRAME_WIDTH, BOARD_HEIGHT + 2 + pad + PANEL_HEIGHT),
             // The status line, the board, the pad, the hint and the key bar.
             Density::Dense => (
                 Density::Dense.gutter() + Density::Dense.board_width(),
-                1 + BOARD_HEIGHT + PAD_HEIGHT + DENSE_PANEL_HEIGHT + DENSE_KEY_ROWS,
+                1 + BOARD_HEIGHT + pad + DENSE_PANEL_HEIGHT + DENSE_KEY_ROWS,
             ),
         }
     }
 }
+
+const fn pad_height(hidden: bool) -> u16 {
+    if hidden { 0 } else { PAD_HEIGHT }
+}
+
+impl Density {}
 
 /// What the screen shows besides the game itself. None of it is undoable.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -123,6 +130,8 @@ pub struct View {
     pub highlights: Highlights,
     /// The settings hide the key bar.
     pub key_bar_hidden: bool,
+    /// The settings hide the pad, and the layout leaves out its rows.
+    pub pad_hidden: bool,
     /// Animations running, oldest first.
     pub animations: Vec<Animation>,
 }
@@ -159,12 +168,15 @@ const FRAME_WIDTH: u16 = BOARD_WIDTH + 2;
 
 /// The full layout's board inside its frame, the pad and the panel under it.
 #[cfg(test)]
-const NEEDED: (u16, u16) = Density::Full.needed();
+const NEEDED: (u16, u16) = Density::Full.needed(false);
 
 /// The layout a window of this size gets, the full one if it fits, or none
 /// if even the dense one doesn't.
-pub fn density(area: Rect) -> Option<Density> {
-    let fits = |d: Density| area.width >= d.needed().0 && area.height >= d.needed().1;
+pub fn density(area: Rect, pad_hidden: bool) -> Option<Density> {
+    let fits = |d: Density| {
+        let (width, height) = d.needed(pad_hidden);
+        area.width >= width && area.height >= height
+    };
     [Density::Full, Density::Dense]
         .into_iter()
         .find(|&d| fits(d))
@@ -172,8 +184,8 @@ pub fn density(area: Rect) -> Option<Density> {
 
 /// Whether `draw` shows the board in a window of this size. The app asks
 /// this too, so keys never act on a board the player can't see.
-pub fn fits(area: Rect) -> bool {
-    density(area).is_some()
+pub fn fits(area: Rect, pad_hidden: bool) -> bool {
+    density(area, pad_hidden).is_some()
 }
 
 /// Where each part of the game screen goes. Drawing and clicks both work
@@ -199,15 +211,16 @@ pub struct Areas {
 
 impl Areas {
     /// The areas in a window of this size, or none if it is too small.
-    pub fn of(area: Rect) -> Option<Areas> {
-        let density = density(area)?;
-        let needed = density.needed();
+    pub fn of(area: Rect, pad_hidden: bool) -> Option<Areas> {
+        let density = density(area, pad_hidden)?;
+        let needed = density.needed(pad_hidden);
+        let pad_height = pad_height(pad_hidden);
         let whole = area.centered(Constraint::Length(needed.0), Constraint::Length(needed.1));
         let (frame, status, cover, pad, hint, keys) = match density {
             Density::Full => {
                 let [frame, pad, hint] = Layout::vertical([
                     Constraint::Length(BOARD_HEIGHT + 2),
-                    Constraint::Length(PAD_HEIGHT),
+                    Constraint::Length(pad_height),
                     Constraint::Length(PANEL_HEIGHT),
                 ])
                 .areas(whole);
@@ -225,7 +238,7 @@ impl Areas {
                 let [status, cover, pad, hint, keys] = Layout::vertical([
                     Constraint::Length(1),
                     Constraint::Length(BOARD_HEIGHT),
-                    Constraint::Length(PAD_HEIGHT),
+                    Constraint::Length(pad_height),
                     Constraint::Length(DENSE_PANEL_HEIGHT),
                     Constraint::Length(DENSE_KEY_ROWS),
                 ])
@@ -276,11 +289,11 @@ impl Areas {
     }
 
     /// The pad's button for `digit`: the column of the board's cells above
-    /// it, both rows.
+    /// it, both rows. Empty when the pad is hidden.
     pub fn pad_button(&self, digit: u8) -> Rect {
         let width = self.density.cell_width();
         let x = self.board.x + 1 + u16::from(digit - 1) * (width + 1);
-        Rect::new(x, self.pad.y, width, PAD_HEIGHT)
+        Rect::new(x, self.pad.y, width, self.pad.height)
     }
 
     /// The button that closes the hint: on the panel's top edge in the full
@@ -307,7 +320,7 @@ pub enum Target {
 /// and the pad take no clicks while the key list or the pause screen covers
 /// them, and the close button is there only with a hint open.
 pub fn hit(area: Rect, view: &View, x: u16, y: u16) -> Option<Target> {
-    let areas = Areas::of(area)?;
+    let areas = Areas::of(area, view.pad_hidden)?;
     let at = ratatui::layout::Position::new(x, y);
     if view.shown_hint().is_some() && areas.close_hint().contains(at) {
         return Some(Target::CloseHint);
@@ -335,8 +348,8 @@ pub fn hit(area: Rect, view: &View, x: u16, y: u16) -> Option<Target> {
 pub fn draw(frame: &mut Frame, game: &Game, view: &View, theme: &Theme) {
     let area = frame.area();
     frame.render_widget(Block::new().style(Style::new().bg(theme.background)), area);
-    let Some(areas) = Areas::of(area) else {
-        too_small(frame, theme, Density::Dense.needed());
+    let Some(areas) = Areas::of(area, view.pad_hidden) else {
+        too_small(frame, theme, Density::Dense.needed(view.pad_hidden));
         return;
     };
     let rung = view.shown_hint().map(|open| open.hint.rung(open.rung));
@@ -415,6 +428,9 @@ pub fn draw(frame: &mut Frame, game: &Game, view: &View, theme: &Theme) {
 /// Each digit under its column of the board, and how many of it are left
 /// to place. A finished digit is dimmed, as on the board.
 fn draw_pad(frame: &mut Frame, game: &Game, view: &View, theme: &Theme, areas: &Areas) {
+    if view.pad_hidden {
+        return;
+    }
     let buf = frame.buffer_mut();
     for digit in 1..=9u8 {
         let button = areas.pad_button(digit);
@@ -2371,7 +2387,7 @@ mod tests {
         insta::assert_snapshot!(terminal.backend());
     }
 
-    const DENSE: (u16, u16) = Density::Dense.needed();
+    const DENSE: (u16, u16) = Density::Dense.needed(false);
 
     fn render_dense(game: &Game, view: &View) -> TestBackend {
         let mut terminal = Terminal::new(TestBackend::new(DENSE.0, DENSE.1)).unwrap();
@@ -2408,7 +2424,7 @@ mod tests {
 
     #[test]
     fn the_window_picks_the_layout() {
-        let at = |width, height| density(Rect::new(0, 0, width, height));
+        let at = |width, height| density(Rect::new(0, 0, width, height), false);
         assert_eq!(at(75, 47), Some(Density::Full));
         assert_eq!(at(75, 46), Some(Density::Full));
         assert_eq!(at(74, 47), Some(Density::Dense));
@@ -2417,6 +2433,59 @@ mod tests {
         assert_eq!(at(38, 46), None);
         assert_eq!(at(200, 45), None);
         assert_eq!((NEEDED, DENSE), ((75, 46), (38, 47)));
+    }
+
+    /// Without the pad, both layouts need its two rows less, nothing
+    /// is drawn or clicked where it was, and the hint sits under the
+    /// board.
+    #[test]
+    fn a_hidden_pad_gives_its_rows_back() {
+        assert_eq!(
+            (Density::Full.needed(true), Density::Dense.needed(true)),
+            ((75, 44), (38, 45))
+        );
+        let at = |width, height| density(Rect::new(0, 0, width, height), true);
+        assert_eq!(
+            (at(75, 44), at(38, 45), at(38, 44)),
+            (Some(Density::Full), Some(Density::Dense), None)
+        );
+        let view = View {
+            pad_hidden: true,
+            ..View::default()
+        };
+        for area in [Rect::new(0, 0, 75, 44), Rect::new(0, 0, 38, 45)] {
+            let areas = Areas::of(area, true).unwrap();
+            assert_eq!(
+                areas.hint.y,
+                areas.board.bottom() + u16::from(areas.frame.is_some())
+            );
+            for y in 0..area.height {
+                for x in 0..area.width {
+                    assert!(!matches!(hit(area, &view, x, y), Some(Target::Pad(_))));
+                }
+            }
+        }
+        let mut terminal = Terminal::new(TestBackend::new(75, 44)).unwrap();
+        terminal
+            .draw(|frame| draw(frame, &game(), &view, &Theme::tokyo_night_amoled()))
+            .unwrap();
+        let below: String = (0..75)
+            .map(|x| terminal.backend().buffer()[(x, BOARD_HEIGHT + 2)].symbol())
+            .collect();
+        assert!(
+            below.starts_with("╭") || below.contains("─"),
+            "the hint panel: {below}"
+        );
+        assert!(!below.contains('9'), "no pad: {below}");
+        // The dense hint area has no border to cover a pad drawn by mistake.
+        let mut terminal = Terminal::new(TestBackend::new(38, 45)).unwrap();
+        terminal
+            .draw(|frame| draw(frame, &game(), &view, &Theme::tokyo_night_amoled()))
+            .unwrap();
+        let below: String = (0..38)
+            .map(|x| terminal.backend().buffer()[(x, 1 + BOARD_HEIGHT)].symbol())
+            .collect();
+        assert!(!below.contains('9'), "no pad: {below}");
     }
 
     #[test]
@@ -3421,6 +3490,7 @@ mod tests {
             let label = setting.label();
             let spot = find(&backend, &label[..1])
                 .into_iter()
+                .filter(|&(x, _)| x + label.len() as u16 <= area.width)
                 .find(|&(x, y)| {
                     let rest: String = (x..x + label.len() as u16)
                         .map(|x| backend.buffer()[(x, y)].symbol())

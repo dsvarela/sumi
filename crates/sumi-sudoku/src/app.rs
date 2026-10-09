@@ -414,7 +414,10 @@ impl App {
     /// Whether the screen showing can be drawn in a window of this size.
     fn fits(&self, area: Rect) -> bool {
         match &self.screen {
-            Screen::Game => ui::fits(area),
+            Screen::Game => {
+                let session = self.session.as_ref().expect("the game screen shows a game");
+                ui::fits(area, session.view.pad_hidden)
+            }
             Screen::Menu(menu) => ui::menu_fits(area, menu, &menu.items(self.progress())),
             Screen::Settings(_) => ui::settings_fit(area),
         }
@@ -686,6 +689,7 @@ impl Session {
         }
         self.view.highlights = config.highlights;
         self.view.key_bar_hidden = !config.key_bar;
+        self.view.pad_hidden = !config.pad;
         self.game.set_hint_start(config.hint_start);
         self.game
             .set_candidates_from_marks(match config.marks_to_candidates {
@@ -1894,6 +1898,8 @@ mod tests {
         assert_eq!(app.theme.name, "Tokyo Night");
         change(&mut app, Setting::KeyBar);
         assert!(game_of(&mut app).view.key_bar_hidden);
+        change(&mut app, Setting::Pad);
+        assert!(game_of(&mut app).view.pad_hidden);
         change(&mut app, Setting::Animations);
         assert!(!game_of(&mut app).animations);
         press_keys(&mut app, &[KeyCode::Esc]);
@@ -1946,7 +1952,7 @@ mod tests {
     fn clickable() -> (App, ui::Areas) {
         let mut app = app_with(fixtures::game());
         app.area = Rect::new(0, 0, 80, 50);
-        let areas = ui::Areas::of(app.area).unwrap();
+        let areas = ui::Areas::of(app.area, false).unwrap();
         (app, areas)
     }
 

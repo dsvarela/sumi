@@ -18,6 +18,8 @@ pub struct Config {
     pub hint_start: usize,
     pub marks_to_candidates: MarksToCandidates,
     pub key_bar: bool,
+    /// The digits under the board, each with how many are left to place.
+    pub pad: bool,
     /// Clicks and taps act on the board, the pad and the menus.
     pub mouse: bool,
     /// A completed row, column or box pulses, and a wave crosses the board
@@ -34,6 +36,7 @@ impl Default for Config {
             hint_start: 1,
             marks_to_candidates: MarksToCandidates::Fill,
             key_bar: true,
+            pad: true,
             mouse: true,
             animations: true,
             highlights: Highlights::default(),
@@ -125,6 +128,7 @@ impl Config {
                 }
                 "marks_to_candidates" => read(value, &mut config.marks_to_candidates, |v| v),
                 "key_bar" => read(value, &mut config.key_bar, |v| v),
+                "pad" => read(value, &mut config.pad, |v| v),
                 "mouse" => read(value, &mut config.mouse, |v| v),
                 "animations" => read(value, &mut config.animations, |v| v),
                 "highlights" => match value {
@@ -372,6 +376,12 @@ mod tests {
         assert!(written.contains("# kept"), "{written}");
         assert!(Config::parse(&written).unwrap().0.timer);
         assert_eq!(left, ["real.toml", "sumi"]);
+    }
+
+    #[test]
+    fn the_pad_can_be_hidden() {
+        assert!(Config::default().pad);
+        assert!(!Config::parse("pad = false").unwrap().0.pad);
     }
 
     #[test]

@@ -17,6 +17,7 @@ pub enum Setting {
     NoteClashes,
     Theme,
     KeyBar,
+    Pad,
     Animations,
 }
 
@@ -37,7 +38,12 @@ pub const GROUPS: [(&str, &[Setting]); 6] = [
     ),
     (
         "Look",
-        &[Setting::Theme, Setting::KeyBar, Setting::Animations],
+        &[
+            Setting::Theme,
+            Setting::KeyBar,
+            Setting::Pad,
+            Setting::Animations,
+        ],
     ),
     ("Keys", &[]),
 ];
@@ -60,6 +66,7 @@ impl Setting {
             Setting::NoteClashes => "Notes that clash",
             Setting::Theme => "Theme",
             Setting::KeyBar => "Key bar",
+            Setting::Pad => "Digit pad",
             Setting::Animations => "Animations",
         }
     }
@@ -77,6 +84,7 @@ impl Setting {
             Setting::NoteClashes => &["highlights", "note_clashes"],
             Setting::Theme => &["theme"],
             Setting::KeyBar => &["key_bar"],
+            Setting::Pad => &["pad"],
             Setting::Animations => &["animations"],
         }
     }
@@ -99,6 +107,7 @@ impl Setting {
             Setting::NoteClashes => on(config.highlights.note_clashes),
             Setting::Theme => theme.to_string(),
             Setting::KeyBar => if config.key_bar { "shown" } else { "hidden" }.to_string(),
+            Setting::Pad => if config.pad { "shown" } else { "hidden" }.to_string(),
             Setting::Animations => on(config.animations),
         }
     }
@@ -147,6 +156,7 @@ impl Setting {
                 config.theme = Some(themes[next].clone());
             }
             Setting::KeyBar => config.key_bar = !config.key_bar,
+            Setting::Pad => config.pad = !config.pad,
             Setting::Animations => config.animations = !config.animations,
         }
     }
@@ -168,6 +178,7 @@ impl Setting {
             Setting::NoteClashes => h.note_clashes.into(),
             Setting::Theme => config.theme.clone().unwrap_or_default().into(),
             Setting::KeyBar => config.key_bar.into(),
+            Setting::Pad => config.pad.into(),
             Setting::Animations => config.animations.into(),
         }
     }
