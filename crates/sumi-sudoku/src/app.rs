@@ -2,7 +2,7 @@
 //! to the session.
 
 use std::collections::{HashMap, HashSet};
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
@@ -197,7 +197,9 @@ type Slot = Arc<Mutex<Option<Game>>>;
 /// only (1000), in SGR form (1006). Unlike crossterm's EnableMouseCapture it
 /// leaves motion unreported, which sumi doesn't use and which would wake
 /// the loop on every move. Off turns every mode off, whatever turned it on.
+#[cfg(unix)]
 fn mouse(on: bool) -> io::Result<()> {
+    use std::io::Write;
     let codes = if on {
         "\x1b[?1000h\x1b[?1006h"
     } else {
@@ -206,6 +208,19 @@ fn mouse(on: bool) -> io::Result<()> {
     let mut out = io::stdout();
     out.write_all(codes.as_bytes())?;
     out.flush()
+}
+
+/// Turns mouse reporting on or off. Windows reads input through the
+/// console, not as escape codes, so only crossterm's console mode turns it
+/// on there, motion included.
+#[cfg(windows)]
+fn mouse(on: bool) -> io::Result<()> {
+    use ratatui::crossterm::event::{DisableMouseCapture, EnableMouseCapture};
+    if on {
+        execute!(io::stdout(), EnableMouseCapture)
+    } else {
+        execute!(io::stdout(), DisableMouseCapture)
+    }
 }
 
 /// What the app needs from outside it: where the config and the saved
