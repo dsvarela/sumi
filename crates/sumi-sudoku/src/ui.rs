@@ -1266,12 +1266,18 @@ fn logo(scale: usize) -> Vec<String> {
 }
 
 /// The smallest window a menu with `items` can be drawn in: the frame
-/// around the name in plain text, or the menu's question, and the items, and under it the key bar
-/// in as many rows as it takes.
+/// around the name in plain text, or the menu's question, and the items,
+/// or the widest key with a space each side, and under it the key bar in
+/// as many rows as it takes.
 fn menu_needed(menu: &Menu, items: &[Item]) -> (u16, u16) {
     let keys = menu_keys(menu);
     let heading = menu.question().unwrap_or("sumi").to_string();
-    let width = MenuAreas::column(&[heading], items) + 6;
+    let widest_key = keys
+        .iter()
+        .map(|(k, w)| k.chars().count() + 1 + w.chars().count())
+        .max()
+        .unwrap_or(0) as u16;
+    let width = (MenuAreas::column(&[heading], items) + 6).max(widest_key + 2);
     let key_rows = key_rows(&keys, usize::from(width)).len() as u16;
     (width, MenuAreas::height(1, items) + key_rows)
 }
@@ -1637,7 +1643,7 @@ pub fn draw_settings(frame: &mut Frame, page: &SettingsPage, theme: &Theme) {
 mod tests {
     use super::*;
     use crate::fixtures::{game, solution};
-    use crate::menu::Progress;
+    use crate::menu::{Context, Progress};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
@@ -3028,16 +3034,22 @@ mod tests {
         assert_eq!(five(&off(|h| h.complete_digits = false)), theme.clue);
     }
 
-    /// A game in progress with the longest Continue label there is.
-    const PROGRESS: Option<Progress> = Some(Progress {
-        level: Some(Level::Medium),
-        left: 81,
-    });
+    /// A game in progress with the longest Continue label there is, and
+    /// bookmarks with the longest labels.
+    fn playing() -> Context {
+        Context {
+            progress: Some(Progress {
+                level: Some(Level::Medium),
+                left: 81,
+            }),
+            bookmarks: vec![81; 10],
+        }
+    }
 
-    fn render_menu(menu: &Menu, progress: Option<Progress>, size: (u16, u16)) -> TestBackend {
+    fn render_menu(menu: &Menu, context: &Context, size: (u16, u16)) -> TestBackend {
         let mut terminal = Terminal::new(TestBackend::new(size.0, size.1)).unwrap();
         let theme = Theme::tokyo_night_amoled();
-        let items = menu.items(progress);
+        let items = menu.items(context);
         terminal
             .draw(|frame| draw_menu(frame, menu, &items, &theme))
             .unwrap();
@@ -3050,11 +3062,14 @@ mod tests {
     fn menus_in_three_window_sizes() {
         use crate::menu::Kind;
         let main = Menu::new(Kind::Main);
-        insta::assert_snapshot!("menu_wide", render_menu(&main, PROGRESS, (80, 30)));
-        insta::assert_snapshot!("menu_phone", render_menu(&main, PROGRESS, (38, 18)));
+        insta::assert_snapshot!("menu_wide", render_menu(&main, &playing(), (80, 30)));
+        insta::assert_snapshot!("menu_phone", render_menu(&main, &playing(), (38, 18)));
         let pause = Menu::new(Kind::Pause);
-        let tight = menu_needed(&pause, &pause.items(None));
-        insta::assert_snapshot!("menu_tight", render_menu(&pause, None, tight));
+        let tight = menu_needed(&pause, &pause.items(&Context::default()));
+        insta::assert_snapshot!(
+            "menu_tight",
+            render_menu(&pause, &Context::default(), tight)
+        );
     }
 
     fn text_of(backend: &TestBackend) -> String {
@@ -3083,13 +3098,14 @@ mod tests {
                 level: Level::Hard,
                 from_pause: false,
             },
+            Kind::Bookmarks,
         ];
         for kind in kinds {
-            for progress in [None, PROGRESS] {
+            for context in [Context::default(), playing()] {
                 let menu = Menu::new(kind);
-                let items = menu.items(progress);
+                let items = menu.items(&context);
                 let (width, height) = menu_needed(&menu, &items);
-                let text = text_of(&render_menu(&menu, progress, (width, height)));
+                let text = text_of(&render_menu(&menu, &context, (width, height)));
                 let rows: Vec<&str> = text.lines().collect();
                 let boxed = MenuAreas::of(Rect::new(0, 0, width, height), &menu, &items).boxed;
                 let heading = menu.question().unwrap_or("sumi");
@@ -3115,7 +3131,7 @@ mod tests {
                 }
                 let asked = format!("{width}×{height}");
                 for smaller in [(width - 1, height), (width, height - 1)] {
-                    let text = text_of(&render_menu(&menu, progress, smaller));
+                    let text = text_of(&render_menu(&menu, &context, smaller));
                     assert!(text.contains(&asked), "{kind:?} {smaller:?}: {text}");
                 }
             }
@@ -3386,9 +3402,9 @@ mod tests {
     #[test]
     fn a_click_on_a_menu_item_lands_on_it() {
         let menu = Menu::new(crate::menu::Kind::Pause);
-        let items = menu.items(None);
+        let items = menu.items(&Context::default());
         for size in [(80, 30), (38, 18), menu_needed(&menu, &items)] {
-            let backend = render_menu(&menu, None, size);
+            let backend = render_menu(&menu, &Context::default(), size);
             let area = Rect::new(0, 0, size.0, size.1);
             for (i, item) in items.iter().enumerate() {
                 let label = item.label();

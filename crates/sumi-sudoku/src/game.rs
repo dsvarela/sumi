@@ -512,6 +512,15 @@ impl Game {
             .collect()
     }
 
+    /// Goes back to the bookmark at `index`, oldest first, dropping those
+    /// after it.
+    pub fn go_to_bookmark(&mut self, index: usize) {
+        self.bookmarks.truncate(index + 1);
+        if let Some(bookmark) = self.bookmarks.last().cloned() {
+            self.go_to(&bookmark);
+        }
+    }
+
     fn here(&self) -> Bookmark {
         Bookmark {
             cursor: self.cursor,

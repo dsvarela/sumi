@@ -21,6 +21,23 @@ pub enum Item {
     Keep,
     /// Start the new game, replacing the saved one.
     Replace,
+    /// The list of bookmarks, from the pause menu.
+    Bookmarks,
+    /// Back to the bookmark at `index`, oldest first, which has `left`
+    /// cells left to fill.
+    Bookmark {
+        index: usize,
+        left: usize,
+    },
+}
+
+/// What the menus list depends on outside them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Context {
+    /// The game there is to continue.
+    pub progress: Option<Progress>,
+    /// The cells left at each of its bookmarks, oldest first.
+    pub bookmarks: Vec<usize>,
 }
 
 /// How far the game in progress is: its level, when it is rated, and the
@@ -39,6 +56,7 @@ impl Item {
                 left,
             }) => format!("Continue · {}, {left} left", Item::Level(level).name()),
             Item::Continue(Progress { level: None, left }) => format!("Continue · {left} left"),
+            Item::Bookmark { index, left } => format!("Bookmark {} · {left} left", index + 1),
             item => item.name().to_string(),
         }
     }
@@ -58,6 +76,8 @@ impl Item {
             Item::Quit => "Quit",
             Item::Keep => "Keep it",
             Item::Replace => "Replace it",
+            Item::Bookmarks => "Bookmarks",
+            Item::Bookmark { .. } => "Bookmark",
         }
     }
 }
@@ -76,6 +96,8 @@ pub enum Kind {
         level: Level,
         from_pause: bool,
     },
+    /// The game's bookmarks, newest first.
+    Bookmarks,
 }
 
 /// What a key in a menu asks for.
@@ -100,24 +122,35 @@ impl Menu {
             // Medium: a middle ground for someone who hasn't said.
             Kind::Levels { .. } => 1,
             // Keeping is first: Enter pressed in a hurry loses nothing.
-            Kind::Main | Kind::Pause | Kind::Replace { .. } => 0,
+            Kind::Main | Kind::Pause | Kind::Replace { .. } | Kind::Bookmarks => 0,
         };
         Menu { kind, selected }
     }
 
     /// The items in order. Continue is there only while a game is in
-    /// progress.
-    pub fn items(&self, progress: Option<Progress>) -> Vec<Item> {
+    /// progress, and Bookmarks only while it has some.
+    pub fn items(&self, context: &Context) -> Vec<Item> {
         match self.kind {
             Kind::Main => {
                 let mut items = Vec::new();
-                if let Some(progress) = progress {
+                if let Some(progress) = context.progress {
                     items.push(Item::Continue(progress));
                 }
                 items.extend([Item::NewGame, Item::Settings, Item::Quit]);
                 items
             }
-            Kind::Pause => vec![Item::Resume, Item::NewGame, Item::Settings, Item::MainMenu],
+            Kind::Pause => {
+                let mut items = vec![Item::Resume];
+                if !context.bookmarks.is_empty() {
+                    items.push(Item::Bookmarks);
+                }
+                items.extend([Item::NewGame, Item::Settings, Item::MainMenu]);
+                items
+            }
+            Kind::Bookmarks => (context.bookmarks.iter().enumerate())
+                .rev()
+                .map(|(index, &left)| Item::Bookmark { index, left })
+                .collect(),
             Kind::Levels { .. } => LEVELS.map(Item::Level).to_vec(),
             Kind::Replace { .. } => vec![Item::Keep, Item::Replace],
         }
@@ -139,9 +172,12 @@ impl Menu {
 
     /// Up and down move the selection, wrapping; Enter chooses; Esc goes
     /// back. Other keys do nothing.
-    pub fn handle(&mut self, action: Action, progress: Option<Progress>) -> Option<Choice> {
-        let items = self.items(progress);
+    pub fn handle(&mut self, action: Action, context: &Context) -> Option<Choice> {
+        let items = self.items(context);
         let count = items.len();
+        if count == 0 {
+            return (action == Action::Close && self.has_back()).then_some(Choice::Back);
+        }
         match action {
             Action::Step(Direction::Up) => self.selected = (self.selected + count - 1) % count,
             Action::Step(Direction::Down) => self.selected = (self.selected + 1) % count,
@@ -162,15 +198,22 @@ mod tests {
         left: 34,
     });
 
+    fn playing() -> Context {
+        Context {
+            progress: PROGRESS,
+            bookmarks: Vec::new(),
+        }
+    }
+
     #[test]
     fn continue_shows_only_with_a_game_in_progress() {
         let menu = Menu::new(Kind::Main);
         assert_eq!(
-            menu.items(None),
+            menu.items(&Context::default()),
             [Item::NewGame, Item::Settings, Item::Quit]
         );
         assert_eq!(
-            menu.items(PROGRESS),
+            menu.items(&playing()),
             [
                 Item::Continue(PROGRESS.unwrap()),
                 Item::NewGame,
@@ -193,36 +236,76 @@ mod tests {
         assert_eq!(Item::Continue(unrated).label(), "Continue · 7 left");
     }
 
+    /// Bookmarks is in the pause menu only when there are some, and its
+    /// list has the newest first.
+    #[test]
+    fn bookmarks_are_listed_newest_first() {
+        let marked = Context {
+            bookmarks: vec![51, 40],
+            ..playing()
+        };
+        assert_eq!(Menu::new(Kind::Pause).items(&playing())[1], Item::NewGame);
+        assert_eq!(Menu::new(Kind::Pause).items(&marked)[1], Item::Bookmarks);
+        let list = Menu::new(Kind::Bookmarks).items(&marked);
+        assert_eq!(
+            list,
+            [
+                Item::Bookmark { index: 1, left: 40 },
+                Item::Bookmark { index: 0, left: 51 }
+            ]
+        );
+        assert_eq!(list[0].label(), "Bookmark 2 · 40 left");
+    }
+
+    /// A list with nothing in it can only be left.
+    #[test]
+    fn an_empty_list_can_only_be_left() {
+        let mut empty = Menu::new(Kind::Bookmarks);
+        for action in [Action::Step(Direction::Down), Action::Confirm] {
+            assert_eq!(empty.handle(action, &Context::default()), None);
+        }
+        assert_eq!(
+            empty.handle(Action::Close, &Context::default()),
+            Some(Choice::Back)
+        );
+    }
+
     #[test]
     fn up_and_down_wrap_and_enter_chooses() {
         let mut menu = Menu::new(Kind::Pause);
-        assert_eq!(menu.handle(Action::Step(Direction::Up), PROGRESS), None);
-        assert_eq!(menu.items(PROGRESS)[menu.selected], Item::MainMenu);
-        menu.handle(Action::Step(Direction::Down), PROGRESS);
-        menu.handle(Action::Step(Direction::Down), PROGRESS);
+        assert_eq!(menu.handle(Action::Step(Direction::Up), &playing()), None);
+        assert_eq!(menu.items(&playing())[menu.selected], Item::MainMenu);
+        menu.handle(Action::Step(Direction::Down), &playing());
+        menu.handle(Action::Step(Direction::Down), &playing());
         assert_eq!(
-            menu.handle(Action::Confirm, PROGRESS),
+            menu.handle(Action::Confirm, &playing()),
             Some(Choice::Chosen(Item::NewGame))
         );
-        assert_eq!(menu.handle(Action::Digit(3), PROGRESS), None);
+        assert_eq!(menu.handle(Action::Digit(3), &playing()), None);
     }
 
     #[test]
     fn esc_goes_back_from_every_menu_but_the_main_one() {
-        assert_eq!(Menu::new(Kind::Main).handle(Action::Close, None), None);
         assert_eq!(
-            Menu::new(Kind::Pause).handle(Action::Close, PROGRESS),
+            Menu::new(Kind::Main).handle(Action::Close, &Context::default()),
+            None
+        );
+        assert_eq!(
+            Menu::new(Kind::Pause).handle(Action::Close, &playing()),
             Some(Choice::Back)
         );
         let mut levels = Menu::new(Kind::Levels { from_pause: false });
-        assert_eq!(levels.handle(Action::Close, None), Some(Choice::Back));
+        assert_eq!(
+            levels.handle(Action::Close, &Context::default()),
+            Some(Choice::Back)
+        );
     }
 
     #[test]
     fn the_level_list_starts_at_medium() {
         let mut levels = Menu::new(Kind::Levels { from_pause: true });
         assert_eq!(
-            levels.handle(Action::Confirm, PROGRESS),
+            levels.handle(Action::Confirm, &playing()),
             Some(Choice::Chosen(Item::Level(Level::Medium)))
         );
     }

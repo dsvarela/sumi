@@ -28,7 +28,7 @@ use crate::animation::{Animation, Kind as AnimationKind, complete_houses};
 use crate::config::{Config, MarksToCandidates};
 use crate::game::{CandidatesFromMarks, Game, Mode};
 use crate::input::{Action, FilterKey, action, filter_key};
-use crate::menu::{Choice, Item, Kind, Menu, Progress};
+use crate::menu::{Choice, Context, Item, Kind, Menu, Progress};
 use crate::settings::{Choice as SettingsChoice, Page, Setting};
 use crate::store;
 use crate::theme::{self, Theme};
@@ -207,10 +207,10 @@ fn play(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
             app.area = frame.area();
             shown = app.fits(frame.area());
             let theme = &app.theme;
-            let progress = app.progress();
+            let context = app.menu_context();
             match (&app.screen, &app.session) {
                 (Screen::Menu(menu), _) => {
-                    ui::draw_menu(frame, menu, &menu.items(progress), theme);
+                    ui::draw_menu(frame, menu, &menu.items(&context), theme);
                 }
                 (Screen::Settings(page), _) => {
                     let page = ui::SettingsPage {
@@ -397,6 +397,17 @@ impl App {
         })
     }
 
+    /// What the menus list: the game to continue and its bookmarks.
+    fn menu_context(&self) -> Context {
+        Context {
+            progress: self.progress(),
+            bookmarks: self
+                .session
+                .as_ref()
+                .map_or(Vec::new(), |s| s.game.bookmarks()),
+        }
+    }
+
     /// Writes the game in progress to the saved game, if anything kept has
     /// changed since it was last written, or with `always`, as on quitting,
     /// which keeps the time. A won game's save is removed. A failure is
@@ -436,7 +447,7 @@ impl App {
                 let session = self.session.as_ref().expect("the game screen shows a game");
                 ui::fits(area, session.view.pad_hidden)
             }
-            Screen::Menu(menu) => ui::menu_fits(area, menu, &menu.items(self.progress())),
+            Screen::Menu(menu) => ui::menu_fits(area, menu, &menu.items(&self.menu_context())),
             Screen::Settings(_) => ui::settings_fit(area),
         }
     }
@@ -588,7 +599,7 @@ impl App {
 
     /// A key on a menu or the settings page.
     fn menu_action(&mut self, action: Action) -> Flow {
-        let progress = self.progress();
+        let context = self.menu_context();
         match &mut self.screen {
             Screen::Game => {}
             Screen::Settings(page) => {
@@ -601,13 +612,14 @@ impl App {
             }
             Screen::Menu(menu) => {
                 let kind = menu.kind;
-                match menu.handle(action, progress) {
+                match menu.handle(action, &context) {
                     None => {}
                     Some(Choice::Back) => match kind {
                         Kind::Levels { from_pause } | Kind::Replace { from_pause, .. } => {
                             self.back_to_menu(from_pause)
                         }
                         Kind::Pause => self.resume(),
+                        Kind::Bookmarks => self.back_to_menu(true),
                         Kind::Main => {}
                     },
                     Some(Choice::Chosen(item)) => match item {
@@ -616,7 +628,7 @@ impl App {
                             let from_pause = kind == Kind::Pause;
                             self.screen = Screen::Menu(Menu::new(Kind::Levels { from_pause }));
                         }
-                        Item::Level(level) if progress.is_some() => {
+                        Item::Level(level) if context.progress.is_some() => {
                             let from_pause = kind == Kind::Levels { from_pause: true };
                             let replace = Kind::Replace { level, from_pause };
                             self.screen = Screen::Menu(Menu::new(replace));
@@ -637,6 +649,14 @@ impl App {
                             self.screen = Screen::Settings(Page::new(kind == Kind::Pause));
                         }
                         Item::Quit => return Flow::Quit,
+                        Item::Bookmarks => self.screen = Screen::Menu(Menu::new(Kind::Bookmarks)),
+                        Item::Bookmark { index, .. } => {
+                            if let Some(session) = &mut self.session {
+                                session.game.go_to_bookmark(index);
+                                session.settle();
+                            }
+                            self.resume();
+                        }
                     },
                 }
             }
@@ -658,7 +678,7 @@ impl App {
             return Flow::Continue;
         }
         let (x, y) = (mouse.column, mouse.row);
-        let progress = self.progress();
+        let context = self.menu_context();
         match &mut self.screen {
             Screen::Game => {
                 let session = self.session.as_mut().expect("the game screen shows a game");
@@ -666,7 +686,7 @@ impl App {
                 Flow::Continue
             }
             Screen::Menu(menu) => {
-                let items = menu.items(progress);
+                let items = menu.items(&context);
                 match ui::menu_hit(self.area, menu, &items, x, y) {
                     Some(i) => {
                         menu.selected = i;
@@ -1650,6 +1670,40 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// The pause menu lists the bookmarks, newest first; choosing one goes
+    /// back to it, drops those after it, and carries on the game. Esc
+    /// goes back to the pause menu.
+    #[test]
+    fn a_bookmark_is_chosen_from_the_pause_menu() {
+        let mut app = app_with(fixtures::game());
+        let marked = |app: &mut App| game_of(app).game.bookmarks();
+        press_keys(
+            &mut app,
+            &[KeyCode::Char('b'), KeyCode::Char('l'), KeyCode::Char('l')],
+        );
+        press_keys(
+            &mut app,
+            &[KeyCode::Char('4'), KeyCode::Char('b'), KeyCode::Char('a')],
+        );
+        assert_eq!(marked(&mut app), [51, 50]);
+        press_keys(&mut app, &[KeyCode::Esc, KeyCode::Down, KeyCode::Enter]);
+        assert_eq!(menu_kind(&app), Some(Kind::Bookmarks));
+        press_keys(&mut app, &[KeyCode::Esc]);
+        assert_eq!(menu_kind(&app), Some(Kind::Pause));
+        press_keys(
+            &mut app,
+            &[KeyCode::Down, KeyCode::Enter, KeyCode::Down, KeyCode::Enter],
+        );
+        assert_eq!(app.screen, Screen::Game);
+        assert!(game_of(&mut app).game.clock_is_running());
+        assert_eq!(marked(&mut app), [51], "the newer one is dropped");
+        assert_eq!(
+            game_of(&mut app).game.board().get(2),
+            None,
+            "back to the oldest"
+        );
+    }
+
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("sumi-app-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1757,7 +1811,10 @@ mod tests {
         let Screen::Menu(menu) = &app.screen else {
             panic!("the main menu")
         };
-        assert_eq!(menu.items(app.progress()).first(), Some(&Item::NewGame));
+        assert_eq!(
+            menu.items(&app.menu_context()).first(),
+            Some(&Item::NewGame)
+        );
     }
 
     fn win(s: &mut Session) {
@@ -2187,7 +2244,7 @@ mod tests {
         let Screen::Menu(menu) = &app.screen else {
             panic!("no menu")
         };
-        let items = menu.items(app.progress());
+        let items = menu.items(&app.menu_context());
         (0..app.area.height)
             .flat_map(|y| (0..app.area.width).map(move |x| (x, y)))
             .find(|&(x, y)| ui::menu_hit(app.area, menu, &items, x, y) == Some(index))
