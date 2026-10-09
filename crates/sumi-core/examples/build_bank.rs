@@ -92,11 +92,8 @@ fn rate_all(puzzles: Vec<(Grid, String)>) -> Vec<Candidate> {
 
 fn rate((clues, source): &(Grid, String)) -> Option<Candidate> {
     let grade = grade(clues)?;
-    let allowed = match grade.level {
-        Level::Hard => true,
-        Level::Expert => grade.hardest_steps >= 2,
-        _ => false,
-    };
+    let allowed =
+        matches!(grade.level, Level::Hard | Level::Expert) && grade.offers_as(grade.level);
     if !allowed || needs_lines(clues, &grade.steps) == 0 {
         return None;
     }

@@ -31,7 +31,8 @@ impl Puzzle {
     }
 
     /// For the generator, which only ever keeps clues the solver has shown
-    /// complete to `solution` alone.
+    /// complete to `solution` alone, and for transforms, which move a
+    /// puzzle's clues and solution alike.
     pub(crate) fn proven(clues: Grid, solution: Grid) -> Puzzle {
         debug_assert_eq!(solve(&clues), Solutions::Unique(solution));
         Puzzle { clues, solution }

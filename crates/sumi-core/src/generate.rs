@@ -87,9 +87,7 @@ impl LevelGenerator {
                 continue;
             }
             let grade = grade(puzzle.clues()).expect("generated puzzles have one solution");
-            let wanted = grade.level == self.level
-                && (self.level != Level::Expert || grade.hardest_steps >= 2);
-            if wanted {
+            if grade.offers_as(self.level) {
                 self.made.insert(*puzzle.clues());
                 *self.solutions.entry(*puzzle.solution()).or_default() += 1;
                 if self.level == Level::Hard {

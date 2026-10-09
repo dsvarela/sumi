@@ -20,6 +20,7 @@ use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 use sumi_core::bank;
 use sumi_core::generate::LevelGenerator;
+use sumi_core::grade::grade;
 use sumi_core::grid::{CELLS, Grid, House};
 use sumi_core::hint::Hint;
 use sumi_core::technique::{Level, ORDER};
@@ -37,6 +38,10 @@ use crate::stats::Stats;
 use crate::store;
 use crate::theme::{self, Theme};
 use crate::ui::{self, Filter, OpenHint, Target, View};
+
+/// Transforms tried before a puzzle is shown as it is. About 1 in 13
+/// Expert transforms needs only one Expert step.
+const TRANSFORM_TRIES: usize = 8;
 
 /// What sumi opens on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -632,7 +637,15 @@ impl App {
                 generator.next(rng).0
             }
         };
-        Game::new(Transform::random(rng).puzzle(&puzzle)).rated(level)
+        // A transform keeps the level, but the grader's path can change
+        // with it, and with the path the number of Expert steps; so what
+        // is shown is graded again. Most transforms fit, and the puzzle as
+        // it is always does.
+        let shown = (0..TRANSFORM_TRIES)
+            .map(|_| Transform::random(rng).puzzle(&puzzle))
+            .find(|moved| grade(moved.clues()).is_some_and(|g| g.offers_as(level)))
+            .unwrap_or(puzzle);
+        Game::new(shown).rated(level)
     }
 
     fn resume(&mut self) {
@@ -2420,6 +2433,19 @@ mod tests {
             let s = game_of(&mut app);
             assert_eq!(s.game.level(), Some(level));
             assert_eq!(grade(s.game.board()).unwrap().level, level);
+        }
+    }
+
+    /// An Expert game, as shown after its transform, needs two Expert
+    /// steps or more, as the bank's and the generator's do; about 1 in 13
+    /// transforms on its own would leave one.
+    #[test]
+    fn a_transformed_expert_game_keeps_two_expert_steps() {
+        let mut app = app_with(fixtures::game());
+        for _ in 0..40 {
+            let game = app.new_game(Level::Expert);
+            let shown = grade(game.board()).unwrap();
+            assert!(shown.offers_as(Level::Expert), "{}", game.board());
         }
     }
 

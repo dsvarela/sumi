@@ -26,6 +26,15 @@ pub struct Grade {
     pub steps: Vec<Step>,
 }
 
+impl Grade {
+    /// Whether this is the grade a puzzle offered as `level` must have:
+    /// that level, and for Expert two Expert steps or more, since a puzzle
+    /// that needs one is mostly an easier one.
+    pub fn offers_as(&self, level: Level) -> bool {
+        self.level == level && (level != Level::Expert || self.hardest_steps >= 2)
+    }
+}
+
 /// `None` for a puzzle without exactly one solution, which has no grade:
 /// with clashing clues the techniques could fill the grid regardless.
 pub fn grade(clues: &Grid) -> Option<Grade> {

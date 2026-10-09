@@ -1,7 +1,9 @@
-//! Ways to change how a puzzle looks without changing what it takes to
-//! solve: relabel the digits, move rows within their band and bands
-//! within the board, the same for columns, and transpose. Each keeps a
-//! puzzle's one solution and its rating.
+//! Ways to change how a puzzle looks: relabel the digits, move rows within
+//! their band and bands within the board, the same for columns, and
+//! transpose. Each keeps a puzzle's one solution and its level. The
+//! grader's path can change with them, since its techniques look in a
+//! fixed order, and with it the score and the steps it counts at the
+//! level.
 //!
 //! sumi's puzzles are symmetric under a half turn, so only moves that keep
 //! that are made: a row moved one way has its mirror row moved the
@@ -96,9 +98,9 @@ mod tests {
 
     proptest! {
         /// A transformed puzzle has one solution, the transformed one, the
-        /// same rating, and stays symmetric.
+        /// same level, and stays symmetric.
         #[test]
-        fn a_transform_keeps_the_solution_the_rating_and_the_symmetry(seed in any::<u64>()) {
+        fn a_transform_keeps_the_solution_the_level_and_the_symmetry(seed in any::<u64>()) {
             let puzzle = Puzzle::new(HARD.parse().unwrap()).unwrap();
             let t = Transform::random(&mut Xoshiro256PlusPlus::seed_from_u64(seed));
             let moved = t.puzzle(&puzzle);
