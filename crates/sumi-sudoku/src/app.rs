@@ -26,6 +26,7 @@ use sumi_core::transform::Transform;
 
 use crate::animation::{Animation, Kind as AnimationKind, complete_houses};
 use crate::config::{Config, MarksToCandidates};
+use crate::entry::{Entry, Outcome};
 use crate::game::{CandidatesFromMarks, Game, Mode};
 use crate::input::{Action, FilterKey, action, filter_key};
 use crate::menu::{Choice, Context, Item, Kind, Menu, Progress};
@@ -222,6 +223,7 @@ fn play(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                     };
                     ui::draw_settings(frame, &page, theme);
                 }
+                (Screen::Entry(entry), _) => ui::draw_entry(frame, entry, theme),
                 (Screen::Game, Some(session)) => {
                     ui::draw(frame, &session.game, &session.view, theme);
                 }
@@ -284,6 +286,8 @@ enum Screen {
     Game,
     Menu(Menu),
     Settings(Page),
+    /// Typing in a puzzle.
+    Entry(Entry),
 }
 
 /// The screen showing, the game in progress if there is one, and where new
@@ -321,7 +325,15 @@ struct App {
 /// A new game asked for while one is in progress, and where it was asked
 /// for.
 enum Pending {
-    Level { level: Level, from_pause: bool },
+    Level {
+        level: Level,
+        from_pause: bool,
+    },
+    /// A typed-in puzzle, and the entry screen it came from.
+    Custom {
+        game: Box<Game>,
+        entry: Entry,
+    },
 }
 
 /// What a saved game holds that a key can change, short of the time.
@@ -457,6 +469,7 @@ impl App {
             }
             Screen::Menu(menu) => ui::menu_fits(area, menu, &menu.items(&self.menu_context())),
             Screen::Settings(_) => ui::settings_fit(area),
+            Screen::Entry(entry) => ui::entry_fits(area, entry),
         }
     }
 
@@ -512,10 +525,18 @@ impl App {
     /// game; the rest of its view doesn't.
     fn start(&mut self, level: Level) {
         self.level = level;
-        let notes_hidden = self.session.as_ref().is_some_and(|s| s.view.notes_hidden);
         let game = self.new_game(level);
+        self.play(game);
+    }
+
+    /// Plays `game`. Hidden candidates carry over from the last game; the
+    /// rest of its view doesn't. Digits the game starts with that differ
+    /// from the solution are marked, as `c` marks them, before any hint.
+    fn play(&mut self, game: Game) {
+        let notes_hidden = self.session.as_ref().is_some_and(|s| s.view.notes_hidden);
         let mut session = Session::new(game, &self.config, self.clock);
         session.view.notes_hidden = notes_hidden;
+        session.view.checked = session.game.wrong_digits();
         self.session = Some(session);
         self.screen = Screen::Game;
     }
@@ -592,6 +613,11 @@ impl App {
                 flow => flow,
             };
         }
+        if let (Screen::Entry(entry), Event::Paste(text), true) = (&mut self.screen, &event, shown)
+        {
+            entry.paste(text);
+            return Flow::Continue;
+        }
         let Some(key) = press(event) else {
             return Flow::Continue;
         };
@@ -610,6 +636,15 @@ impl App {
         let context = self.menu_context();
         match &mut self.screen {
             Screen::Game => {}
+            Screen::Entry(entry) => match entry.handle(action) {
+                Outcome::Stay => {}
+                Outcome::Back => self.back_to_menu(false),
+                Outcome::Play(game) if context.progress.is_some() => {
+                    let entry = entry.clone();
+                    self.ask_to_replace(Pending::Custom { game, entry });
+                }
+                Outcome::Play(game) => self.play(*game),
+            },
             Screen::Settings(page) => {
                 let from_pause = page.from_pause;
                 match page.handle(action) {
@@ -643,8 +678,10 @@ impl App {
                         Item::Keep => self.keep(),
                         Item::Replace => match self.pending.take() {
                             Some(Pending::Level { level, .. }) => self.start(level),
+                            Some(Pending::Custom { game, .. }) => self.play(*game),
                             None => self.back_to_menu(false),
                         },
+                        Item::CustomPuzzle => self.screen = Screen::Entry(Entry::new()),
                         Item::MainMenu => self.screen = Screen::Menu(Menu::new(Kind::Main)),
                         Item::Settings => {
                             self.screen = Screen::Settings(Page::new(kind == Kind::Pause));
@@ -676,6 +713,7 @@ impl App {
     fn keep(&mut self) {
         match self.pending.take() {
             Some(Pending::Level { from_pause, .. }) => self.back_to_menu(from_pause),
+            Some(Pending::Custom { entry, .. }) => self.screen = Screen::Entry(entry),
             None => self.back_to_menu(false),
         }
     }
@@ -711,6 +749,8 @@ impl App {
                     None => Flow::Continue,
                 }
             }
+            // Typing in a puzzle is done with keys.
+            Screen::Entry(_) => Flow::Continue,
             Screen::Settings(page) => match ui::settings_hit(self.area, x, y) {
                 Some(i) => {
                     page.selected = i;
@@ -1714,6 +1754,55 @@ mod tests {
         );
     }
 
+    /// Custom puzzle opens the entry screen; pasted clues, Enter to check
+    /// and Enter to play start the typed-in puzzle, with a wrong digit
+    /// from paper already marked. With a game in progress it asks first,
+    /// and Keep it goes back to the entry with the clues kept.
+    #[test]
+    fn a_typed_in_puzzle_is_played() {
+        let mut app = App::new(
+            Xoshiro256PlusPlus::seed_from_u64(1),
+            Start::Menu,
+            None,
+            Config::default(),
+            setup(),
+            now,
+        );
+        press_keys(&mut app, &[KeyCode::Down, KeyCode::Enter]);
+        assert!(matches!(app.screen, Screen::Entry(_)));
+        app.handle(Event::Paste(fixtures::CLUES.into()), true);
+        press_keys(&mut app, &[KeyCode::Enter, KeyCode::Right, KeyCode::Right]);
+        press_keys(&mut app, &[KeyCode::Char('1'), KeyCode::Enter]);
+        assert_eq!(app.screen, Screen::Game);
+        let s = game_of(&mut app);
+        assert_eq!(s.game.level(), Some(Level::Easy));
+        assert_eq!(s.view.checked, [(2, 1)], "the wrong digit is marked");
+
+        // Esc clears the marks, then opens the pause menu.
+        press_keys(
+            &mut app,
+            &[KeyCode::Esc, KeyCode::Esc, KeyCode::Up, KeyCode::Enter],
+        );
+        press_keys(&mut app, &[KeyCode::Down, KeyCode::Down, KeyCode::Enter]);
+        assert!(
+            matches!(app.screen, Screen::Entry(_)),
+            "Main menu, Custom puzzle"
+        );
+        app.handle(Event::Paste(fixtures::CLUES.into()), true);
+        press_keys(&mut app, &[KeyCode::Enter, KeyCode::Enter]);
+        assert_eq!(menu_kind(&app), Some(Kind::Replace));
+        press_keys(&mut app, &[KeyCode::Enter]);
+        let Screen::Entry(entry) = &app.screen else {
+            panic!("back to the entry")
+        };
+        assert_eq!(entry.clues.to_string(), fixtures::CLUES);
+        assert_eq!(
+            game_of(&mut app).game.board().get(2),
+            Some(1),
+            "the game kept"
+        );
+    }
+
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("sumi-app-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1923,7 +2012,7 @@ mod tests {
     fn menu_kind(app: &App) -> Option<Kind> {
         match &app.screen {
             Screen::Menu(menu) => Some(menu.kind),
-            Screen::Game | Screen::Settings(_) => None,
+            Screen::Game | Screen::Settings(_) | Screen::Entry(_) => None,
         }
     }
 
@@ -2091,7 +2180,10 @@ mod tests {
             setup(),
             now,
         );
-        press_keys(&mut app, &[KeyCode::Char('j'), KeyCode::Enter]);
+        press_keys(
+            &mut app,
+            &[KeyCode::Char('j'), KeyCode::Char('j'), KeyCode::Enter],
+        );
         assert_eq!(app.screen, Screen::Settings(Page::new(false)));
         press_keys(&mut app, &[KeyCode::Esc]);
         assert_eq!(menu_kind(&app), Some(Kind::Main));

@@ -11,6 +11,8 @@ pub enum Item {
     /// Back to the game in progress, from the main menu.
     Continue(Progress),
     NewGame,
+    /// Type in a puzzle, from the main menu.
+    CustomPuzzle,
     Level(Level),
     /// Back to the game, from the pause menu.
     Resume,
@@ -65,6 +67,7 @@ impl Item {
         match self {
             Item::Continue(_) => "Continue",
             Item::NewGame => "New game",
+            Item::CustomPuzzle => "Custom puzzle",
             Item::Level(Level::Easy) => "Easy",
             Item::Level(Level::Medium) => "Medium",
             Item::Level(Level::Hard) => "Hard",
@@ -133,7 +136,12 @@ impl Menu {
                 if let Some(progress) = context.progress {
                     items.push(Item::Continue(progress));
                 }
-                items.extend([Item::NewGame, Item::Settings, Item::Quit]);
+                items.extend([
+                    Item::NewGame,
+                    Item::CustomPuzzle,
+                    Item::Settings,
+                    Item::Quit,
+                ]);
                 items
             }
             Kind::Pause => {
@@ -207,13 +215,19 @@ mod tests {
         let menu = Menu::new(Kind::Main);
         assert_eq!(
             menu.items(&Context::default()),
-            [Item::NewGame, Item::Settings, Item::Quit]
+            [
+                Item::NewGame,
+                Item::CustomPuzzle,
+                Item::Settings,
+                Item::Quit
+            ]
         );
         assert_eq!(
             menu.items(&playing()),
             [
                 Item::Continue(PROGRESS.unwrap()),
                 Item::NewGame,
+                Item::CustomPuzzle,
                 Item::Settings,
                 Item::Quit
             ]

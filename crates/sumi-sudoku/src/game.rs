@@ -142,6 +142,17 @@ impl Game {
         }
     }
 
+    /// The game with `digits` written in the cells without a clue, as if
+    /// before it started: they are no undo step.
+    pub fn starting_with(mut self, digits: &Grid) -> Game {
+        for cell in 0..CELLS {
+            if let (false, Some(digit)) = (self.is_clue(cell), digits.get(cell)) {
+                self.place(cell, digit);
+            }
+        }
+        self
+    }
+
     /// The game with its puzzle's rating.
     pub fn rated(self, level: Level) -> Game {
         Game {
@@ -682,7 +693,9 @@ impl Game {
     }
 }
 
-fn moved(cell: Cell, direction: Direction, by: usize) -> Cell {
+/// The cell `by` steps from `cell` in `direction`, wrapping around the
+/// board.
+pub fn moved(cell: Cell, direction: Direction, by: usize) -> Cell {
     let (r, c) = (row(cell), col(cell));
     let (r, c) = match direction {
         Direction::Up => ((r + 9 - by) % 9, c),

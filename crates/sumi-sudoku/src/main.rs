@@ -4,6 +4,7 @@ mod cli;
 #[cfg(test)]
 mod colour;
 mod config;
+mod entry;
 #[cfg(test)]
 mod fixtures;
 mod game;

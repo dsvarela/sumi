@@ -1,8 +1,7 @@
 ---
 source: crates/sumi-sudoku/src/ui.rs
-expression: "render_menu(&main, PROGRESS, (38, 18))"
+expression: "render_menu(&main, &playing(), (38, 18))"
 ---
-"                                      "
 "                                      "
 "                                      "
 "  ╭────────────────────────────────╮  "
@@ -13,6 +12,7 @@ expression: "render_menu(&main, PROGRESS, (38, 18))"
 "  │                                │  "
 "  │  › Continue · Medium, 81 left  │  "
 "  │    New game                    │  "
+"  │    Custom puzzle               │  "
 "  │    Settings                    │  "
 "  │    Quit                        │  "
 "  │                                │  "

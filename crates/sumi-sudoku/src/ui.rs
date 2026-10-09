@@ -16,6 +16,7 @@ use sumi_core::technique::Level;
 use crate::animation::{Animation, Light};
 use crate::config::Config;
 use crate::config::Highlights;
+use crate::entry::{Entry, Stage, Verdict};
 use crate::game::{CandidatesFromMarks, Game, Mode};
 use crate::input::{Action, FilterKey, filter_label, key_label, left_right_label, up_down_label};
 use crate::menu::{Item, Menu};
@@ -1639,6 +1640,133 @@ pub fn draw_settings(frame: &mut Frame, page: &SettingsPage, theme: &Theme) {
     frame.render_widget(Paragraph::new(keys).centered(), keys_area);
 }
 
+/// The entry screen's board: each cell a digit and a space, with a line
+/// between boxes, 23 columns and 11 rows.
+const ENTRY_BOARD: (u16, u16) = (23, 11);
+
+/// The entry screen's box: the board, a blank row and two lines of words,
+/// inside the frame with a row and two columns of space. The words are
+/// at most this wide.
+const ENTRY_TEXT_WIDTH: u16 = 29;
+const ENTRY_BOX: (u16, u16) = (ENTRY_TEXT_WIDTH + 6, ENTRY_BOARD.1 + 3 + 4);
+
+/// Where a cell's digit goes on the entry board, from its top left.
+fn entry_spot(cell: Cell) -> (u16, u16) {
+    let (r, c) = (row(cell) as u16, col(cell) as u16);
+    (1 + 2 * c + 2 * (c / 3), r + r / 3)
+}
+
+fn entry_keys(entry: &Entry) -> Vec<(&'static str, &'static str)> {
+    let (digit, confirm, close) = match entry.stage {
+        Stage::Clues => ("clue", "check", "back"),
+        Stage::Digits(_) => ("digit", "play", "clues"),
+    };
+    vec![
+        (key_label(Action::Digit(1)), digit),
+        (key_label(Action::Clear), "clear"),
+        (key_label(Action::Confirm), confirm),
+        (key_label(Action::Close), close),
+        (key_label(Action::Quit), "quit"),
+    ]
+}
+
+/// The smallest window the entry screen fits in: its box, and the key bar
+/// in as many rows as it takes at that width.
+fn entry_needed(entry: &Entry) -> (u16, u16) {
+    let key_rows = key_rows(&entry_keys(entry), usize::from(ENTRY_BOX.0)).len() as u16;
+    (ENTRY_BOX.0, ENTRY_BOX.1 + key_rows)
+}
+
+pub fn entry_fits(area: Rect, entry: &Entry) -> bool {
+    let (width, height) = entry_needed(entry);
+    area.width >= width && area.height >= height
+}
+
+/// What the entry screen says under the board: what to do, then what the
+/// last check found, and whether that is a problem.
+fn entry_words(entry: &Entry) -> (&'static str, String, bool) {
+    let found = match (entry.verdict, entry.stage) {
+        (Some(Verdict::NoSolution), _) => ("These clues have no solution.".to_string(), true),
+        (Some(Verdict::Several), _) => ("More than one solution.".to_string(), true),
+        (Some(Verdict::NotAGrid(cells)), _) => (format!("Pasted {cells} cells, not 81."), true),
+        (Some(Verdict::ChangesAClue), _) => ("That changes a clue.".to_string(), true),
+        (None, Stage::Digits(level)) => (format!("One solution · {}.", level_name(level)), false),
+        (None, Stage::Clues) => (String::new(), false),
+    };
+    let ask = match entry.stage {
+        Stage::Clues => "Type or paste the clues.",
+        Stage::Digits(_) => "Add any digits you've solved.",
+    };
+    (ask, found.0, found.1)
+}
+
+/// The entry screen: the board being typed in, in a frame titled Custom
+/// puzzle, what to do and what was found under it, and the key bar.
+pub fn draw_entry(frame: &mut Frame, entry: &Entry, theme: &Theme) {
+    let area = frame.area();
+    frame.render_widget(Block::new().style(Style::new().bg(theme.background)), area);
+    if !entry_fits(area, entry) {
+        too_small(frame, theme, entry_needed(entry));
+        return;
+    }
+    let (_, height) = entry_needed(entry);
+    let whole = area.centered(Constraint::Length(area.width), Constraint::Length(height));
+    let [boxed, keys] =
+        Layout::vertical([Constraint::Length(ENTRY_BOX.1), Constraint::Fill(1)]).areas(whole);
+    let boxed = boxed.centered_horizontally(Constraint::Length(ENTRY_BOX.0));
+    let block = frame_block(theme).title_top(Line::from(Span::styled(
+        " Custom puzzle ",
+        Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
+    )));
+    frame.render_widget(block, boxed);
+    let inner = boxed.inner(ratatui::layout::Margin::new(3, 2));
+    let board = inner.centered_horizontally(Constraint::Length(ENTRY_BOARD.0));
+    let buf = frame.buffer_mut();
+    let lines = Style::new().fg(theme.box_line);
+    for band in [1, 2] {
+        let y = board.y + 4 * band - 1;
+        buf.set_string(board.x, y, "───────┼───────┼───────", lines);
+    }
+    for cell in 0..81 {
+        let (dx, dy) = entry_spot(cell);
+        let (x, y) = (board.x + dx, board.y + dy);
+        if col(cell) % 3 == 2 && col(cell) != 8 {
+            buf.set_string(x + 2, y, "│", lines);
+        }
+        let (text, style) = match (entry.clues.get(cell), entry.digits.get(cell)) {
+            (Some(d), _) => (
+                d.to_string(),
+                Style::new().fg(theme.clue).add_modifier(Modifier::BOLD),
+            ),
+            (None, Some(d)) => (d.to_string(), Style::new().fg(theme.digit)),
+            (None, None) => ("·".to_string(), Style::new().fg(theme.dimmed)),
+        };
+        if cell == entry.cursor {
+            // The brackets mark the cursor without relying on colour.
+            let mark = Style::new().fg(theme.accent).add_modifier(Modifier::BOLD);
+            buf.set_string(x - 1, y, "[", mark);
+            buf.set_string(x + 1, y, "]", mark);
+            buf.set_string(x, y, text, style.bg(theme.cursor));
+        } else {
+            buf.set_string(x, y, text, style);
+        }
+    }
+    let (ask, found, problem) = entry_words(entry);
+    let found_style = Style::new().fg(if problem { theme.conflict } else { theme.text });
+    let words = Paragraph::new(vec![
+        Line::from(Span::styled(ask, Style::new().fg(theme.dimmed))),
+        Line::from(Span::styled(found, found_style)),
+    ]);
+    let below = Rect {
+        y: inner.y + ENTRY_BOARD.1 + 1,
+        height: 2,
+        ..inner
+    };
+    frame.render_widget(words, below);
+    let keys_text = key_bar_lines(&entry_keys(entry), theme, usize::from(area.width));
+    frame.render_widget(Paragraph::new(keys_text).centered(), keys);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3130,6 +3258,69 @@ mod tests {
                 for smaller in [(width - 1, height), (width, height - 1)] {
                     let text = text_of(&render_menu(&menu, &context, smaller));
                     assert!(text.contains(&asked), "{kind:?} {smaller:?}: {text}");
+                }
+            }
+        }
+    }
+
+    fn render_entry(entry: &Entry, size: (u16, u16)) -> TestBackend {
+        let mut terminal = Terminal::new(TestBackend::new(size.0, size.1)).unwrap();
+        let theme = Theme::tokyo_night_amoled();
+        terminal
+            .draw(|frame| draw_entry(frame, entry, &theme))
+            .unwrap();
+        terminal.backend().clone()
+    }
+
+    /// The entry screen in the smallest window it fits: clues, a digit
+    /// from paper, the cursor's brackets and what was found.
+    #[test]
+    fn the_entry_screen() {
+        let mut entry = Entry::new();
+        entry.paste(crate::fixtures::CLUES);
+        entry.handle(Action::Confirm);
+        entry.cursor = 2;
+        entry.handle(Action::Digit(4));
+        insta::assert_snapshot!(render_entry(&entry, entry_needed(&entry)));
+    }
+
+    /// Each stage and every verdict fits the box, keys whole, and a window
+    /// a column or a row smaller is told the size.
+    #[test]
+    fn the_entry_screen_fits_its_words() {
+        use crate::entry::Verdict;
+        let verdicts = [
+            None,
+            Some(Verdict::NoSolution),
+            Some(Verdict::Several),
+            Some(Verdict::NotAGrid(100)),
+            Some(Verdict::ChangesAClue),
+        ];
+        for stage in [Stage::Clues, Stage::Digits(Level::Expert)] {
+            for verdict in verdicts {
+                let entry = Entry {
+                    stage,
+                    verdict,
+                    ..Entry::new()
+                };
+                let (ask, found, _) = entry_words(&entry);
+                assert!(
+                    ask.chars().count() <= usize::from(ENTRY_TEXT_WIDTH),
+                    "{ask}"
+                );
+                assert!(
+                    found.chars().count() <= usize::from(ENTRY_TEXT_WIDTH),
+                    "{found}"
+                );
+                let (width, height) = entry_needed(&entry);
+                let text = text_of(&render_entry(&entry, (width, height)));
+                assert!(text.contains(&found) && text.contains(ask), "{text}");
+                for (key, words) in entry_keys(&entry) {
+                    assert!(text.contains(&format!("{key} {words}")), "{text}");
+                }
+                let asked = format!("{width}×{height}");
+                for smaller in [(width - 1, height), (width, height - 1)] {
+                    assert!(text_of(&render_entry(&entry, smaller)).contains(&asked));
                 }
             }
         }
