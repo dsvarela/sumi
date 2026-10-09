@@ -170,9 +170,10 @@ impl Config {
         Ok((config, warnings))
     }
 
-    /// Where sumi keeps its files, if the system has a home directory.
+    /// Where sumi keeps config.toml and the player's themes, if it can
+    /// tell.
     pub fn dir() -> Option<PathBuf> {
-        store::xdg_dir("XDG_CONFIG_HOME", ".config")
+        store::Base::Config.dir()
     }
 
     /// Writes one setting into `config.toml` in `dir`, at `key` (a table's
@@ -209,7 +210,7 @@ impl Config {
                 table.insert(last, toml_edit::value(value));
             }
         }
-        std::fs::create_dir_all(dir).map_err(|err| format!("{}: {err}", dir.display()))?;
+        store::make_dir(dir).map_err(|err| format!("{}: {err}", dir.display()))?;
         store::write_whole(&path, &doc.to_string())
             .map_err(|err| format!("{}: {err}", path.display()))
     }

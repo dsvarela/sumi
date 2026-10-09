@@ -1,5 +1,5 @@
-//! The files sumi keeps between runs in its data directory, and the one
-//! way it writes a file: whole, or not at all.
+//! Where sumi keeps its files, the ones it keeps between runs in its data
+//! directory, and the one way it writes a file: whole, or not at all.
 
 use std::collections::HashSet;
 use std::io::Write;
@@ -35,29 +35,53 @@ pub fn level_from_key(key: &str) -> Option<Level> {
 }
 
 /// Where sumi keeps the saved game, the bank puzzles played and the
-/// stats, if the system has a home directory.
+/// stats, if it can tell.
 pub fn dir() -> Option<PathBuf> {
-    xdg_dir("XDG_DATA_HOME", ".local/share")
+    Base::Data.dir()
 }
 
-/// sumi's folder under the XDG base directory `var` names, or under
-/// `fallback` in the home directory when `var` is unset or relative, as
-/// the XDG spec asks. macOS follows the same rule, so config and saves
-/// stay apart there too.
-pub fn xdg_dir(var: &str, fallback: &str) -> Option<PathBuf> {
-    under_base(
-        std::env::var_os(var).map(PathBuf::from),
-        std::env::home_dir(),
-        fallback,
-    )
+/// An XDG base directory sumi keeps a folder in. macOS follows the same
+/// rule, so config and saves stay apart there too.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Base {
+    Config,
+    Data,
+}
+
+impl Base {
+    /// sumi's folder in this base directory: under the path its variable
+    /// holds, or else under its place in the home directory. A relative
+    /// path is passed over, as the XDG spec asks, and a relative home too,
+    /// which would put the files wherever sumi was started.
+    pub fn dir(self) -> Option<PathBuf> {
+        let (var, fallback) = match self {
+            Base::Config => ("XDG_CONFIG_HOME", ".config"),
+            Base::Data => ("XDG_DATA_HOME", ".local/share"),
+        };
+        under_base(
+            std::env::var_os(var).map(PathBuf::from),
+            std::env::home_dir(),
+            fallback,
+        )
+    }
 }
 
 fn under_base(base: Option<PathBuf>, home: Option<PathBuf>, fallback: &str) -> Option<PathBuf> {
     let base = match base {
         Some(base) if base.is_absolute() => base,
-        _ => home?.join(fallback),
+        _ => home.filter(|home| home.is_absolute())?.join(fallback),
     };
     Some(base.join("sumi"))
+}
+
+/// Makes `dir` and any folder above it that is missing, readable by their
+/// owner only, as the XDG spec asks of base directories.
+pub fn make_dir(dir: &Path) -> std::io::Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder.create(dir)
 }
 
 /// A file that was there but couldn't be read.
@@ -173,7 +197,7 @@ fn load<T>(
 /// Writes `text` as the file `name` in `dir`, making `dir` if need be.
 fn write(dir: &Path, name: &str, text: &str) -> Result<(), String> {
     let path = dir.join(name);
-    std::fs::create_dir_all(dir)
+    make_dir(dir)
         .and_then(|()| write_whole(&path, text))
         .map_err(|err| format!("{}: {err}", path.display()))
 }
@@ -221,7 +245,7 @@ pub fn last_write() -> LastWrite {
 impl LastWrite {
     pub fn save_game(&self, dir: &Path, json: &str) -> Result<(), String> {
         let path = dir.join(GAME);
-        std::fs::create_dir_all(dir)
+        make_dir(dir)
             .and_then(|()| write_unlocked(&path, json))
             .map_err(|err| format!("{}: {err}", path.display()))
     }
@@ -325,6 +349,23 @@ mod tests {
             Some(PathBuf::from("/x/data/sumi"))
         );
         assert_eq!(under(None, None), None);
+        // A relative home would put the files wherever sumi was started.
+        assert_eq!(under(None, Some(PathBuf::from("rel"))), None);
+    }
+
+    /// sumi's folders, and any base directory above them it makes, are
+    /// its owner's alone, as the XDG spec asks.
+    #[cfg(unix)]
+    #[test]
+    fn folders_are_made_for_their_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("private");
+        let nested = dir.join("share").join("sumi");
+        write(&nested, "stats.json", "{}").unwrap();
+        for made in [dir.join("share"), nested] {
+            let mode = std::fs::metadata(&made).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o700, "{}", made.display());
+        }
     }
 
     fn scratch(name: &str) -> PathBuf {
