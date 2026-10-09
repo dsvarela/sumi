@@ -506,19 +506,28 @@ impl Game {
     }
 
     /// Keeps the board and every note as they are, to come back to with
-    /// [`Game::back_to_bookmark`]. A board the same as the newest bookmark's
-    /// adds none.
+    /// [`Game::back_to_bookmark`]. A board a bookmark already holds adds
+    /// none.
     pub fn bookmark(&mut self) {
         let here = self.here();
-        if self.bookmarks.last().map(|b| b.cells) != Some(here.cells) {
+        if self.bookmarks.iter().all(|b| b.cells != here.cells) {
             self.bookmarks.push(here);
+        }
+    }
+
+    /// Whether [`Game::back_to_bookmark`] would change the board.
+    pub fn can_go_back(&self) -> bool {
+        match self.bookmarks.last() {
+            Some(newest) if newest.cells != self.here().cells => true,
+            Some(_) => self.bookmarks.len() > 1,
+            None => false,
         }
     }
 
     /// Goes back to the newest bookmark, keeping it, so another guess can
     /// start from it. On it already, drops it and goes back to the one
-    /// before, if there is one. Going back is one undo step. Says whether
-    /// anything changed.
+    /// before; on the only one, does nothing. Going back is one undo step.
+    /// Says whether anything changed.
     pub fn back_to_bookmark(&mut self) -> bool {
         let at_newest = self
             .bookmarks
@@ -787,6 +796,23 @@ mod tests {
         assert!(g.board().possible(R1C3).is_empty());
         assert!(!g.board().conflicts().contains(&true), "no clash to find");
         assert!(g.at_dead_end(), "no digit fits");
+    }
+
+    /// A board any bookmark holds adds none, and B can go back only when
+    /// it would change the board.
+    #[test]
+    fn a_board_is_bookmarked_once_and_b_is_offered_only_when_it_acts() {
+        let mut g = at(R1C3);
+        assert!(!g.can_go_back());
+        g.bookmark();
+        assert!(!g.can_go_back(), "on the only bookmark");
+        g.press(4);
+        assert!(g.can_go_back());
+        g.bookmark();
+        assert!(g.can_go_back(), "on the newest, with one before");
+        g.undo();
+        g.bookmark();
+        assert_eq!(g.bookmarks().len(), 2, "the first board again");
     }
 
     /// B goes back to the newest bookmark and keeps it; on it, B drops it

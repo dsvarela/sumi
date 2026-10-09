@@ -691,13 +691,23 @@ fn keys(game: &Game, view: &View) -> Vec<(&'static str, &'static str)> {
         lesson.keys.clone()
     } else if game.is_won() {
         vec![(Action::Confirm, "new game"), (Action::Close, "menu")]
-    } else if game.at_dead_end() && !game.bookmarks().is_empty() {
+    } else if game.at_dead_end() && game.can_go_back() {
         // A guess has gone wrong: going back comes first.
+        let digit = if game.mode() == Mode::Digit {
+            "place"
+        } else {
+            "toggle"
+        };
+        let last = if view.checked.is_empty() {
+            (Action::NextMode, "mode")
+        } else {
+            (Action::Close, "clear marks")
+        };
         vec![
             (Action::BackToBookmark, "back to bookmark"),
             (Action::Undo, "undo"),
-            (Action::Digit(1), "place"),
-            (Action::NextMode, "mode"),
+            (Action::Digit(1), digit),
+            last,
         ]
     } else {
         match game.mode() {
@@ -3050,11 +3060,25 @@ mod tests {
     }
 
     /// At a dead end with a bookmark the key bar offers B first; without
-    /// a bookmark it can't, and keeps the usual keys.
+    /// one to go back to it can't, and keeps the usual keys. With check
+    /// marks it keeps Esc for them, and in a note mode 1-9 toggles.
     #[test]
     fn a_dead_end_offers_the_bookmark() {
         let keys_at = |game: &Game| keys(game, &View::default());
         assert_eq!(keys_at(&dead_end())[0], ("B", "back to bookmark"));
+        let marked = View {
+            checked: vec![(2, 5)],
+            ..View::default()
+        };
+        assert!(keys(&dead_end(), &marked).contains(&("Esc", "clear marks")));
+        let mut noting = dead_end();
+        noting.next_mode();
+        assert!(keys_at(&noting).contains(&("1-9", "toggle")));
+        let mut only = game();
+        go(&mut only, 2);
+        only.press(5);
+        only.bookmark();
+        assert_eq!(keys_at(&only), keys_at(&game()), "B would do nothing");
         let mut unmarked = game();
         go(&mut unmarked, 2);
         unmarked.press(5);
