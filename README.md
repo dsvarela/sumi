@@ -34,14 +34,18 @@ only then the move.
 
 Download a binary from the
 [releases page](https://github.com/dsvarela/sumi/releases): static builds
-for x86_64 and aarch64 Linux, and builds for macOS on Apple silicon and
-Intel. Each archive holds the `sumi` program; put it anywhere on your
-`PATH`. The macOS builds are not notarized, so macOS refuses one downloaded
-with a browser until you clear its quarantine:
+for x86_64 and aarch64 Linux, builds for macOS on Apple silicon and Intel,
+and one for x86_64 Windows 10 or later. Each archive holds the `sumi`
+program (`sumi.exe` on Windows); put it anywhere on your `PATH`. The macOS
+builds are not notarized, so macOS refuses one downloaded with a browser
+until you clear its quarantine:
 
 ```bash
 xattr -d com.apple.quarantine sumi
 ```
+
+The Windows build is not signed either, so SmartScreen may warn about it
+the first time; More info, then Run anyway, starts it.
 
 Or build it from this repository, with Rust 1.88 or later:
 
@@ -94,12 +98,12 @@ on Android with the aarch64 Linux build, though it is not tuned for it.
 
 The settings page writes `config.toml`, keeping any comments in it. sumi
 follows the XDG base directories, on macOS as well. A variable counts only
-when it holds an absolute path.
+when it holds an absolute path. Without one, Windows uses its own folders.
 
-| What | Where |
-| --- | --- |
-| `config.toml`, and your own themes in `themes/` | `$XDG_CONFIG_HOME/sumi`, or `~/.config/sumi` |
-| The saved game, the bank puzzles played, the stats | `$XDG_DATA_HOME/sumi`, or `~/.local/share/sumi` |
+| What | Where | On Windows |
+| --- | --- | --- |
+| `config.toml`, and your own themes in `themes/` | `$XDG_CONFIG_HOME/sumi`, or `~/.config/sumi` | `%APPDATA%\sumi` |
+| The saved game, the bank puzzles played, the stats | `$XDG_DATA_HOME/sumi`, or `~/.local/share/sumi` | `%LOCALAPPDATA%\sumi` |
 
 Seven themes are built in, Tokyo Night AMOLED by default. Paper is a light
 one, and Colour-blind safe uses the Okabe-Ito palette. A theme is a TOML
