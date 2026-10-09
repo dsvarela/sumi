@@ -91,11 +91,8 @@ pub enum Kind {
     Levels {
         from_pause: bool,
     },
-    /// A game of `level` was asked for while a game is saved.
-    Replace {
-        level: Level,
-        from_pause: bool,
-    },
+    /// A new game was asked for while a game is saved.
+    Replace,
     /// The game's bookmarks, newest first.
     Bookmarks,
 }
@@ -122,7 +119,7 @@ impl Menu {
             // Medium: a middle ground for someone who hasn't said.
             Kind::Levels { .. } => 1,
             // Keeping is first: Enter pressed in a hurry loses nothing.
-            Kind::Main | Kind::Pause | Kind::Replace { .. } | Kind::Bookmarks => 0,
+            Kind::Main | Kind::Pause | Kind::Replace | Kind::Bookmarks => 0,
         };
         Menu { kind, selected }
     }
@@ -152,7 +149,7 @@ impl Menu {
                 .map(|(index, &left)| Item::Bookmark { index, left })
                 .collect(),
             Kind::Levels { .. } => LEVELS.map(Item::Level).to_vec(),
-            Kind::Replace { .. } => vec![Item::Keep, Item::Replace],
+            Kind::Replace => vec![Item::Keep, Item::Replace],
         }
     }
 
@@ -160,7 +157,7 @@ impl Menu {
     /// asks a question.
     pub fn question(&self) -> Option<&'static str> {
         match self.kind {
-            Kind::Replace { .. } => Some("Replace the saved game?"),
+            Kind::Replace => Some("Replace the saved game?"),
             _ => None,
         }
     }

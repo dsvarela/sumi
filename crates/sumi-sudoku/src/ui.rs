@@ -3094,10 +3094,7 @@ mod tests {
             Kind::Main,
             Kind::Pause,
             Kind::Levels { from_pause: false },
-            Kind::Replace {
-                level: Level::Hard,
-                from_pause: false,
-            },
+            Kind::Replace,
             Kind::Bookmarks,
         ];
         for kind in kinds {

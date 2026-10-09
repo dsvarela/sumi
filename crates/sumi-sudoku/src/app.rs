@@ -314,6 +314,14 @@ struct App {
     slot: Slot,
     /// One per level, so each remembers what it has made.
     generators: HashMap<Level, LevelGenerator>,
+    /// The new game "Replace the saved game?" is asking about.
+    pending: Option<Pending>,
+}
+
+/// A new game asked for while one is in progress, and where it was asked
+/// for.
+enum Pending {
+    Level { level: Level, from_pause: bool },
 }
 
 /// What a saved game holds that a key can change, short of the time.
@@ -362,6 +370,7 @@ impl App {
             saved: None,
             slot: Slot::default(),
             generators: HashMap::new(),
+            pending: None,
         };
         if let Some(game) = saved {
             let mut session = Session::new(game, &app.config, clock);
@@ -374,11 +383,10 @@ impl App {
         match start {
             Start::Menu => {}
             Start::Level(level) if app.progress().is_some() => {
-                let replace = Kind::Replace {
+                app.ask_to_replace(Pending::Level {
                     level,
                     from_pause: false,
-                };
-                app.screen = Screen::Menu(Menu::new(replace));
+                });
             }
             Start::Level(level) => app.start(level),
             Start::Continue => app.resume(),
@@ -615,9 +623,8 @@ impl App {
                 match menu.handle(action, &context) {
                     None => {}
                     Some(Choice::Back) => match kind {
-                        Kind::Levels { from_pause } | Kind::Replace { from_pause, .. } => {
-                            self.back_to_menu(from_pause)
-                        }
+                        Kind::Levels { from_pause } => self.back_to_menu(from_pause),
+                        Kind::Replace => self.keep(),
                         Kind::Pause => self.resume(),
                         Kind::Bookmarks => self.back_to_menu(true),
                         Kind::Main => {}
@@ -630,20 +637,14 @@ impl App {
                         }
                         Item::Level(level) if context.progress.is_some() => {
                             let from_pause = kind == Kind::Levels { from_pause: true };
-                            let replace = Kind::Replace { level, from_pause };
-                            self.screen = Screen::Menu(Menu::new(replace));
+                            self.ask_to_replace(Pending::Level { level, from_pause });
                         }
                         Item::Level(level) => self.start(level),
-                        Item::Keep => {
-                            if let Kind::Replace { from_pause, .. } = kind {
-                                self.back_to_menu(from_pause);
-                            }
-                        }
-                        Item::Replace => {
-                            if let Kind::Replace { level, .. } = kind {
-                                self.start(level);
-                            }
-                        }
+                        Item::Keep => self.keep(),
+                        Item::Replace => match self.pending.take() {
+                            Some(Pending::Level { level, .. }) => self.start(level),
+                            None => self.back_to_menu(false),
+                        },
                         Item::MainMenu => self.screen = Screen::Menu(Menu::new(Kind::Main)),
                         Item::Settings => {
                             self.screen = Screen::Settings(Page::new(kind == Kind::Pause));
@@ -662,6 +663,21 @@ impl App {
             }
         }
         Flow::Continue
+    }
+
+    /// Asks whether `pending` should replace the game in progress.
+    fn ask_to_replace(&mut self, pending: Pending) {
+        self.pending = Some(pending);
+        self.screen = Screen::Menu(Menu::new(Kind::Replace));
+    }
+
+    /// Keeps the game in progress, going back where the new game was asked
+    /// for.
+    fn keep(&mut self) {
+        match self.pending.take() {
+            Some(Pending::Level { from_pause, .. }) => self.back_to_menu(from_pause),
+            None => self.back_to_menu(false),
+        }
     }
 
     /// The pause menu, or the main menu.
@@ -1579,16 +1595,10 @@ mod tests {
     fn a_new_game_asks_before_replacing_the_one_in_progress() {
         let mut app = app_with(fixtures::game());
         let before = game_of(&mut app).game.board().to_string();
-        let replace = |from_pause| {
-            Some(Kind::Replace {
-                level: Level::Medium,
-                from_pause,
-            })
-        };
         // Esc, then New game and Medium from the pause menu.
         press_keys(&mut app, &[KeyCode::Esc, KeyCode::Down, KeyCode::Enter]);
         press_keys(&mut app, &[KeyCode::Enter]);
-        assert_eq!(menu_kind(&app), replace(true));
+        assert_eq!(menu_kind(&app), Some(Kind::Replace));
         press_keys(&mut app, &[KeyCode::Enter]);
         assert_eq!(menu_kind(&app), Some(Kind::Pause), "Keep it is first");
         press_keys(&mut app, &[KeyCode::Down, KeyCode::Enter, KeyCode::Enter]);
@@ -1609,7 +1619,7 @@ mod tests {
             setup(),
             now,
         );
-        assert_eq!(menu_kind(&app), replace(false));
+        assert_eq!(menu_kind(&app), Some(Kind::Replace));
         press_keys(&mut app, &[KeyCode::Esc]);
         assert_eq!(menu_kind(&app), Some(Kind::Main));
     }
