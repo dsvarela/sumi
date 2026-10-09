@@ -1,0 +1,68 @@
+name: Release
+
+# A v* tag builds sumi for each platform and drafts a GitHub release with
+# the archives and their checksums. The draft is published by hand.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Static binaries, so one file runs on any Linux. The aarch64
+          # one is also the Termux build.
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            rustflags: -C linker=rust-lld
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Build
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
+        run: cargo build --release --locked -p sumi-sudoku --target ${{ matrix.target }}
+      - name: Package
+        run: |
+          name="sumi-$GITHUB_REF_NAME-${{ matrix.target }}"
+          mkdir "$name"
+          cp "target/${{ matrix.target }}/release/sumi" LICENSE README.md "$name/"
+          tar czf "$name.tar.gz" "$name"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.target }}
+          path: sumi-*.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          merge-multiple: true
+      - run: sha256sum sumi-*.tar.gz > SHA256SUMS
+      - name: Draft the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "$GITHUB_REF_NAME"
+          --repo "$GITHUB_REPOSITORY" --draft --verify-tag
+          --title "sumi $GITHUB_REF_NAME"
+          sumi-*.tar.gz SHA256SUMS
