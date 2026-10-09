@@ -1,7 +1,7 @@
 //! New puzzles: a random full grid, then clues taken away in symmetric pairs
 //! for as long as the puzzle keeps exactly one solution.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use rand::seq::{IndexedRandom, SliceRandom};
 use rand::{Rng, RngExt};
@@ -39,19 +39,27 @@ pub(crate) fn generate<R: Rng + ?Sized>(rng: &mut R) -> Puzzle {
 ///   level. An Expert one must also need two Expert steps or more.
 /// - Hard ones are about 1 in 300 at random. Every Hard puzzle found becomes
 ///   a seed, and the next are made by moving a pair of a seed's clues, which
-///   gives a Hard puzzle far more often. A seed is retired after 50 tries,
-///   since its neighbours look alike. With no seed left, or when a move
-///   leaves several solutions, a fresh random puzzle is tried instead.
+///   gives a Hard puzzle far more often. Moving clues keeps the solution,
+///   and a seed's neighbours look alike, so at most 3 puzzles share a
+///   solution and a seed is retired after 50 tries or once its solution
+///   has its 3. With no seed left, or when a move leaves several
+///   solutions, a fresh random puzzle is tried instead.
 #[derive(Clone)]
 pub struct LevelGenerator {
     level: Level,
     /// Hard puzzles not yet retired, each with how often it has been tried.
     seeds: Vec<(Puzzle, u32)>,
     made: HashSet<Grid>,
+    /// How many puzzles made have each solution.
+    solutions: HashMap<Grid, usize>,
 }
 
 /// Tries per seed, since the puzzles one seed leads to look alike.
 const TRIES_PER_SEED: u32 = 50;
+
+/// Puzzles made with one solution, since those from one seed differ by a
+/// few clues.
+const PER_SOLUTION: usize = 3;
 
 impl LevelGenerator {
     /// Panics on Beyond, which is never generated.
@@ -61,6 +69,7 @@ impl LevelGenerator {
             level,
             seeds: Vec::new(),
             made: HashSet::new(),
+            solutions: HashMap::new(),
         }
     }
 
@@ -72,10 +81,17 @@ impl LevelGenerator {
                 Level::Hard => self.moved_seed(rng).unwrap_or_else(|| generate(rng)),
                 _ => generate(rng),
             };
+            if self.made_with(puzzle.solution()) >= PER_SOLUTION
+                || self.made.contains(puzzle.clues())
+            {
+                continue;
+            }
             let grade = grade(puzzle.clues()).expect("generated puzzles have one solution");
             let wanted = grade.level == self.level
                 && (self.level != Level::Expert || grade.hardest_steps >= 2);
-            if wanted && self.made.insert(*puzzle.clues()) {
+            if wanted {
+                self.made.insert(*puzzle.clues());
+                *self.solutions.entry(*puzzle.solution()).or_default() += 1;
                 if self.level == Level::Hard {
                     self.seeds.push((puzzle.clone(), 0));
                 }
@@ -84,10 +100,18 @@ impl LevelGenerator {
         }
     }
 
+    fn made_with(&self, solution: &Grid) -> usize {
+        self.solutions.get(solution).copied().unwrap_or(0)
+    }
+
     /// A seed with one pair of clues moved, or `None` when there are no seeds
     /// left to try or the move gave more than one solution.
     fn moved_seed<R: Rng + ?Sized>(&mut self, rng: &mut R) -> Option<Puzzle> {
-        self.seeds.retain(|&(_, tries)| tries < TRIES_PER_SEED);
+        let solutions = &self.solutions;
+        self.seeds.retain(|(seed, tries)| {
+            *tries < TRIES_PER_SEED
+                && solutions.get(seed.solution()).copied().unwrap_or(0) < PER_SOLUTION
+        });
         let i = rng.random_range(0..self.seeds.len().max(1));
         let (seed, tries) = self.seeds.get_mut(i)?;
         *tries += 1;
@@ -212,6 +236,28 @@ mod tests {
         generator.made.insert(*first.clues());
         let (next, _) = generator.next(&mut rng.clone());
         assert_ne!(next, first);
+    }
+
+    /// A solution with 3 puzzles gets no more, and its seeds retire.
+    #[test]
+    fn at_most_three_puzzles_share_a_solution() {
+        let rng = Xoshiro256PlusPlus::seed_from_u64(11);
+        let mut generator = LevelGenerator::new(Level::Medium);
+        let mut counted = generator.clone();
+        let (first, _) = counted.next(&mut rng.clone());
+        assert_eq!(counted.made_with(first.solution()), 1);
+        generator.solutions.insert(*first.solution(), 2);
+        let (again, _) = generator.clone().next(&mut rng.clone());
+        assert_eq!(again, first, "two made, so a third may be");
+        generator.solutions.insert(*first.solution(), 3);
+        let (next, _) = generator.next(&mut rng.clone());
+        assert_ne!(next.solution(), first.solution());
+
+        let mut hard = LevelGenerator::new(Level::Hard);
+        hard.seeds.push((first.clone(), 0));
+        hard.solutions.insert(*first.solution(), 3);
+        assert_eq!(hard.moved_seed(&mut rng.clone()), None);
+        assert!(hard.seeds.is_empty());
     }
 
     /// Starting from a Hard puzzle in sumi's bank whose solution 50 other
