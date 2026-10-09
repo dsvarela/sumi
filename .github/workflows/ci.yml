@@ -24,10 +24,14 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
 
-  # rust-version in Cargo.toml promises this toolchain builds sumi.
+  # Builds with the toolchain rust-version in Cargo.toml promises.
   msrv:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.88
+      - id: msrv
+        run: sed -n 's/^rust-version = "\(.*\)"$/version=\1/p' Cargo.toml >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
       - run: cargo check --workspace --locked

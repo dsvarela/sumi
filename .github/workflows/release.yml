@@ -1,7 +1,8 @@
 name: Release
 
-# A v* tag builds sumi for each platform and drafts a GitHub release with
-# the archives and their checksums. The draft is published by hand.
+# A v* tag naming the crates' version is tested, builds sumi for each
+# platform, and drafts a GitHub release with the archives and their
+# checksums. The draft is published by hand.
 on:
   push:
     tags: ["v*"]
@@ -10,7 +11,23 @@ permissions:
   contents: read
 
 jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: The tag names every crate's version
+        run: |
+          for version in $(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].version'); do
+            if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+              echo "::error::tag $GITHUB_REF_NAME, but a crate is at $version"
+              exit 1
+            fi
+          done
+      - run: cargo test --workspace --locked
+
   build:
+    needs: check
     strategy:
       fail-fast: false
       matrix:
@@ -37,6 +54,9 @@ jobs:
           RUSTFLAGS: ${{ matrix.rustflags }}
         run: cargo build --release --locked -p sumi-sudoku --target ${{ matrix.target }}
       - name: Package
+        env:
+          # Keeps macOS tar from adding ._ files for extended attributes.
+          COPYFILE_DISABLE: 1
         run: |
           name="sumi-$GITHUB_REF_NAME-${{ matrix.target }}"
           mkdir "$name"
@@ -58,11 +78,12 @@ jobs:
         with:
           merge-multiple: true
       - run: sha256sum sumi-*.tar.gz > SHA256SUMS
+      # A run done again replaces the files of the draft it made before.
       - name: Draft the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: >
-          gh release create "$GITHUB_REF_NAME"
-          --repo "$GITHUB_REPOSITORY" --draft --verify-tag
-          --title "sumi $GITHUB_REF_NAME"
-          sumi-*.tar.gz SHA256SUMS
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 ||
+            gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "sumi $GITHUB_REF_NAME"
+          gh release upload "$GITHUB_REF_NAME" --clobber sumi-*.tar.gz SHA256SUMS
