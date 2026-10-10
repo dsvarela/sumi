@@ -11,8 +11,8 @@ use rand::rngs::Xoshiro256PlusPlus;
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::cursor::Show;
 use ratatui::crossterm::event::{
-    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyEventKind,
-    KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    self, DisableBracketedPaste, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton,
+    MouseEvent, MouseEventKind,
 };
 use ratatui::crossterm::execute;
 use ratatui::layout::Rect;
@@ -75,6 +75,8 @@ pub fn run(start: Start) -> io::Result<()> {
     }
     let mut terminal = ratatui::try_init()
         .map_err(|err| io::Error::new(err.kind(), format!("can't open the terminal: {err}")))?;
+    #[cfg(windows)]
+    report_resizes();
     // ratatui's own hook leaves raw mode and the alternate screen; this one
     // first turns off what sumi turned on.
     let restore = std::panic::take_hook();
@@ -87,9 +89,13 @@ pub fn run(start: Start) -> io::Result<()> {
     app.warnings = warnings;
     stop.start(Arc::clone(&app.slot), app.setup.data.clone());
     // With bracketed paste on, pasted text arrives as one event that the game
-    // ignores, instead of as keys that could place digits or quit.
-    let result =
-        execute!(io::stdout(), EnableBracketedPaste).and_then(|()| play(&mut terminal, &mut app));
+    // ignores, instead of as keys that could place digits or quit. Windows
+    // has no such event: crossterm reads its console, where a paste is keys.
+    #[cfg(unix)]
+    let pasting = execute!(io::stdout(), event::EnableBracketedPaste);
+    #[cfg(windows)]
+    let pasting = Ok(());
+    let result = pasting.and_then(|()| play(&mut terminal, &mut app));
     app.save(true);
     let _ = execute!(io::stdout(), DisableBracketedPaste);
     let _ = mouse(false);
@@ -153,15 +159,19 @@ impl Stop {
     }
 }
 
-/// Windows calls it on a thread of its own when the console window closes,
-/// on Ctrl+Break, and at logoff or shutdown. Ctrl+C arrives as a key
-/// instead, since raw mode turns off its signal. Windows ends the process
-/// once the handler returns, or a few seconds after a close, so the save
-/// comes first.
+/// Windows calls it on a thread of its own when the console window closes
+/// and on Ctrl+Break. Not at logoff or shutdown: crossterm loads user32,
+/// and Windows doesn't tell a console process that does; the save after
+/// every move covers those. Ctrl+C arrives as a key instead, since raw mode
+/// turns off its signal. Windows ends the process a few seconds after a
+/// close, so the save comes first, and then the handler ends it itself.
 #[cfg(windows)]
 unsafe extern "system" fn on_console_event(_event: u32) -> windows_sys::core::BOOL {
     let Some((slot, dir)) = STOPPING.get() else {
-        // Not handled: the next handler, Windows's own, ends the process.
+        // No game yet, but the terminal may be changed already. Not
+        // handled: the next handler, Windows's own, ends the process.
+        let _ = mouse(false);
+        ratatui::restore();
         return 0;
     };
     let _locks = last_save(slot, dir.as_deref());
@@ -212,7 +222,8 @@ fn mouse(on: bool) -> io::Result<()> {
 
 /// Turns mouse reporting on or off. Windows reads input through the
 /// console, not as escape codes, so only crossterm's console mode turns it
-/// on there, motion included.
+/// on there, motion included: each move wakes the loop for a redraw that
+/// changes nothing.
 #[cfg(windows)]
 fn mouse(on: bool) -> io::Result<()> {
     use ratatui::crossterm::event::{DisableMouseCapture, EnableMouseCapture};
@@ -220,6 +231,25 @@ fn mouse(on: bool) -> io::Result<()> {
         execute!(io::stdout(), EnableMouseCapture)
     } else {
         execute!(io::stdout(), DisableMouseCapture)
+    }
+}
+
+/// Asks the console to report resizes. crossterm sets the flag only while
+/// mouse capture is on; turning capture off restores the mode it found,
+/// which from here on includes it.
+#[cfg(windows)]
+fn report_resizes() {
+    use windows_sys::Win32::System::Console::{
+        ENABLE_WINDOW_INPUT, GetConsoleMode, GetStdHandle, STD_INPUT_HANDLE, SetConsoleMode,
+    };
+    // SAFETY: the handle is the process's own console input, and the mode
+    // is read into a local before it is written back with one flag more.
+    unsafe {
+        let input = GetStdHandle(STD_INPUT_HANDLE);
+        let mut mode = 0;
+        if GetConsoleMode(input, &mut mode) != 0 {
+            SetConsoleMode(input, mode | ENABLE_WINDOW_INPUT);
+        }
     }
 }
 
