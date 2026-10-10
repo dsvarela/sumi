@@ -5,6 +5,66 @@ its mechanism, what was fixed and where, what was closed by decision and why,
 and where deferred items went. The class register at the end names the
 defect shapes this codebase repeats; hunt them by name in later reviews.
 
+## 2026-10-10: the release and the Windows port (0f0af41..68abca1)
+
+A short review after v0.1.0 was published. Two read-only lanes: the
+Windows code and the workflows (crossterm's Windows source read beside
+sumi's, the CI and release logs, clippy for the Windows target), and the
+record against the code. They reported 37 findings, about 25 distinct;
+the logoff claim and the paste comment were found by both. Nothing in the
+range has run on Windows outside CI.
+
+**Prediction against result.** Predicted 5 to 12 findings; about 25 came.
+Predicted, and found: a gap in the console handler's start. Predicted,
+and clean: a deadlock between the handler and the loop (the lock order is
+always the slot, then the writes), Ctrl+C in raw mode (it arrives as a
+key), the read-only write (its test fails without the change). Not
+predicted: that crossterm has no paste event on Windows, that mouse
+capture off also stops resize events there, and that Windows doesn't
+tell a console process that loads user32 about logoff or shutdown.
+
+### Fixed
+
+| Class | Finding and mechanism | Fix |
+| --- | --- | --- |
+| Two meanings, one value | crossterm's Windows mouse mode holds the window-input flag too, so with the mouse off a resize never reached sumi and the screen stayed at the old size until a key | sumi sets window input once at start; capture off restores a mode that includes it (bc3c511) |
+| Process edges | A console event before the game existed went to Windows's own handler with raw mode and the alternate screen on | The terminal is put back first (bc3c511) |
+| Record | The paste comment held on Unix only: crossterm has no paste event on Windows, where a paste is keys; the handler's comment promised a save at logoff and shutdown | Bracketed paste is turned on on Unix only; both comments say what Windows does (bc3c511) |
+| Two things must agree | The archive patterns were typed three times in release.yml | Each build packs into dist/, and later steps take all of it (structural, 8cd8d23; unrun until the next tag) |
+| Record | CLAUDE.md's workflows without Windows, `make_dir`'s 0700 claim on Windows, the README's "not signed either" after "not notarized", its files table headed for every platform, a 30-word sentence; the plan's identity table still naming crates.io | Corrected (89a608f); the plan the same day |
+
+### Closed by decision
+
+- **On Windows a paste places digits, or quits on a q.** crossterm gives
+  no way to tell a paste from typing there; q saves first, and the
+  Custom puzzle screen takes a paste as typing, which is what it wants.
+- **The mouse on Windows reports motion, a redraw per cell crossed.** It
+  changes nothing on screen and costs only CPU; the comment says so.
+- **A stop after sumi has quit saves again and changes the exit code;
+  a stop while the main thread is returning can leave a `.sumi-new`
+  file.** The save is whole either way.
+- **On Windows a missing APPDATA leaves sumi without folders, and an
+  XDG_CONFIG_HOME set for Git Bash alone splits config from saves.** Both
+  follow the rule the README states.
+- **The release's Windows build (crt-static) is built but not tested;
+  the MSRV job doesn't check the Windows code.** CI tests Windows; the
+  Windows-only dependencies ask for older Rust than 1.88.
+- **Two commits have no body.** History isn't rewritten for it.
+
+### Deferred
+
+| Item | Goes to |
+| --- | --- |
+| A rename over game.json can fail while antivirus or OneDrive holds it, with no retry | The first Windows playtest |
+| Everything Windows does at run time: the close handler, resizes, the mouse, pastes | The first Windows playtest |
+| The release notes say the macOS builds are "not signed"; "not notarized" is the accurate term | A question to Daniel: edit the published notes |
+| The platform list is typed in the workflows, the README, the release notes and CLAUDE.md | Kept: each is read by someone the others don't reach |
+
+The 2026-10-09 rows for the workflows' first run and the private
+repository are closed: CI and the release ran green, and the repository
+is public. That entry's crates.io premise is moot: publishing was dropped
+for now (aca70b4, decided 10 October 2026).
+
 ## 2026-10-09: milestone 8, phases 1 to 4 (6fda4de..bebc14a)
 
 Run before anything is published, since a crates.io version can't be
@@ -496,9 +556,9 @@ test, and the shared-screen helpers. None described the pre-rewrite API.
 
 | Class | Seen | Hunt for |
 | --- | --- | --- |
-| Two things must agree, nothing makes them agree | 34 (a form sized at one width and drawn at another, the status line's short form against the timer, a variable and its fallback, the MSRV typed apart; before: a level after a win, the last move under the cursor, the menu item after going back, a lesson's frozen animations and stale feedback, hand-typed keys in lessons, a clue over a paper digit, B offered when it can't act, the data README's rebuild; before: settings page width vs its rows, hint_start shown vs used, status drop order vs the plan, a won game's keys vs the key list, a clock rule stated twice, the faint pulse vs the shading under it, hand-typed filter labels, the plan's sizes; before: a list of keys vs what changes the board, status line vs title, effect line vs removals, count vs containment, fill vs hint removal; before: key bar, board shown vs input, plan vs code, placement records vs notes, one step per house, stale candidates, comments vs measurements) | Text, sizes or rules stated in two files; a record of a change that later changes don't update |
-| Two meanings, one value | 11 ("marks" for box marks and checks, "both" with nothing beside it, "this mode" in digit mode; before: a paste verdict for a count and a character, no step for solved and stuck; before: config defaults as "unset" and "failed to load", `Option<Level>` as "menu" and "any level"; before: empty notes, complete digit, a grade for an invalid grid, Beyond's step count) | An empty set, zero or `None` standing for more than one state |
+| Two things must agree, nothing makes them agree | 35 (archive patterns typed three times; before: a form sized at one width and drawn at another, the status line's short form against the timer, a variable and its fallback, the MSRV typed apart; before: a level after a win, the last move under the cursor, the menu item after going back, a lesson's frozen animations and stale feedback, hand-typed keys in lessons, a clue over a paper digit, B offered when it can't act, the data README's rebuild; before: settings page width vs its rows, hint_start shown vs used, status drop order vs the plan, a won game's keys vs the key list, a clock rule stated twice, the faint pulse vs the shading under it, hand-typed filter labels, the plan's sizes; before: a list of keys vs what changes the board, status line vs title, effect line vs removals, count vs containment, fill vs hint removal; before: key bar, board shown vs input, plan vs code, placement records vs notes, one step per house, stale candidates, comments vs measurements) | Text, sizes or rules stated in two files; a record of a change that later changes don't update |
+| Two meanings, one value | 12 (a mouse mode that also carries resizes; before: "marks" for box marks and checks, "both" with nothing beside it, "this mode" in digit mode; before: a paste verdict for a count and a character, no step for solved and stuck; before: config defaults as "unset" and "failed to load", `Option<Level>` as "menu" and "any level"; before: empty notes, complete digit, a grade for an invalid grid, Beyond's step count) | An empty set, zero or `None` standing for more than one state |
 | Input from where the player isn't looking | 11 (bookmarks un-winning a game, a lesson taking the filter's keys, r in a lesson, a tap in See it; before: a paused hint's ×, a click on nothing leaving a prompt open; before: hidden board, paste, modifiers, view changing under a hidden board, marks across games) | Any path from an event to a game change that skips what is on screen |
 | A test that cannot fail | 39 | Tests whose fixture can't tell the order or the branch apart; a loop that stops checking early; mutate the line the name claims |
 | No instrument | 10 (a release from an untested tag; before: a lesson's claim nothing shows a step, the transform's rating, banned words in lessons; before: unknown config and theme keys, a separation claimed and unchecked, floors written twice; before: contrast, outside grader, panel fit) | A rule in the plan or CLAUDE.md that no test checks |
-| Process edges | 10 (a relative HOME and folders made open; before: a file unreadable as text overwritten, two sumis undoing each other, a stop mid-write, the cursor after a signal, a handler set up too late, a won save continued; before: a panic leaving terminal modes on, a half-written config file, drawing into a redirected stdout; before: closed pipes and no terminal) | What the terminal, the disk or the pipe is left holding when sumi stops early or isn't where it expects |
+| Process edges | 11 (a console event before the game exists; before: a relative HOME and folders made open; before: a file unreadable as text overwritten, two sumis undoing each other, a stop mid-write, the cursor after a signal, a handler set up too late, a won save continued; before: a panic leaving terminal modes on, a half-written config file, drawing into a redirected stdout; before: closed pipes and no terminal) | What the terminal, the disk or the pipe is left holding when sumi stops early or isn't where it expects |
