@@ -88,8 +88,9 @@ impl Base {
     }
 }
 
-/// Makes `dir` and any folder above it that is missing, readable by their
-/// owner only, as the XDG spec asks of base directories.
+/// Makes `dir` and any folder above it that is missing, on Unix readable
+/// by their owner only, as the XDG spec asks of base directories. Windows
+/// gives them the access of the user's folder they are made in.
 pub fn make_dir(dir: &Path) -> std::io::Result<()> {
     let mut builder = std::fs::DirBuilder::new();
     builder.recursive(true);

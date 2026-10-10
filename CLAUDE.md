@@ -50,7 +50,7 @@ and resolve a thread before deleting the text it is anchored to.
   (a Konsole window sized by a temporary KWin script, sumi in tmux on its
   own socket with the status bar off); Daniel takes the shot, since an
   unattended capture can catch his own windows.
-- `.github/workflows/`: tests on Linux and macOS; a v* tag drafts a
+- `.github/workflows/`: tests on Linux, macOS and Windows; a v* tag drafts a
   release with the binaries.
 - `docs/reviews.md`: wrap-up reviews, with the register of defect classes this
   codebase repeats. Read the register before reviewing.
