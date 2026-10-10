@@ -57,7 +57,7 @@ tell a console process that loads user32 about logoff or shutdown.
 | --- | --- |
 | A rename over game.json can fail while antivirus or OneDrive holds it, with no retry | The first Windows playtest |
 | Everything Windows does at run time: the close handler, resizes, the mouse, pastes | The first Windows playtest |
-| The release notes say the macOS builds are "not signed"; "not notarized" is the accurate term | A question to Daniel: edit the published notes |
+| The release notes said the macOS builds were "not signed"; "not notarized" is the accurate term | Closed 10 October 2026: Daniel approved, and the published notes were edited |
 | The platform list is typed in the workflows, the README, the release notes and CLAUDE.md | Kept: each is read by someone the others don't reach |
 
 The 2026-10-09 rows for the workflows' first run and the private
