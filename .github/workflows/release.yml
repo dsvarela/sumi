@@ -70,22 +70,22 @@ jobs:
         env:
           # Keeps macOS tar from adding ._ files for extended attributes.
           COPYFILE_DISABLE: 1
+        # dist/ holds this platform's archive and nothing else, so later
+        # steps take whatever is in it, whatever its format.
         run: |
           name="sumi-$GITHUB_REF_NAME-${{ matrix.name }}"
-          mkdir "$name"
+          mkdir "$name" dist
           if [ "$RUNNER_OS" = Windows ]; then
             cp "target/${{ matrix.target }}/release/sumi.exe" LICENSE README.md "$name/"
-            7z a "$name.zip" "$name"
+            7z a "dist/$name.zip" "$name"
           else
             cp "target/${{ matrix.target }}/release/sumi" LICENSE README.md "$name/"
-            tar czf "$name.tar.gz" "$name"
+            tar czf "dist/$name.tar.gz" "$name"
           fi
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}
-          path: |
-            sumi-*.tar.gz
-            sumi-*.zip
+          path: dist/*
           if-no-files-found: error
 
   release:
@@ -96,8 +96,9 @@ jobs:
     steps:
       - uses: actions/download-artifact@v8
         with:
+          path: dist
           merge-multiple: true
-      - run: sha256sum sumi-*.tar.gz sumi-*.zip > SHA256SUMS
+      - run: cd dist && sha256sum * > SHA256SUMS
       # A run done again replaces the files of the draft it made before.
       - name: Draft the release
         env:
@@ -106,4 +107,4 @@ jobs:
         run: |
           gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 ||
             gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "sumi $GITHUB_REF_NAME"
-          gh release upload "$GITHUB_REF_NAME" --clobber sumi-*.tar.gz sumi-*.zip SHA256SUMS
+          gh release upload "$GITHUB_REF_NAME" --clobber dist/*
